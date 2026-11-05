@@ -1,0 +1,181 @@
+/**
+ * Authorization. A server that refuses an anonymous client is not a smaller audit -- the spec
+ * lets the tool list vary with the credentials presented, so an unauthenticated capture of a
+ * gated server pins a surface nobody uses.
+ */
+import { mkdtemp, readFile, rm, stat } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { ClientCredentialsProvider } from "@modelcontextprotocol/client";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { ConfiguredServer } from "../src/config/types";
+import { parseServerMap } from "../src/config/parsers";
+import { isAuthFailure, UnreachableServerError } from "../src/mcp/types";
+import { createAuthProvider, credentialPath, FileTokenProvider, hasStoredCredentials, InteractiveAuthRequiredError } from "../src/mcp/oauth";
+
+let configHome: string;
+let previous: string | undefined;
+
+beforeEach(async () => {
+  configHome = await mkdtemp(join(tmpdir(), "mcp-auth-"));
+  previous = process.env["XDG_CONFIG_HOME"];
+  process.env["XDG_CONFIG_HOME"] = configHome;
+});
+
+afterEach(async () => {
+  if (previous === undefined) delete process.env["XDG_CONFIG_HOME"];
+  else process.env["XDG_CONFIG_HOME"] = previous;
+  await rm(configHome, { recursive: true, force: true });
+});
+
+const remote = (oauth?: Record<string, string>): ConfiguredServer => ({
+  name: "gated",
+  source: { client: "manual", file: "test" },
+  transport: { type: "http", url: "https://api.example.com/mcp", headers: {}, ...(oauth ? { oauth } : {}) },
+});
+
+describe("choosing a provider", () => {
+  it("prefers client credentials, which need no human and work in CI", () => {
+    const provider = createAuthProvider(remote({ clientId: "id", clientSecret: "secret" }));
+    expect(provider).toBeInstanceOf(ClientCredentialsProvider);
+  });
+
+  it("offers nothing non-interactively when no login has happened", async () => {
+    /*
+     * Regression: offering an empty provider made the SDK answer a 401 by attempting Dynamic
+     * Client Registration, which a non-interactive run cannot complete (no redirect URI). The
+     * audit then reported `invalid_client_metadata` instead of "this one needs credentials".
+     */
+    expect(createAuthProvider(remote())).toBeUndefined();
+  });
+
+  it("uses stored tokens from a previous login", async () => {
+    const provider = new FileTokenProvider("gated", "https://api.example.com/mcp");
+    await provider.saveTokens({ access_token: "at", token_type: "Bearer" } as never);
+    expect(createAuthProvider(remote())).toBeInstanceOf(FileTokenProvider);
+  });
+
+  it("always offers one for an interactive login, which is about to create the credentials", () => {
+    expect(createAuthProvider(remote(), { interactive: true })).toBeInstanceOf(FileTokenProvider);
+  });
+
+  it("offers nothing for a stdio server, which is launched locally", () => {
+    const stdio: ConfiguredServer = {
+      name: "local",
+      source: { client: "manual", file: "test" },
+      transport: { type: "stdio", command: "node", args: [], env: {} },
+    };
+    expect(createAuthProvider(stdio)).toBeUndefined();
+  });
+});
+
+describe("credential storage", () => {
+  it("is keyed by the server URL, not the name it was given", () => {
+    // Two projects naming the same endpoint differently share one grant; one name repointed at
+    // a new endpoint must not reuse the old endpoint's token.
+    expect(credentialPath("https://a.example/mcp")).toBe(credentialPath("https://a.example/mcp"));
+    expect(credentialPath("https://a.example/mcp")).not.toBe(credentialPath("https://b.example/mcp"));
+  });
+
+  it("writes tokens owner-only and reads them back", async () => {
+    const provider = new FileTokenProvider("gated", "https://api.example.com/mcp");
+    await provider.saveTokens({ access_token: "at", token_type: "Bearer", refresh_token: "rt" } as never);
+
+    const path = credentialPath("https://api.example.com/mcp");
+    expect((await stat(path)).mode & 0o777).toBe(0o600);
+
+    const reloaded = new FileTokenProvider("gated", "https://api.example.com/mcp");
+    expect((await reloaded.tokens())?.access_token).toBe("at");
+  });
+
+  it("forgets everything on invalidate", async () => {
+    const provider = new FileTokenProvider("gated", "https://api.example.com/mcp");
+    await provider.saveTokens({ access_token: "at", token_type: "Bearer" } as never);
+    await provider.invalidateCredentials("all");
+    expect(await provider.tokens()).toBeUndefined();
+    await expect(readFile(credentialPath("https://api.example.com/mcp"), "utf8")).rejects.toThrow();
+  });
+
+  it("uses a fresh state value per instance", () => {
+    const a = new FileTokenProvider("x", "https://api.example.com/mcp");
+    const b = new FileTokenProvider("x", "https://api.example.com/mcp");
+    expect(a.stateValue).not.toBe(b.stateValue);
+    expect(a.state()).toBe(a.stateValue);
+  });
+});
+
+describe("hasStoredCredentials", () => {
+  it("wants a token, not merely a file", async () => {
+    /*
+     * A login that failed part-way still writes the file -- it holds the PKCE verifier so a
+     * retry can resume. Counting that as credentials made one failed attempt permanently
+     * re-enable the registration path this is meant to avoid.
+     */
+    const provider = new FileTokenProvider("gated", "https://api.example.com/mcp");
+    await provider.saveCodeVerifier("half-finished-login");
+    expect(await readFile(credentialPath("https://api.example.com/mcp"), "utf8")).toContain("half-finished-login");
+    expect(hasStoredCredentials("https://api.example.com/mcp")).toBe(false);
+
+    await provider.saveTokens({ access_token: "at", token_type: "Bearer" } as never);
+    expect(hasStoredCredentials("https://api.example.com/mcp")).toBe(true);
+  });
+
+  it("is false for an endpoint nobody has logged into", () => {
+    expect(hasStoredCredentials("https://never-seen.example.com/mcp")).toBe(false);
+  });
+});
+
+describe("non-interactive runs", () => {
+  it("refuses to open a browser and says what to do instead", async () => {
+    // `check` runs in CI. Launching a browser there would hang the job.
+    const provider = new FileTokenProvider("gated", "https://api.example.com/mcp", { interactive: false });
+    await expect(provider.redirectToAuthorization(new URL("https://auth.example.com/authorize"))).rejects.toThrow(InteractiveAuthRequiredError);
+    await expect(provider.redirectToAuthorization(new URL("https://auth.example.com/authorize"))).rejects.toThrow(/nulladrift login gated/);
+  });
+
+  it("is classified as an authorization problem, not an outage", () => {
+    expect(isAuthFailure(new InteractiveAuthRequiredError("gated"))).toBe(true);
+    expect(isAuthFailure(new UnreachableServerError("gated", "boom", new InteractiveAuthRequiredError("gated")))).toBe(true);
+  });
+
+  it("counts the shapes real servers actually return", () => {
+    // Observed against public registry servers.
+    const registrationRejected = Object.assign(new Error("Dynamic Client Registration rejected (HTTP 400)"), { name: "RegistrationRejectedError" });
+    expect(isAuthFailure(registrationRejected)).toBe(true);
+    expect(isAuthFailure(new UnreachableServerError("g", "Version negotiation failed: the server requires authorization (HTTP 401)"))).toBe(true);
+    expect(isAuthFailure(new UnreachableServerError("g", 'Error POSTing to endpoint: {"error":{"code":-32001,"message":"Unauthorized"}}'))).toBe(true);
+    // And still does not swallow a genuine outage.
+    expect(isAuthFailure(new UnreachableServerError("g", "getaddrinfo ENOTFOUND api.example.com"))).toBe(false);
+  });
+});
+
+describe("oauth in a client config", () => {
+  it("reads clientId and clientSecret, expanding them from the environment", async () => {
+    const parsed = await parseServerMap(
+      { mcpServers: { gated: { type: "http", url: "https://api.example.com/mcp", oauth: { clientId: "cid", clientSecret: "${GATED_SECRET}", scopes: ["a", "b"] } } } },
+      "mcpServers",
+      { client: "claude-code", file: ".mcp.json" },
+      { workspaceFolder: "/tmp", env: { GATED_SECRET: "from-env" } },
+    );
+    const transport = parsed.servers[0]?.transport;
+    expect(transport?.type === "http" ? transport.oauth : undefined).toEqual({ clientId: "cid", clientSecret: "from-env", scope: "a b" });
+  });
+
+  it("skips the server when the secret is not in the environment, rather than auditing half a surface", async () => {
+    const parsed = await parseServerMap(
+      { mcpServers: { gated: { type: "http", url: "https://api.example.com/mcp", oauth: { clientId: "cid", clientSecret: "${MISSING_SECRET}" } } } },
+      "mcpServers",
+      { client: "claude-code", file: ".mcp.json" },
+      { workspaceFolder: "/tmp", env: {} },
+    );
+    expect(parsed.servers).toHaveLength(0);
+    expect(parsed.skipped[0]?.message).toContain("${MISSING_SECRET}");
+  });
+
+  it("never lets a client secret reach the lockfile", async () => {
+    const { lockTransport } = await import("../src/lock/build");
+    const locked = lockTransport(remote({ clientId: "cid", clientSecret: "top-secret" }));
+    expect(JSON.stringify(locked)).not.toContain("top-secret");
+    expect(JSON.stringify(locked)).not.toContain("cid");
+  });
+});

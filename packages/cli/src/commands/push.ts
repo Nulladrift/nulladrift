@@ -1,0 +1,151 @@
+/**
+ * `nulladrift push` -- capture the current surface and send it to a control plane, which decides
+ * the verdict.
+ *
+ * The exit code comes from the server, not from here. That is the point of pushing rather than
+ * checking: policy lives where the repository being audited cannot edit it, so a pull request
+ * cannot widen what its own build is allowed to do.
+ */
+import { captureAll } from "../audit";
+import { EXIT_CLEAN, EXIT_DRIFT, EXIT_INCOMPLETE, type ExitCode } from "../lib/exit";
+import { bold, dim, green, red, yellow } from "../lib/ui";
+import { describeRefusal } from "../report/push-error";
+import { VERSION } from "../lib/version";
+import type { CommonOptions } from "./options";
+
+export interface PushOptions extends CommonOptions {
+  apiUrl?: string;
+  token?: string;
+  project?: string;
+  ref?: string;
+  commit?: string;
+  /**
+   * Marks this as a scheduled reading rather than one a build asked for.
+   *
+   * A build tells you the surface was right when you shipped. It cannot tell you the surface is
+   * still right at three in the morning, and a server that changes the day after a release is
+   * unobserved until the next one: on a weekly cadence that is six days of an agent running
+   * against something nobody approved. Running the collector on a schedule closes that, and the
+   * context is what lets a reader tell the two apart afterwards.
+   */
+  watch?: boolean;
+}
+
+interface IngestResponseBody {
+  readingId: string;
+  verdict: "clean" | "drift" | "blocked";
+  exitCode: 0 | 1 | 2;
+  changes: Array<{ kind: string; severity: string; server: string; member?: string; summary: string }>;
+  decision: { blocked: boolean; reasons: Array<{ code: string; message: string }> };
+  url: string;
+}
+
+/** CI providers all expose these; reading them means a pipeline needs no extra configuration. */
+function inferProject(projectRoot: string): string {
+  const fromCi = process.env["GITHUB_REPOSITORY"] ?? process.env["CI_PROJECT_PATH"] ?? process.env["BUILD_REPOSITORY_NAME"];
+  if (fromCi) return fromCi;
+  return projectRoot.split("/").filter(Boolean).pop() ?? "default";
+}
+
+function inferRef(): string | undefined {
+  return process.env["GITHUB_REF_NAME"] ?? process.env["CI_COMMIT_REF_NAME"] ?? undefined;
+}
+
+function inferCommit(): string | undefined {
+  return process.env["GITHUB_SHA"] ?? process.env["CI_COMMIT_SHA"] ?? undefined;
+}
+
+export async function runPush(options: PushOptions): Promise<ExitCode> {
+  const apiUrl = (options.apiUrl ?? process.env["NULLADRIFT_API_URL"] ?? "").replace(/\/+$/, "");
+  const token = options.token ?? process.env["NULLADRIFT_TOKEN"] ?? "";
+  if (!apiUrl || !token) {
+    process.stderr.write(
+      [
+        red("push needs a control plane to push to."),
+        dim("  --api <url> or NULLADRIFT_API_URL"),
+        dim("  --token <token> or NULLADRIFT_TOKEN"),
+        "",
+      ].join("\n"),
+    );
+    return EXIT_INCOMPLETE;
+  }
+
+  const result = await captureAll({
+    projectRoot: options.projectRoot,
+    configFiles: options.configFiles,
+    timeoutMs: options.timeoutMs,
+  });
+
+  const servers = Object.entries(result.lock.subjects).map(([name, entry]) => ({
+    name,
+    transport: entry.transport.type,
+    protocolEra: entry.protocol.era,
+    protocolVersion: entry.protocol.version,
+    client: entry.source.client,
+    sourceFile: entry.source.file,
+    serverInfo: entry.serverInfo,
+    digest: entry.digest,
+    toolCount: entry.tools?.length ?? 0,
+    resourceCount: entry.resources?.length ?? 0,
+    promptCount: entry.prompts?.length ?? 0,
+    surface: entry,
+  }));
+
+  const body = {
+    project: options.project ?? inferProject(options.projectRoot),
+    ref: options.ref ?? inferRef(),
+    commit: options.commit ?? inferCommit(),
+    context: options.watch
+      ? "watch"
+      : process.env["CI"] !== undefined && process.env["CI"] !== "false"
+        ? "ci"
+        : "local",
+    collectorVersion: VERSION,
+    servers,
+    unreachable: result.unreachable.map((failure) => ({ server: failure.server, reason: failure.reason })),
+  };
+
+  let response: Response;
+  try {
+    response = await fetch(`${apiUrl}/api/v1/ingest`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(options.timeoutMs),
+    });
+  } catch (error) {
+    // A control plane that cannot be reached is an audit that did not happen, which is a 2 for
+    // the same reason an unreachable server is.
+    process.stderr.write(`${red("could not reach the control plane:")} ${(error as Error).message}\n`);
+    return EXIT_INCOMPLETE;
+  }
+
+  if (!response.ok) {
+    const refusal = describeRefusal(response.status, await response.text());
+    /*
+     * A plan limit is yellow, not red. It is an administrative fact rather than a failure, and
+     * colouring it like a crash is what makes somebody chase a bug that is not there. The exit
+     * code is still incomplete: the reading did not land, so this build cannot claim it looked.
+     */
+    process.stderr.write(`${refusal.planLimit ? yellow("plan limit:") : red("push failed:")} ${refusal.text}\n`);
+    return EXIT_INCOMPLETE;
+  }
+
+  const verdict = (await response.json()) as IngestResponseBody;
+  const lines: string[] = [""];
+  const mark = verdict.verdict === "clean" ? green("✓") : verdict.verdict === "drift" ? yellow("!") : red("✗");
+  lines.push(`${mark} ${bold(verdict.verdict)} ${dim(`· ${servers.length} server(s) · reading ${verdict.readingId.slice(0, 8)}`)}`);
+
+  for (const change of verdict.changes) {
+    lines.push(`  ${change.severity === "high" ? red("●") : change.severity === "medium" ? yellow("●") : dim("●")} ${bold(change.server)}${change.member ? dim(`/${change.member}`) : ""}  ${change.summary}`);
+  }
+  for (const reason of verdict.decision.reasons) {
+    lines.push(`  ${red("blocked")} ${dim(reason.code)}  ${reason.message}`);
+  }
+  if (verdict.verdict !== "clean") lines.push("", dim(`Review it at ${verdict.url}`));
+  lines.push("");
+  process.stdout.write(lines.join("\n"));
+
+  // The server's answer, not ours.
+  return verdict.exitCode === 0 ? EXIT_CLEAN : verdict.exitCode === 1 ? EXIT_DRIFT : EXIT_INCOMPLETE;
+}

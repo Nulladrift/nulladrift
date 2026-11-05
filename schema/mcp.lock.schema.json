@@ -1,0 +1,556 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://nulladrift.dev/schema/mcp.lock.schema.json",
+  "title": "mcp.lock",
+  "description": "A pinned record of everything a project governs: the capability surface of each MCP server today, and whatever else it learns to read. Committed to the repository and reviewed in pull requests.",
+  "type": "object",
+  "required": [
+    "lockfileVersion",
+    "subjects"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "lockfileVersion": {
+      "description": "Format version of this file. Version 2 keyed everything under `subjects` instead of `servers`, so the root no longer names one protocol; a version 1 file is upgraded on read, which is lossless because `kind` is outside every digest.",
+      "type": "integer",
+      "const": 2
+    },
+    "generatedBy": {
+      "description": "Tool and version that last wrote this file. Diagnostic only; never used to decide whether the file is valid.",
+      "type": "string",
+      "pattern": "^nulladrift@.+$"
+    },
+    "policy": {
+      "$ref": "#/$defs/policy"
+    },
+    "subjects": {
+      "description": "Everything pinned, keyed by identity. Each entry says what kind of thing it is.",
+      "type": "object",
+      "propertyNames": {
+        "minLength": 1
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/server"
+      }
+    }
+  },
+  "$defs": {
+    "digest": {
+      "description": "Lowercase hex SHA-256 over the RFC 8785 (JCS) canonical form of the covered fields. Present so that a reviewer can see at a glance that something inside a large schema changed, and so that SARIF output has a stable fingerprint.",
+      "type": "string",
+      "pattern": "^sha256:[0-9a-f]{64}$"
+    },
+    "policy": {
+      "description": "Audit-wide settings that belong with the lock rather than in CI flags, so that every consumer of this repository audits identically.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "ignoreMetaPrefixes": {
+          "description": "Reverse-DNS prefixes of tool/resource/prompt `_meta` keys to exclude from pinning. For servers that put build ids or timestamps in `_meta`, which would otherwise drift on every run.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": []
+        },
+        "allowUnreachable": {
+          "description": "Default for --allow-unreachable. Fail closed unless this is explicitly set true.",
+          "type": "boolean",
+          "default": false
+        }
+      }
+    },
+    "server": {
+      "type": "object",
+      "required": [
+        "kind",
+        "source",
+        "transport",
+        "protocol",
+        "digest"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "description": "What this subject is. A reader for another kind adds a value here rather than a second root key.",
+          "type": "string",
+          "enum": [
+            "mcp-server"
+          ]
+        },
+        "source": {
+          "description": "Where this server's configuration was discovered. Recorded so that a reviewer can find the entry being described, and so that the same server configured in two clients is not silently treated as one.",
+          "type": "object",
+          "required": [
+            "client",
+            "file"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "client": {
+              "type": "string",
+              "enum": [
+                "claude-code",
+                "claude-desktop",
+                "vscode",
+                "cursor",
+                "copilot",
+                "windsurf",
+                "generic",
+                "manual"
+              ]
+            },
+            "file": {
+              "description": "Path to the config file, relative to the repository root where possible, otherwise with the home directory written as '~'. Absolute machine-specific paths are never written, because they differ per developer and would churn the diff.",
+              "type": "string"
+            },
+            "scope": {
+              "description": "The client's own scope for this entry, where the client has the concept.",
+              "type": "string",
+              "enum": [
+                "project",
+                "user",
+                "local"
+              ]
+            }
+          }
+        },
+        "transport": {
+          "description": "How the server is reached. Part of the server's identity: the same name pointing at a different command or URL is a different server, and is reported as such rather than as a field-level change.",
+          "oneOf": [
+            {
+              "$ref": "#/$defs/stdioTransport"
+            },
+            {
+              "$ref": "#/$defs/httpTransport"
+            }
+          ]
+        },
+        "protocol": {
+          "description": "The protocol era and revision the server actually answered on. A server that silently moves between eras or revisions is drift in its own right.",
+          "type": "object",
+          "required": [
+            "era",
+            "version"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "era": {
+              "description": "'modern' = stateless, per-request `_meta` (revision 2026-07-28 and later). 'legacy' = `initialize` handshake (2025-11-25 and earlier).",
+              "type": "string",
+              "enum": [
+                "modern",
+                "legacy"
+              ]
+            },
+            "version": {
+              "description": "The negotiated revision, e.g. '2026-07-28'.",
+              "type": "string",
+              "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+            },
+            "supportedVersions": {
+              "description": "Every revision the server advertised via server/discover. Modern servers only.",
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+              }
+            }
+          }
+        },
+        "serverInfo": {
+          "description": "The server's self-reported identity. On the modern era this arrives in each result's `_meta` as `io.modelcontextprotocol/serverInfo`; on the legacy era it comes from the initialize result. This is the field that would have shown postmark-mcp moving from 1.0.15 to 1.0.16.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "name": {
+              "type": "string"
+            },
+            "title": {
+              "type": "string"
+            },
+            "version": {
+              "type": "string"
+            },
+            "description": {
+              "type": "string"
+            },
+            "websiteUrl": {
+              "type": "string",
+              "format": "uri"
+            }
+          }
+        },
+        "capabilities": {
+          "description": "The server's declared capabilities, verbatim. A server that newly declares `tools` or enables an extension has widened what it can do before a single tool is listed.",
+          "type": "object"
+        },
+        "instructions": {
+          "description": "The server's natural-language guidance, which clients place in the model's system prompt. Pinned verbatim because it is the single largest prompt-injection surface a server controls, and nothing else in the ecosystem reviews it.",
+          "type": "string"
+        },
+        "tools": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/tool"
+          }
+        },
+        "resources": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/resource"
+          }
+        },
+        "resourceTemplates": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/resourceTemplate"
+          }
+        },
+        "prompts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/prompt"
+          }
+        },
+        "digest": {
+          "allOf": [
+            {
+              "$ref": "#/$defs/digest"
+            }
+          ],
+          "description": "Covers transport, protocol, serverInfo, capabilities, instructions, and the ordered list of member digests. Does not cover `source`: moving a server between config files is not a capability change."
+        }
+      },
+      "description": "An MCP server's declared capability surface. The first subject kind, and so far the only one."
+    },
+    "stdioTransport": {
+      "type": "object",
+      "required": [
+        "type",
+        "command"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "const": "stdio"
+        },
+        "command": {
+          "type": "string"
+        },
+        "args": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "envKeys": {
+          "description": "Names only of the environment variables passed to the server, sorted. Values are never written to this file: the lock is committed, and the values are credentials.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "cwd": {
+          "type": "string"
+        }
+      }
+    },
+    "httpTransport": {
+      "type": "object",
+      "required": [
+        "type",
+        "url"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": [
+            "http",
+            "sse"
+          ]
+        },
+        "url": {
+          "description": "Endpoint with any query string removed, since query strings commonly carry tokens.",
+          "type": "string",
+          "format": "uri"
+        },
+        "headerKeys": {
+          "description": "Names only of statically configured headers, sorted. Values are never written, for the same reason as envKeys.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "tool": {
+      "type": "object",
+      "required": [
+        "name",
+        "inputSchema",
+        "behavior",
+        "digest"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "description": {
+          "description": "Pinned verbatim. Injected into model context, so a change here is a change to what the agent is told to do.",
+          "type": "string"
+        },
+        "inputSchema": {
+          "description": "The tool's JSON Schema, stored whole. Keys are canonically ordered and `required` is sorted, so that a server reserializing its schema does not produce a diff while a genuinely new property does.",
+          "type": "object"
+        },
+        "outputSchema": {
+          "type": "object"
+        },
+        "annotations": {
+          "description": "Behavioural annotations exactly as the server sent them, including their absence. Compare with `behavior`, which is the same information resolved against the spec's defaults.",
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "title": {
+              "type": "string"
+            },
+            "readOnlyHint": {
+              "type": "boolean"
+            },
+            "destructiveHint": {
+              "type": "boolean"
+            },
+            "idempotentHint": {
+              "type": "boolean"
+            },
+            "openWorldHint": {
+              "type": "boolean"
+            }
+          }
+        },
+        "behavior": {
+          "description": "The effective permissions this tool claims, with the spec's defaults applied. Always written in full. The spec's defaults are not neutral, an absent readOnlyHint means 'may modify' and an absent destructiveHint means 'may destroy', so a server deleting an annotation is an escalation. Materializing the resolved values makes that escalation appear in the diff as a changed line rather than as a deleted one.",
+          "type": "object",
+          "required": [
+            "readOnly",
+            "destructive",
+            "idempotent",
+            "openWorld"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "readOnly": {
+              "type": "boolean",
+              "default": false
+            },
+            "destructive": {
+              "type": "boolean",
+              "default": true
+            },
+            "idempotent": {
+              "type": "boolean",
+              "default": false
+            },
+            "openWorld": {
+              "type": "boolean",
+              "default": true
+            }
+          }
+        },
+        "headerParams": {
+          "description": "Derived: input properties carrying an `x-mcp-header` annotation, which mirrors the argument's value into an Mcp-Param-* HTTP header on Streamable HTTP. Surfaced on its own because it moves argument data out of the request body and into a channel that proxies and WAFs can read. Sorted; each entry is 'propertyPath -> HeaderName'.",
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "icons": {
+          "description": "Icon sources. Pinned because an icon is a URL the client fetches, and SVG icons can carry script.",
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/icon"
+          }
+        },
+        "meta": {
+          "description": "The tool's `_meta`, minus any prefixes listed in policy.ignoreMetaPrefixes. Extensions negotiate real capability here, so it is pinned by default.",
+          "type": "object"
+        },
+        "digest": {
+          "$ref": "#/$defs/digest"
+        }
+      }
+    },
+    "resource": {
+      "type": "object",
+      "required": [
+        "uri",
+        "name",
+        "digest"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "uri": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "mimeType": {
+          "type": "string"
+        },
+        "annotations": {
+          "type": "object"
+        },
+        "icons": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/icon"
+          }
+        },
+        "meta": {
+          "type": "object"
+        },
+        "digest": {
+          "$ref": "#/$defs/digest"
+        }
+      }
+    },
+    "resourceTemplate": {
+      "type": "object",
+      "required": [
+        "uriTemplate",
+        "name",
+        "digest"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "uriTemplate": {
+          "description": "RFC 6570 template. Widening a template, say from 'file:///project/{path}' to 'file:///{path}', enlarges what the agent can read without any tool changing.",
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "mimeType": {
+          "type": "string"
+        },
+        "annotations": {
+          "type": "object"
+        },
+        "icons": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/icon"
+          }
+        },
+        "meta": {
+          "type": "object"
+        },
+        "digest": {
+          "$ref": "#/$defs/digest"
+        }
+      }
+    },
+    "prompt": {
+      "type": "object",
+      "required": [
+        "name",
+        "digest"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "arguments": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "name"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "title": {
+                "type": "string"
+              },
+              "description": {
+                "type": "string"
+              },
+              "required": {
+                "type": "boolean"
+              }
+            }
+          }
+        },
+        "icons": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/icon"
+          }
+        },
+        "meta": {
+          "type": "object"
+        },
+        "digest": {
+          "$ref": "#/$defs/digest"
+        }
+      }
+    },
+    "icon": {
+      "type": "object",
+      "required": [
+        "src"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "src": {
+          "type": "string"
+        },
+        "mimeType": {
+          "type": "string"
+        },
+        "sizes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "theme": {
+          "type": "string",
+          "enum": [
+            "light",
+            "dark"
+          ]
+        }
+      }
+    }
+  }
+}

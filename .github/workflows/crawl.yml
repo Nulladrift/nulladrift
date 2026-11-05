@@ -1,0 +1,92 @@
+# The drift measurement: re-read the capability surface of public MCP servers and diff it against
+# yesterday's reading. This is the instrument behind the question the project exists to answer --
+# how often MCP tool definitions actually change -- and it is deliberately separate from the
+# shipped CLI, which is init / check / review.
+name: crawl
+
+# State has to survive for months for the rate to mean anything, so it lives on its own branch
+# rather than in the Actions cache, which is evicted after a week of disuse.
+permissions:
+  contents: write
+
+on:
+  schedule:
+    # Daily, off the hour: a crawl that lands on :00 with everyone else's cron is a thundering herd.
+    - cron: "37 4 * * *"
+  workflow_dispatch:
+    inputs:
+      limit:
+        description: Maximum servers to crawl (blank for the whole registry)
+        required: false
+        type: string
+
+concurrency:
+  # Two crawls writing the same state branch would race and lose one run's observations.
+  group: crawl
+  cancel-in-progress: false
+
+jobs:
+  crawl:
+    # Pinned rather than latest: the ubuntu-latest label began moving to Ubuntu 26 on 19 October
+    # 2026, and a runner that changes underneath you is a variable nobody chose. Raise this
+    # deliberately, with the rest of the matrix green.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: pnpm/action-setup@41ff72655975bd51cab0327fa583b6e92b6d3061 # v4.2.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+
+      # The state branch holds corpus.lock and history.json. It is created on the first run.
+      - name: Restore crawl state
+        run: |
+          if git ls-remote --exit-code --heads origin crawl-state >/dev/null 2>&1; then
+            git fetch --depth 1 origin crawl-state
+            git worktree add crawl-state origin/crawl-state
+          else
+            git worktree add --detach crawl-state
+            git -C crawl-state checkout --orphan crawl-state
+            git -C crawl-state rm -rf . >/dev/null 2>&1 || true
+          fi
+
+      # The input goes through the environment, never into the command text. Interpolating
+      # `${{ inputs.* }}` directly into `run:` lets the value close the quote and append a
+      # command -- the standard Actions script-injection hole, and not one a security tool
+      # gets to have.
+      # An absolute path, because `pnpm crawl` forwards to `--filter nulladrift`, which runs the
+      # script with `packages/cli` as its working directory. The script resolves `--state`
+      # against that, so a relative `crawl-state` wrote to `packages/cli/crawl-state` while the
+      # worktree committed below is `crawl-state` at the repository root. The crawl succeeded
+      # every time and the commit step then found an empty directory and reported that the crawl
+      # had recorded nothing, which is the opposite of what had happened.
+      - name: Crawl
+        env:
+          CRAWL_LIMIT: ${{ inputs.limit }}
+        run: pnpm crawl --state "$GITHUB_WORKSPACE/crawl-state" --timeout 20000 --concurrency 8 ${CRAWL_LIMIT:+--limit "$CRAWL_LIMIT"}
+
+      - name: Commit the new reading
+        working-directory: crawl-state
+        run: |
+          git config user.name  "nulladrift crawler"
+          git config user.email "noreply@users.noreply.github.com"
+          git add -A
+          # A run that changed nothing still advances history.json, so an empty diff means the
+          # crawl itself failed to record anything and is worth surfacing rather than hiding.
+          if git diff --cached --quiet; then
+            echo "::error::crawl produced no state change"
+            exit 1
+          fi
+          git commit -m "crawl: $(date -u +%Y-%m-%d)"
+          git push origin HEAD:crawl-state
+
+      # The readable report, attached to the run so it can be read without checking out a branch.
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: drift-report
+          path: |
+            crawl-state/drift-report.md
+            crawl-state/drift-report.json
