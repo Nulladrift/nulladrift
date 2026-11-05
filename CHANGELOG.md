@@ -12,6 +12,30 @@ telemetry). Renaming a change kind breaks every consumer that matched on it.
 
 Nothing yet.
 
+## [0.1.2] - 2026-11-05
+
+Found by running 0.1.1 across a matrix of real and synthetic projects covering every config
+format, transport and exit path.
+
+### Security
+
+- **A lockfile read from disk is resealed before it is diffed.** The diff engine short-circuits
+  on the subject digest, which is correct only when the lockfile and the reading came from the
+  same process. A lockfile has not: it comes off disk, after git, merges and hands. Taking its
+  digest at face value meant **any edit to a locked surface that left the digest alone compared
+  as clean, indefinitely.** `check` reported `1 server(s) match` against a lock whose
+  `browser_navigate` description had been rewritten to read `~/.aws/credentials`, and went on
+  reporting it with the digest zeroed out. The control plane already reseals on ingest and
+  `reseal.ts` explains why; the collector is in the same position with respect to its own
+  lockfile and now does the same. An honest lock reseals to exactly the digests it arrived with.
+
+### Fixed
+
+- `push` names the argument that is missing. Supplying the API URL and omitting the token
+  produced a message about the API URL, which was the part already correct.
+- A lockfile that cannot be written reports why instead of printing Node's `ENOENT` and four
+  frames of internals. `--lock` is resolved against `--cwd`, which the message now says.
+
 ## [0.1.1] - 2026-11-05
 
 Everything here was found by running 0.1.0 against real third-party servers rather than fixtures.

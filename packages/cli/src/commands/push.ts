@@ -59,11 +59,17 @@ export async function runPush(options: PushOptions): Promise<ExitCode> {
   const apiUrl = (options.apiUrl ?? process.env["NULLADRIFT_API_URL"] ?? "").replace(/\/+$/, "");
   const token = options.token ?? process.env["NULLADRIFT_TOKEN"] ?? "";
   if (!apiUrl || !token) {
+    /*
+     * Name the one that is missing. Both were reported as "needs a control plane to push to",
+     * so supplying the URL and forgetting the token produced a message about the URL, which is
+     * the part that was already correct.
+     */
+    const missing = !apiUrl && !token ? "a control plane to push to, and a token" : !apiUrl ? "a control plane to push to" : "a collector token";
     process.stderr.write(
       [
-        red("push needs a control plane to push to."),
-        dim("  --api <url> or NULLADRIFT_API_URL"),
-        dim("  --token <token> or NULLADRIFT_TOKEN"),
+        red(`push needs ${missing}.`),
+        ...(!apiUrl ? [dim("  --api <url> or NULLADRIFT_API_URL")] : []),
+        ...(!token ? [dim("  --token <token> or NULLADRIFT_TOKEN")] : []),
         "",
       ].join("\n"),
     );

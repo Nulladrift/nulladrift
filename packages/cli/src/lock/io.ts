@@ -8,6 +8,7 @@
  * diff. Hashing is unaffected: digests are computed over RFC 8785 canonical form, which sorts
  * everything. See docs/lockfile.md §2.
  */
+import { reseal } from "@nulladrift/core";
 import { readFile, writeFile } from "node:fs/promises";
 import { lockfileSchema } from "./schema";
 import type { Lockfile } from "./types";
@@ -174,6 +175,22 @@ export function parseLockfile(text: string, path: string): Lockfile {
   return parsed.data as Lockfile;
 }
 
+/**
+ * Every digest in a lockfile read from disk is recomputed from the content beside it.
+ *
+ * The diff engine short-circuits on the subject digest, which is right only when the lockfile and
+ * the reading came from the same process. A lockfile has not: it is read from a repository, after
+ * git, merges and hands. Taking its digest at face value meant any edit to a locked surface that
+ * left the digest alone compared as clean, forever -- `check` reported "1 server(s) match" for a
+ * lock whose `browser_navigate` description had been rewritten to read ~/.aws/credentials, and
+ * went on reporting it with the digest zeroed out, because the digest it trusted was the one in
+ * the file.
+ *
+ * The control plane already reseals on ingest for exactly this reason and says so in `reseal.ts`.
+ * The collector is in the same position with respect to its own lockfile, so it does the same.
+ * An honest lock reseals to precisely the digests it arrived with; a tampered or badly merged one
+ * reseals to different ones and shows up as the drift it is.
+ */
 export async function readLockfile(path: string): Promise<Lockfile> {
   let text: string;
   try {
@@ -183,9 +200,25 @@ export async function readLockfile(path: string): Promise<Lockfile> {
     if (code === "ENOENT") throw new LockfileError(`no lockfile at ${path}. Run \`nulladrift init\` first.`);
     throw new LockfileError(`could not read ${path}: ${(error as Error).message}`);
   }
-  return parseLockfile(text, path);
+  const lock = parseLockfile(text, path);
+  return {
+    ...lock,
+    subjects: Object.fromEntries(Object.entries(lock.subjects).map(([name, subject]) => [name, reseal(subject)])),
+  };
 }
 
 export async function writeLockfile(path: string, lock: Lockfile): Promise<void> {
-  await writeFile(path, serializeLockfile(lock), "utf8");
+  try {
+    await writeFile(path, serializeLockfile(lock), "utf8");
+  } catch (error) {
+    /*
+     * A raw ENOENT and a stack trace is not an answer. `--lock` is resolved against `--cwd`, so
+     * a path that looks right from the shell can land in a directory that does not exist, and the
+     * tool used to print Node's error verbatim with four frames of its own internals under it.
+     */
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT") throw new LockfileError(`cannot write ${path}: the directory does not exist. Note that --lock is resolved against --cwd.`);
+    if (code === "EACCES" || code === "EPERM") throw new LockfileError(`cannot write ${path}: permission denied.`);
+    throw new LockfileError(`cannot write ${path}: ${(error as Error).message}`);
+  }
 }
