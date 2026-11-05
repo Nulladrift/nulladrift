@@ -37,7 +37,10 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
-          registry-url: https://registry.npmjs.org
+          # Deliberately no registry-url. It writes an .npmrc whose auth token is NODE_AUTH_TOKEN,
+          # and sets that variable to a literal XXXXX-XXXXX-XXXXX-XXXXX when no token is supplied.
+          # With trusted publishing there is no token to supply, so the placeholder is sent as the
+          # credential and the registry answers 404 on the PUT.
 
       - run: pnpm install --frozen-lockfile
 
@@ -85,13 +88,28 @@ jobs:
       # Provenance is set in pnpm-workspace.yaml, not here. `--provenance` is not a documented
       # pnpm flag and is swallowed without error, so passing it would look like a guarantee and
       # not be one.
+      # Packed by pnpm, published by npm, for one reason each.
+      #
+      # pnpm packs: it rewrites `catalog:` ranges into real ones and applies publishConfig, which
+      # is what points the published core at dist rather than src. npm would publish a manifest
+      # asking for "zod": "catalog:", which installs nowhere.
+      #
+      # npm publishes: pnpm's OIDC token exchange answers 404 against a package that does have a
+      # trusted publisher configured, so it falls back to a credential that is not there. npm's
+      # implementation is the one npm documents, and it owns --provenance, which is not a pnpm
+      # flag at all.
+      - name: Pack both packages
+        run: |
+          mkdir -p /tmp/dist
+          (cd packages/core && pnpm pack --pack-destination /tmp/dist)
+          (cd packages/cli  && pnpm pack --pack-destination /tmp/dist)
+          ls -la /tmp/dist
+
       - name: Publish @nulladrift/core
-        working-directory: packages/core
-        run: pnpm publish --access public --no-git-checks
+        run: npm publish /tmp/dist/nulladrift-core-*.tgz --provenance --access public
 
       - name: Publish nulladrift
-        working-directory: packages/cli
-        run: pnpm publish --no-git-checks
+        run: npm publish /tmp/dist/nulladrift-0*.tgz --provenance --access public
 
       # The claim, checked. Everything above can succeed and still produce a tarball with no
       # attestation: pnpm 11 has been reported to ignore provenance settings depending on how
