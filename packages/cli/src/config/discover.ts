@@ -91,6 +91,22 @@ async function readJsonIfPresent(path: string): Promise<ReadResult> {
   }
 }
 
+/**
+ * A relative `cwd` in a config file means "relative to the project", not "relative to wherever
+ * the auditor happened to be invoked".
+ *
+ * It was passed to the spawn verbatim, so Node resolved it against `process.cwd()`. Running from
+ * the project root hid this; running from anywhere else, which is what `--cwd` and most CI
+ * layouts do, silently started the server in the wrong directory and reported whatever it failed
+ * to find there. Apache SkyWalking BanyanDB configures `"cwd": "."`, and every client that reads
+ * that file resolves it against the file, so this matches them rather than inventing a meaning.
+ */
+function anchorCwd(server: ConfiguredServer, projectRoot: string): ConfiguredServer {
+  const { transport } = server;
+  if (transport.type !== "stdio" || transport.cwd === undefined || isAbsolute(transport.cwd)) return server;
+  return { ...server, transport: { ...transport, cwd: resolve(projectRoot, transport.cwd) } };
+}
+
 export async function discoverServers(projectRoot: string, extraFiles: string[] = []): Promise<Discovery> {
   const context: ExpandContext = { workspaceFolder: projectRoot, env: process.env };
 
@@ -137,7 +153,7 @@ export async function discoverServers(projectRoot: string, extraFiles: string[] 
         : await parseServerMap(raw, mapKey, { ...source, scope: file.scope }, context);
 
     skipped.push(...parsed.skipped);
-    for (const server of parsed.servers) {
+    for (const server of parsed.servers.map((entry) => anchorCwd(entry, projectRoot))) {
       const existing = byName.get(server.name);
       if (existing) {
         shadowed.push({ name: server.name, keptFrom: existing.from, alsoIn: source.file });

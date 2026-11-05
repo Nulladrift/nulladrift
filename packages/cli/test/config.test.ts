@@ -259,3 +259,57 @@ describe("configs outside the project", () => {
     }
   });
 });
+
+/*
+ * A relative `cwd` was passed to the spawn verbatim, so Node resolved it against process.cwd().
+ * Auditing from the project root hid it; auditing from anywhere else, which is what `--cwd` and
+ * most CI layouts do, started the server in the wrong directory and reported whatever it failed
+ * to find there. Apache SkyWalking BanyanDB ships `"cwd": "."`, which is how this surfaced.
+ */
+describe("a relative cwd is anchored to the project, not to the caller", () => {
+  it("resolves `.` against the project root", async () => {
+    const project = await mkdtemp(join(tmpdir(), "mcp-cwd-"));
+    try {
+      await writeFile(
+        join(project, ".mcp.json"),
+        JSON.stringify({ mcpServers: { banyandb: { cwd: ".", command: "node", args: ["./mcp/dist/index.js"] } } }),
+        "utf8",
+      );
+      const found = await discoverServers(project);
+      const server = found.servers.find((entry) => entry.name === "banyandb");
+      expect(server?.transport).toMatchObject({ type: "stdio", cwd: project });
+    } finally {
+      await rm(project, { recursive: true, force: true });
+    }
+  });
+
+  it("resolves a nested relative cwd too", async () => {
+    const project = await mkdtemp(join(tmpdir(), "mcp-cwd-"));
+    try {
+      await writeFile(
+        join(project, ".mcp.json"),
+        JSON.stringify({ mcpServers: { s: { cwd: "./mcp", command: "node", args: ["index.js"] } } }),
+        "utf8",
+      );
+      const found = await discoverServers(project);
+      expect(found.servers[0]?.transport).toMatchObject({ cwd: join(project, "mcp") });
+    } finally {
+      await rm(project, { recursive: true, force: true });
+    }
+  });
+
+  it("leaves an absolute cwd alone", async () => {
+    const project = await mkdtemp(join(tmpdir(), "mcp-cwd-"));
+    try {
+      await writeFile(
+        join(project, ".mcp.json"),
+        JSON.stringify({ mcpServers: { s: { cwd: "/opt/server", command: "node", args: ["index.js"] } } }),
+        "utf8",
+      );
+      const found = await discoverServers(project);
+      expect(found.servers[0]?.transport).toMatchObject({ cwd: "/opt/server" });
+    } finally {
+      await rm(project, { recursive: true, force: true });
+    }
+  });
+});

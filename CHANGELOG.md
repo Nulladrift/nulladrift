@@ -10,7 +10,18 @@ telemetry). Renaming a change kind breaks every consumer that matched on it.
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.1.1] - 2026-11-05
+
+Everything here was found by running 0.1.0 against real third-party servers rather than fixtures.
+
 ### Fixed
+
+- **A relative `cwd` is resolved against the project, not the caller.** It was handed to the spawn
+  verbatim, so Node resolved it against `process.cwd()`. Auditing from the project root hid this;
+  auditing from anywhere else, which is what `--cwd` and most CI layouts do, started the server in
+  the wrong directory and reported whatever it failed to find there.
 
 - **A failed stdio server now shows why it failed.** The captured stderr was the *last* three
   lines, and a Node process that dies on startup ends with a closing brace, a blank line and its
