@@ -76,14 +76,42 @@ jobs:
       #
       # --no-git-checks because the tag ref is checked out detached, which pnpm otherwise
       # refuses; the version agreement is already asserted above.
+      # Provenance is set in pnpm-workspace.yaml, not here. `--provenance` is not a documented
+      # pnpm flag and is swallowed without error, so passing it would look like a guarantee and
+      # not be one.
       - name: Publish @nulladrift/core
         working-directory: packages/core
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: pnpm publish --provenance --access public --no-git-checks
+        run: pnpm publish --access public --no-git-checks
 
       - name: Publish nulladrift
         working-directory: packages/cli
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: pnpm publish --provenance --no-git-checks
+        run: pnpm publish --no-git-checks
+
+      # The claim, checked. Everything above can succeed and still produce a tarball with no
+      # attestation: pnpm 11 has been reported to ignore provenance settings depending on how
+      # they are supplied, and a release that quietly loses its provenance is worse than one that
+      # fails, because the package page keeps saying what people believe it says.
+      #
+      # The registry takes a moment to expose attestations after a publish, hence the retry.
+      - name: Both packages were published with provenance
+        run: |
+          version="$(node -p "require('./packages/cli/package.json').version")"
+          for pkg in "@nulladrift/core" "nulladrift"; do
+            ok=
+            for attempt in 1 2 3 4 5 6; do
+              if [ -n "$(npm view "$pkg@$version" dist.attestations --json 2>/dev/null)" ]; then
+                ok=1; break
+              fi
+              echo "waiting for $pkg@$version attestation (attempt $attempt)"
+              sleep 10
+            done
+            if [ -z "$ok" ]; then
+              echo "::error::$pkg@$version published without a provenance attestation"
+              exit 1
+            fi
+            echo "$pkg@$version: provenance attested"
+          done
