@@ -32,7 +32,15 @@ export function renderHumanReport(report: AuditReport): string {
   const lines: string[] = [];
 
   if (report.changes.length > 0) {
-    lines.push("", bold(`Drift in ${new Set(report.changes.map((change) => change.server)).size} of ${report.serversChecked} server(s):`), "");
+    /*
+     * "Drift in 1 of 0 server(s)" is what this printed when a server was removed from the config:
+     * the drift is real and the denominator is how many were reachable to compare, which is now
+     * none. Say that instead of pairing the two numbers as if they were a fraction.
+     */
+    const drifted = new Set(report.changes.map((change) => change.server)).size;
+    const heading =
+      report.serversChecked === 0 ? `Drift in ${drifted} server(s), none of which is still configured:` : `Drift in ${drifted} of ${report.serversChecked} server(s):`;
+    lines.push("", bold(heading), "");
     for (const change of report.changes) lines.push(...renderChange(change), "");
 
     /*

@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { discoverServers, portablePath } from "../src/config/discover";
+import { describeSearch, discoverServers, portablePath } from "../src/config/discover";
 import { detectMapKey, parseClaudeJson, parseServerMap, readEnvFile } from "../src/config/parsers";
 
 import type { ExpandContext } from "../src/config/expand";
@@ -308,6 +308,38 @@ describe("a relative cwd is anchored to the project, not to the caller", () => {
       );
       const found = await discoverServers(project);
       expect(found.servers[0]?.transport).toMatchObject({ cwd: "/opt/server" });
+    } finally {
+      await rm(project, { recursive: true, force: true });
+    }
+  });
+});
+
+/*
+ * "Looked in:" listed only the files that existed. A project with no config of its own therefore
+ * reported two paths in the user's home directory and nothing else, giving no way to tell the
+ * project itself had been searched -- which is where somebody standing in a repository concludes
+ * the tool does not look locally and stops.
+ */
+describe("discovery reports every path it looked at", () => {
+  it("lists the project-local candidates even when none exist", async () => {
+    const project = await mkdtemp(join(tmpdir(), "mcp-search-"));
+    try {
+      const found = await discoverServers(project);
+      expect(found.searched).toEqual(expect.arrayContaining([join(project, ".mcp.json"), join(project, ".vscode", "mcp.json"), join(project, ".cursor", "mcp.json")]));
+      expect(found.filesRead).not.toContain(join(project, ".mcp.json"));
+    } finally {
+      await rm(project, { recursive: true, force: true });
+    }
+  });
+
+  it("marks each path read or absent", async () => {
+    const project = await mkdtemp(join(tmpdir(), "mcp-search-"));
+    try {
+      await writeFile(join(project, ".mcp.json"), JSON.stringify({ mcpServers: {} }), "utf8");
+      const found = await discoverServers(project);
+      const described = describeSearch(found.searched, found.filesRead);
+      expect(described).toContain(`read    ${join(project, ".mcp.json")}`);
+      expect(described).toContain(`absent  ${join(project, ".cursor", "mcp.json")}`);
     } finally {
       await rm(project, { recursive: true, force: true });
     }

@@ -61,6 +61,14 @@ export interface Discovery {
   skipped: UnsupportedServerError[];
   /** Config files that existed and were read. */
   filesRead: string[];
+  /**
+   * Every path considered, whether or not it was there. `filesRead` holds only the files that
+   * existed, so "No MCP servers found. Looked in: ~/.claude.json, ~/Library/.../claude_desktop"
+   * was the whole report for a project with no config of its own -- giving no way to tell the
+   * project had been searched at all. Somebody standing in a repository reads that and concludes
+   * the tool does not look locally.
+   */
+  searched: string[];
   /** Names defined more than once; the first definition won. */
   shadowed: Array<{ name: string; keptFrom: string; alsoIn: string }>;
   /** Files named explicitly that could not be understood. Never silently ignored. */
@@ -105,6 +113,17 @@ function anchorCwd(server: ConfiguredServer, projectRoot: string): ConfiguredSer
   const { transport } = server;
   if (transport.type !== "stdio" || transport.cwd === undefined || isAbsolute(transport.cwd)) return server;
   return { ...server, transport: { ...transport, cwd: resolve(projectRoot, transport.cwd) } };
+}
+
+/**
+ * What was looked at, and what was found there. The old message listed only the files that
+ * existed, so a project with no config of its own reported two paths in the user's home
+ * directory and nothing else -- no way to tell whether the project itself had been searched.
+ */
+export function describeSearch(searched: string[], filesRead: string[]): string {
+  const read = new Set(filesRead);
+  const lines = searched.map((path) => `  ${(read.has(path) ? "read" : "absent").padEnd(6)}  ${path}`);
+  return lines.join("\n");
 }
 
 export async function discoverServers(projectRoot: string, extraFiles: string[] = []): Promise<Discovery> {
@@ -167,6 +186,7 @@ export async function discoverServers(projectRoot: string, extraFiles: string[] 
     servers: [...byName.values()].map((entry) => entry.server).sort((a, b) => a.name.localeCompare(b.name)),
     skipped,
     filesRead,
+    searched: files.map((file) => file.path),
     shadowed,
     problems,
   };

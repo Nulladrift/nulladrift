@@ -35,6 +35,13 @@ format, transport and exit path.
   produced a message about the API URL, which was the part already correct.
 - A lockfile that cannot be written reports why instead of printing Node's `ENOENT` and four
   frames of internals. `--lock` is resolved against `--cwd`, which the message now says.
+- **`Looked in:` lists every path that was searched, each marked `read` or `absent`.** It listed
+  only the files that existed, so a project with no config of its own reported two paths in the
+  user's home directory and nothing else -- no way to tell the project itself had been searched.
+  That is where somebody standing in a repository concludes the tool does not look locally. The
+  message also now says that nothing was written and that `check` will fail until a config exists.
+- `Drift in 1 of 0 server(s)` reads as a broken fraction. When a server is removed from the
+  config there is nothing left to compare against, so the heading says that instead.
 
 ## [0.1.1] - 2026-11-05
 

@@ -1,4 +1,5 @@
 /** `nulladrift init` -- discover servers, capture their surface, write the lock. */
+import { describeSearch } from "../config/discover";
 import { access } from "node:fs/promises";
 import { captureAll } from "../audit";
 import { writeLockfile } from "../lock/io";
@@ -52,7 +53,14 @@ export async function runInit(options: InitOptions): Promise<ExitCode> {
   const names = Object.keys(result.lock.subjects);
   if (names.length === 0 && result.unreachable.length === 0) {
     process.stderr.write(
-      `No MCP servers found.\n${dim(`Looked in: ${result.discovery.filesRead.length > 0 ? result.discovery.filesRead.join(", ") : "no client config files exist for this project"}`)}\n`,
+      [
+        "No MCP servers found.",
+        dim("Looked in:"),
+        dim(describeSearch(result.discovery.searched, result.discovery.filesRead)),
+        dim("Nothing was written. `nulladrift check` needs a lockfile, so it will fail until a"),
+        dim("config declaring at least one server exists."),
+        "",
+      ].join("\n"),
     );
     return EXIT_CLEAN;
   }
