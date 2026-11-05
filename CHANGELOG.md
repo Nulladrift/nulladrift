@@ -10,7 +10,22 @@ telemetry). Renaming a change kind breaks every consumer that matched on it.
 
 ## [Unreleased]
 
-Nothing yet.
+### Fixed
+
+- **A 403 is no longer reported as a missing credential.** `check` collapsed 401 and 403 into one
+  outcome and printed the same remediation for both: *run `nulladrift login`*. After a 403 that is
+  a loop, because the credential was accepted and the identity is still not permitted. Found
+  against Sentry's hosted server, where the configured URL named an organization the account did
+  not belong to; re-authorizing four times could not have fixed it.
+- `isAuthFailure` only ever read the outer error's message, so a transport that wrapped
+  `403 Forbidden` in a sentence of its own was classified as an outage and sent people to check a
+  network that was fine.
+
+### Changed
+
+- `unreachable[].kind` in `--json` gains a third value, `forbidden`, alongside `auth` and
+  `unreachable`. A consumer matching `kind === "auth"` will no longer see refusals of an accepted
+  identity; match both if you want every authorization outcome.
 
 The entries that used to sit here described the control plane, the dashboard and
 `@nulladrift/shared-types`. None of those are in this repository: it holds the collector and the

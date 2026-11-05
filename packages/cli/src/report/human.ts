@@ -54,7 +54,8 @@ export function renderHumanReport(report: AuditReport): string {
   if (report.unreachable.length > 0) {
     lines.push(bold(`Could not audit ${report.unreachable.length} server(s):`), "");
     for (const failure of report.unreachable) {
-      const label = failure.kind === "auth" ? yellow("needs creds") : red("unreachable");
+      const label =
+        failure.kind === "auth" ? yellow("needs creds") : failure.kind === "forbidden" ? yellow("not permitted") : red("unreachable");
       lines.push(`  ${label} ${bold(failure.server)}`, `      ${failure.reason}`, "");
     }
   }
@@ -75,9 +76,23 @@ export function renderHumanReport(report: AuditReport): string {
     lines.push(dim("A server that cannot be checked fails the audit. Use --allow-unreachable to downgrade that to a warning."));
     if (report.unreachable.some((failure) => failure.kind === "auth")) {
       lines.push(
-        dim("`needs creds` means the server refused this client, not that it is down. The tool list a"),
-        dim("server shows may depend on who is asking, so auditing without them would pin the wrong"),
-        dim("surface. Run `nulladrift login <server>` once, or set oauth.clientId/clientSecret for CI."),
+        dim("`needs creds` means the server would not accept this client, not that it is down. The tool"),
+        dim("list a server shows may depend on who is asking, so auditing without credentials would pin"),
+        dim("the wrong surface. Run `nulladrift login <server>` once, or set oauth.clientId/clientSecret"),
+        dim("for CI."),
+      );
+    }
+    /*
+     * Deliberately not the same advice as above. A 403 means the credential was accepted and this
+     * identity is still not permitted, so sending somebody back to `login` sends them round a loop
+     * they have already been round. The usual cause is a URL that names a tenant the account does
+     * not belong to, which no amount of re-authorizing will fix.
+     */
+    if (report.unreachable.some((failure) => failure.kind === "forbidden")) {
+      lines.push(
+        dim("`not permitted` means your credentials were accepted and refused. Running `nulladrift login`"),
+        dim("again will not change that. Check the server URL for an organization or project you do not"),
+        dim("belong to, and whether the grant covers that resource."),
       );
     }
   }

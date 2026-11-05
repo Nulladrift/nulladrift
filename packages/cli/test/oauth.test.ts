@@ -10,7 +10,7 @@ import { ClientCredentialsProvider } from "@modelcontextprotocol/client";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { ConfiguredServer } from "../src/config/types";
 import { parseServerMap } from "../src/config/parsers";
-import { isAuthFailure, UnreachableServerError } from "../src/mcp/types";
+import { authFailureKind, isAuthFailure, UnreachableServerError } from "../src/mcp/types";
 import { createAuthProvider, credentialPath, FileTokenProvider, hasStoredCredentials, InteractiveAuthRequiredError } from "../src/mcp/oauth";
 
 let configHome: string;
@@ -177,5 +177,39 @@ describe("oauth in a client config", () => {
     const locked = lockTransport(remote({ clientId: "cid", clientSecret: "top-secret" }));
     expect(JSON.stringify(locked)).not.toContain("top-secret");
     expect(JSON.stringify(locked)).not.toContain("cid");
+  });
+});
+
+/*
+ * 401 and 403 reached this tool as the same thing, and the advice printed for both was "run
+ * `nulladrift login`". Against Sentry's hosted server that was a loop: the login succeeded, the
+ * credential was accepted, and the 403 stood, because the URL named an organization the account
+ * was not a member of. These cases exist so the two never collapse back into one again.
+ */
+describe("authFailureKind separates a missing credential from a refused one", () => {
+  it("calls an unauthenticated server 'auth'", () => {
+    expect(authFailureKind(new UnreachableServerError("s", "Version negotiation failed: the server requires authorization (HTTP 401)"))).toBe("auth");
+    expect(authFailureKind(new UnreachableServerError("s", "HTTP 401 Unauthorized"))).toBe("auth");
+    expect(authFailureKind(new UnreachableServerError("s", "invalid or missing MCP token"))).toBe("auth");
+  });
+
+  it("calls an accepted-then-refused credential 'forbidden'", () => {
+    // The exact string the Sentry run produced.
+    expect(authFailureKind(new UnreachableServerError("sentry", "Version negotiation failed: the server denied access (HTTP 403)"))).toBe("forbidden");
+    expect(authFailureKind(new UnreachableServerError("s", "HTTP 403 Forbidden"))).toBe("forbidden");
+  });
+
+  it("reads a 403 through the cause as well as the message", () => {
+    expect(authFailureKind(new UnreachableServerError("s", "capture failed", new Error("403 Forbidden")))).toBe("forbidden");
+  });
+
+  it("leaves everything that is not an authorization outcome undefined", () => {
+    expect(authFailureKind(new UnreachableServerError("s", "connect ECONNREFUSED"))).toBeUndefined();
+    expect(authFailureKind(new UnreachableServerError("s", "spawn ENOENT"))).toBeUndefined();
+  });
+
+  it("still reports both as auth failures, so neither is mistaken for an outage", () => {
+    expect(isAuthFailure(new UnreachableServerError("s", "HTTP 403 Forbidden"))).toBe(true);
+    expect(isAuthFailure(new UnreachableServerError("s", "HTTP 401 Unauthorized"))).toBe(true);
   });
 });

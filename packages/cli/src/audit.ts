@@ -6,7 +6,7 @@ import type { Lockfile, LockedMcpServer, LockPolicy } from "./lock/types";
 import { LOCKFILE_VERSION } from "./lock/types";
 import { captureSurface } from "./mcp/capture";
 import { DEFAULT_TIMEOUT_MS } from "./mcp/connect";
-import { isAuthFailure, UnreachableServerError } from "./mcp/types";
+import { UnreachableServerError, authFailureKind } from "./mcp/types";
 import { VERSION } from "./lib/version";
 import type { Unreachable } from "./report/types";
 
@@ -52,7 +52,7 @@ export async function captureAll(options: CaptureOptions): Promise<CaptureResult
     } catch (error) {
       options.onServerDone?.(server.name, "failed");
       const reason = error instanceof UnreachableServerError ? error.message : (error as Error).message;
-      const kind = isAuthFailure(error) ? "auth" : "unreachable";
+      const kind = authFailureKind(error) ?? "unreachable";
       return { name: server.name, failure: { server: server.name, reason, kind } satisfies Unreachable };
     }
   });

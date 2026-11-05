@@ -14,6 +14,13 @@ import { serversThatShippedNothing } from "../diff/types";
 import type { Change, Severity } from "../diff/types";
 import type { AuditReport } from "./types";
 
+/** Pull request comments say which of the three it was, because the reader's next step differs. */
+const AUDIT_FAILURE_LABEL: Record<"auth" | "forbidden" | "unreachable", string> = {
+  auth: "refused the audit",
+  forbidden: "accepted the credentials and refused",
+  unreachable: "unreachable",
+};
+
 const MARK: Record<Severity, string> = { high: "🔴", medium: "🟠", low: "⚪" };
 
 /**
@@ -78,7 +85,7 @@ export function renderMarkdownReport(report: AuditReport, options: { url?: strin
       `<details><summary>${report.unreachable.length} server${report.unreachable.length === 1 ? "" : "s"} could not be read</summary>`,
       "",
       ...report.unreachable.map(
-        (failure) => `- \`${cell(failure.server)}\` · ${failure.kind === "auth" ? "refused the audit" : "unreachable"}: ${cell(failure.reason)}`,
+        (failure) => `- \`${cell(failure.server)}\` · ${AUDIT_FAILURE_LABEL[failure.kind]}: ${cell(failure.reason)}`,
       ),
       "",
       "</details>",
