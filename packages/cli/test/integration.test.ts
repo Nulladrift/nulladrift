@@ -10,6 +10,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { captureAll } from "../src/audit";
 import { runCheck } from "../src/commands/check";
 import { runInit } from "../src/commands/init";
+import { runPush } from "../src/commands/push";
 import { runReview } from "../src/commands/review";
 import type { CommonOptions } from "../src/commands/options";
 import { diffLockfiles } from "../src/diff";
@@ -327,4 +328,36 @@ describe("the lock is diffed, not just hashed", () => {
     },
     TIMEOUT_MS * 2,
   );
+});
+
+describe("pushing from a project with nothing to audit", () => {
+  /*
+   * The control plane refuses an empty reading, correctly, with "a reading has to contain at
+   * least one server or one failure". That is a sentence about a request body, written for
+   * whoever is debugging the API, and it was what somebody saw after running the collector in a
+   * directory with no client config: it never says that none was found, or where the collector
+   * looked. `init` has said both for as long as it has existed.
+   */
+  it("says so itself, naming where it looked, instead of letting the server refuse it", async () => {
+    const root = await workspace({});
+
+    const { result, output } = await capturingStderr(() =>
+      withIsolatedHome(root, () =>
+        runPush({ ...options(root), apiUrl: "http://control-plane.invalid", token: "ndft_not_used", project: "web" }),
+      ),
+    );
+
+    expect(output).toContain("No MCP servers found");
+    expect(output).toContain("Looked in:");
+    /*
+     * The host is unroutable on purpose. Reaching it would fail with a DNS or connection error
+     * rather than this message, so a passing assertion here is also proof that nothing was sent.
+     */
+    expect(output).not.toContain("control-plane.invalid");
+    /*
+     * Incomplete rather than clean, which is where push parts company with init: a gate that
+     * passes because it found nothing to check is how a project quietly stops being audited.
+     */
+    expect(result).toBe(EXIT_INCOMPLETE);
+  });
 });

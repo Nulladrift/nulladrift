@@ -76,6 +76,28 @@ export async function runPush(options: PushOptions): Promise<ExitCode> {
     timeoutMs: options.timeoutMs,
   });
 
+  /*
+   * Nothing to send, caught here rather than by the control plane.
+   *
+   * An empty reading is refused on arrival ("a reading has to contain at least one server or one
+   * failure"), which is correct but useless to read: it describes the request body to somebody
+   * who was only trying to audit a project, and never mentions that no client config was found
+   * or where the collector looked. `init` has said both for as long as it has existed.
+   *
+   * Incomplete rather than clean, which is where this parts company with `init`. Init is a
+   * person setting things up and being told they are in the wrong directory; push is a CI gate,
+   * and a gate that passes because it found nothing to check is how a project quietly stops
+   * being audited at all.
+   */
+  if (Object.keys(result.lock.subjects).length === 0 && result.unreachable.length === 0) {
+    const looked =
+      result.discovery.filesRead.length > 0
+        ? result.discovery.filesRead.join(", ")
+        : "no client config files exist for this project";
+    process.stderr.write(`No MCP servers found, so there is nothing to push.\n${dim(`Looked in: ${looked}`)}\n`);
+    return EXIT_INCOMPLETE;
+  }
+
   const servers = Object.entries(result.lock.subjects).map(([name, entry]) => ({
     name,
     transport: entry.transport.type,
