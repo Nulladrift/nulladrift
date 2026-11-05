@@ -12,6 +12,16 @@ telemetry). Renaming a change kind breaks every consumer that matched on it.
 
 ### Fixed
 
+- **A failed stdio server now shows why it failed.** The captured stderr was the *last* three
+  lines, and a Node process that dies on startup ends with a closing brace, a blank line and its
+  version banner. So the report reliably showed the three least useful lines it printed and cut
+  off the reason above them. Against a server whose entry point had not been built, the operator
+  saw `}` and `Node.js v26.7.0` instead of `Error: Cannot find module '.../dist/index.js'`.
+- **`init` no longer writes a lockfile that pins nothing.** When every server failed it wrote an
+  empty `mcp.lock` and said "Commit mcp.lock" -- and because `init` refuses to run over an
+  existing lockfile, the next attempt was then blocked on a baseline that had never contained
+  anything. It now writes no file and says what to do instead.
+
 - **A 403 is no longer reported as a missing credential.** `check` collapsed 401 and 403 into one
   outcome and printed the same remediation for both: *run `nulladrift login`*. After a 403 that is
   a loop, because the credential was accepted and the identity is still not permitted. Found

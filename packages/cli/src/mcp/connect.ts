@@ -66,6 +66,36 @@ export function buildTransport(
   return new StreamableHTTPClientTransport(url, { requestInit: { headers }, authProvider });
 }
 
+/**
+ * The lines of a crash worth showing, which are almost never the last ones.
+ *
+ * This used to take `slice(-3)`. A Node process that dies on startup ends with the closing brace
+ * of its own stack frame, a blank line and its version banner, so the tail is reliably the three
+ * least informative lines it produced, and the reason was cut off above them. Against a real
+ * server whose entry point had not been built, the report read:
+ *
+ *     server stderr: }
+ *
+ *     Node.js v26.7.0
+ *
+ * while the line that explained it, `Error: Cannot find module '.../dist/index.js'`, was dropped.
+ *
+ * So: keep the lines that name a failure, drop stack frames and the interpreter's own furniture,
+ * and fall back to the first real lines rather than the last.
+ */
+export function diagnosticLines(stderr: string, limit = 3): string[] {
+  const lines = stderr
+    .split("\n")
+    .map((line) => line.trimEnd())
+    .filter((line) => line.trim().length > 0)
+    // Stack frames, the caret a syntax error points with, a lone brace, and `Node.js vNN.N.N`.
+    .filter((line) => !/^\s*(at\s|\^+$|[}\])]+$|Node\.js v[\d.]+$)/.test(line));
+
+  const named = lines.filter((line) => /\b(error|exception|cannot|failed|refused|denied|not found|enoent|eacces)\b/i.test(line));
+  const chosen = named.length > 0 ? named : lines;
+  return chosen.slice(0, limit).map((line) => line.trim());
+}
+
 export async function connect(server: ConfiguredServer, timeoutMs = DEFAULT_TIMEOUT_MS, options: { interactive?: boolean } = {}): Promise<Connection> {
   let stderrBuffer = "";
   const captureStderr = (chunk: string): void => {
@@ -98,7 +128,7 @@ export async function connect(server: ConfiguredServer, timeoutMs = DEFAULT_TIME
     const detail = stderrBuffer.trim();
     throw new UnreachableServerError(
       server.name,
-      `${(error as Error).message}${detail ? `\n  server stderr: ${detail.split("\n").slice(-3).join("\n  ")}` : ""}`,
+      `${(error as Error).message}${detail ? `\n  server stderr: ${diagnosticLines(detail).join("\n  ")}` : ""}`,
       error,
     );
   }

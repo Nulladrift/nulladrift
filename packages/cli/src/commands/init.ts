@@ -57,9 +57,19 @@ export async function runInit(options: InitOptions): Promise<ExitCode> {
     return EXIT_CLEAN;
   }
 
-  await writeLockfile(options.lockPath, result.lock);
+  /*
+   * An empty lock is worse than no lock. It pins nothing, and `init` refuses to run over an
+   * existing lockfile, so writing one after every server failed leaves the next `init` blocked on
+   * a baseline that never contained anything. Found when a server whose entry point had not been
+   * built failed to start: the run reported "Pinned 0 server(s)", wrote the file, and told the
+   * operator to commit it.
+   */
+  const pinnedSomething = names.length > 0;
+  if (pinnedSomething) await writeLockfile(options.lockPath, result.lock);
 
-  const lines: string[] = ["", bold(`Pinned ${names.length} server(s) to ${options.lockPath}:`), ""];
+  const lines: string[] = pinnedSomething
+    ? ["", bold(`Pinned ${names.length} server(s) to ${options.lockPath}:`), ""]
+    : ["", bold("Pinned nothing: no server answered."), ""];
   for (const name of names) {
     const entry = result.lock.subjects[name];
     const counts = [
@@ -81,7 +91,13 @@ export async function runInit(options: InitOptions): Promise<ExitCode> {
     lines.push(dim(`  note: "${shadow.name}" is defined in both ${shadow.keptFrom} and ${shadow.alsoIn}; kept the first.`));
   }
 
-  lines.push("", dim("Commit mcp.lock. `nulladrift check` in CI will fail if any of this changes."), "");
+  lines.push(
+    "",
+    pinnedSomething
+      ? dim("Commit mcp.lock. `nulladrift check` in CI will fail if any of this changes.")
+      : dim("No lockfile was written. Fix the server(s) above and run `nulladrift init` again."),
+    "",
+  );
   process.stdout.write(lines.join("\n"));
 
   await maybeOfferTelemetry();
