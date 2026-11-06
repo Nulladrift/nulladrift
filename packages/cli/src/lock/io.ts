@@ -9,7 +9,7 @@
  * everything. See docs/lockfile.md §2.
  */
 import { reseal } from "@nulladrift/core";
-import { readFile, writeFile } from "node:fs/promises";
+import { lstat, readFile, writeFile } from "node:fs/promises";
 import { lockfileSchema } from "./schema";
 import type { Lockfile } from "./types";
 import { LOCKFILE_VERSION } from "./types";
@@ -208,6 +208,27 @@ export async function readLockfile(path: string): Promise<Lockfile> {
 }
 
 export async function writeLockfile(path: string, lock: Lockfile): Promise<void> {
+  /*
+   * Never write through a symlink.
+   *
+   * `init` in a freshly cloned repository is the ordinary way to use this tool, and git can
+   * carry a symlink. A repository shipping `mcp.lock` as a link to `~/.npmrc`, a CI script or
+   * any other file the user can write had that file created or overwritten, reported as
+   * "Pinned 1 server(s)". A dangling link was the worse case: the existence check followed it,
+   * found nothing, and so `--force` was not even needed.
+   *
+   * There is a window between this check and the open, which is inherent to the filesystem. It
+   * is still the difference between a hostile repository needing to win a race and simply
+   * asking.
+   */
+  try {
+    const link = await lstat(path).catch(() => undefined);
+    if (link?.isSymbolicLink()) {
+      throw new LockfileError(`refusing to write ${path}: it is a symbolic link. A lockfile is a real file in the project, and following the link would write somewhere else.`);
+    }
+  } catch (error) {
+    if (error instanceof LockfileError) throw error;
+  }
   try {
     await writeFile(path, serializeLockfile(lock), "utf8");
   } catch (error) {

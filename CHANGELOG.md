@@ -16,6 +16,12 @@ Nothing yet.
 
 ### Security
 
+- **A lockfile path that is a symbolic link is refused rather than followed.** `init` in a freshly
+  cloned repository is the ordinary way to use this tool, and git can carry a symlink. A
+  repository shipping `mcp.lock` as a link to `~/.npmrc`, a CI script or any other file the user
+  can write had that file written, and the run reported `Pinned 1 server(s)`. The dangling case
+  needed no `--force` at all: the existence check followed the link, found nothing, concluded
+  there was no lockfile, and created the target outside the project.
 - **A credential passed to a server in `args` no longer ends up in the committed lockfile.**
   Environment values and header values were never written down, only their names, and a URL lost
   its query and fragment, all on the stated grounds that credentials usually sit there. `args`
