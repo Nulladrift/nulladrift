@@ -24,6 +24,12 @@ Nothing yet.
   expanded value. The configured form is written down now, so the lockfile holds `${API_KEY}`,
   the thing its author chose to put in version control. A config that changes which variable it
   reads is still drift and is still visible.
+- **`--timeout` is a per-server budget, as documented, not a per-request one.** Capturing a
+  surface takes several requests, so a server that accepted a connection and never answered held
+  the audit for two and a half to three times the configured value -- `--timeout 2000` measured
+  6.1s, `--timeout 4000` measured 10.1s. At the 30s default that is a minute and a half per
+  server, decided by a server nobody controls. The per-request timeout stays; this is the
+  ceiling on all of them together.
 - **`sanitizeUrl` strips userinfo.** `https://alice:s3cr3t@host/mcp` survived untouched, because
   `URL.toString()` keeps it. The query string was already being stripped on the grounds that
   credentials usually sit there; userinfo is where one sits by definition.

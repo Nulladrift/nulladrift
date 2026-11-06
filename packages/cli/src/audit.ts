@@ -41,12 +41,42 @@ async function mapWithLimit<T, R>(items: T[], limit: number, worker: (item: T) =
   return results;
 }
 
+/**
+ * One deadline for the whole of a server, not one per request to it.
+ *
+ * `--timeout` says "per-server timeout" and was applied to each request. Capturing a surface
+ * takes several -- version negotiation, the legacy fallback, then the listings -- so a server
+ * that accepts a connection and never answers held the audit for two and a half to three times
+ * the configured value. Measured: `--timeout 2000` took 6.1s, `--timeout 4000` took 10.1s. At
+ * the 30s default that is a minute and a half per server, which a server nobody controls gets
+ * to decide.
+ *
+ * The per-request timeout stays, because it is what makes an individual call give up. This is
+ * the ceiling on all of them together, so the flag means what it says.
+ */
+async function withDeadline<T>(ms: number, name: string, run: () => Promise<T>): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    return await Promise.race([
+      run(),
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new UnreachableServerError(name, `did not finish within ${ms}ms`)), ms);
+        timer.unref?.();
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 export async function captureAll(options: CaptureOptions): Promise<CaptureResult> {
   const discovery = await discoverServers(options.projectRoot, options.configFiles);
 
   const captured = await mapWithLimit(discovery.servers, options.concurrency ?? 4, async (server) => {
     try {
-      const surface = await captureSurface(server, options.timeoutMs ?? DEFAULT_TIMEOUT_MS);
+      const surface = await withDeadline(options.timeoutMs ?? DEFAULT_TIMEOUT_MS, server.name, () =>
+        captureSurface(server, options.timeoutMs ?? DEFAULT_TIMEOUT_MS),
+      );
       options.onServerDone?.(server.name, "captured");
       return { name: server.name, entry: buildLockedServer(server, surface, options.policy) };
     } catch (error) {
