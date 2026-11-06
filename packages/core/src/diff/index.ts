@@ -9,8 +9,9 @@ import type {
   LockedTool,
   Lockfile,
 } from "../lock/types";
+import { toolCapabilities, type CapabilitySeverity } from "../risk/capability";
 import { classifySchemaChange } from "./schema";
-import type { Change, ChangeKind } from "./types";
+import type { Change, ChangeKind, Severity } from "./types";
 import { SEVERITY, sortChanges } from "./types";
 
 function change(kind: ChangeKind, server: string, summary: string, extra?: Partial<Change>): Change {
@@ -66,6 +67,53 @@ function compareCapabilities(before: LockedMcpServer, after: LockedMcpServer, na
     return [change("server.capabilities.narrowed", name, `server no longer declares ${lost.join(", ")}`, { before: before.capabilities, after: after.capabilities })];
   }
   return [change("server.capabilities.changed", name, "declared capabilities changed", { before: before.capabilities, after: after.capabilities })];
+}
+
+
+/*
+ * What a tool can do, compared across a reading.
+ *
+ * The schema diff says a tool "accepts input it did not before", which is the same sentence
+ * whether the new argument is `nickname` or `command`. The classifier already knows the
+ * difference and says so at pin time; the diff did not ask, so the finding a reviewer approved
+ * described arbitrary command execution in the words of an optional string.
+ *
+ * A tool that is new is compared against nothing, so everything it can do is gained. That is the
+ * honest reading: a server that adds a tool taking `command` has gained command execution just as
+ * surely as one that adds the argument to a tool already there.
+ */
+const CAPABILITY_SEVERITY: Record<CapabilitySeverity, Severity> = {
+  critical: "high",
+  high: "high",
+  medium: "medium",
+  low: "low",
+};
+
+function compareToolCapabilities(server: string, before: LockedTool[] | undefined, after: LockedTool[] | undefined): Change[] {
+  const previous = indexBy(before, (tool) => tool.name);
+  const changes: Change[] = [];
+
+  for (const tool of after ?? []) {
+    /*
+     * Only tools that were already here. A tool that is new is reported once, by `tool.added`,
+     * which names what it can do: raising a second finding for the same fact makes a reviewer
+     * read the arrival of one tool twice.
+     */
+    const existing = previous.get(tool.name);
+    if (!existing) continue;
+    const had = new Set(toolCapabilities(existing).map((capability) => capability.kind));
+    for (const capability of toolCapabilities(tool)) {
+      if (had.has(capability.kind)) continue;
+      changes.push(
+        change("tool.capability.gained", server, `can now ${capability.kind} (${capability.evidence})`, {
+          member: tool.name,
+          severity: CAPABILITY_SEVERITY[capability.severity],
+          after: { kind: capability.kind, severity: capability.severity, evidence: capability.evidence },
+        }),
+      );
+    }
+  }
+  return changes;
 }
 
 function compareTool(name: string, before: LockedTool, after: LockedTool): Change[] {
@@ -138,6 +186,8 @@ interface MemberSpec<T> {
   removed: ChangeKind;
   changed: ChangeKind;
   noun: string;
+  /** Extra wording for a member that is new, where arriving is itself the finding. */
+  arriving?: (member: T) => string;
 }
 
 function compareMembers<T extends { digest: string }>(
@@ -154,7 +204,10 @@ function compareMembers<T extends { digest: string }>(
   for (const [key, member] of next) {
     const existing = previous.get(key);
     if (!existing) {
-      changes.push(change(spec.added, name, `new ${spec.noun} ${spec.label(member)}`, { member: spec.label(member), after: member }));
+      const extra = spec.arriving?.(member);
+      changes.push(
+        change(spec.added, name, `new ${spec.noun} ${spec.label(member)}${extra ? ` \u00b7 ${extra}` : ""}`, { member: spec.label(member), after: member }),
+      );
       continue;
     }
     if (existing.digest === member.digest) continue;
@@ -197,10 +250,22 @@ function compareServer(name: string, before: LockedMcpServer, after: LockedMcpSe
   changes.push(...compareCapabilities(before, after, name));
 
   changes.push(
-    ...compareMembers<LockedTool>(name, before.tools, after.tools, { key: (t) => t.name, label: (t) => t.name, added: "tool.added", removed: "tool.removed", changed: "tool.changed", noun: "tool" }, (_key, a, b) =>
+    ...compareMembers<LockedTool>(name, before.tools, after.tools, {
+      key: (t) => t.name,
+      label: (t) => t.name,
+      added: "tool.added",
+      removed: "tool.removed",
+      changed: "tool.changed",
+      noun: "tool",
+      arriving: (t) => {
+        const can = toolCapabilities(t);
+        return can.length > 0 ? `can ${can.map((capability) => capability.kind).join(", ")}` : "";
+      },
+    }, (_key, a, b) =>
       compareTool(name, a, b),
     ),
   );
+  changes.push(...compareToolCapabilities(name, before.tools, after.tools));
   changes.push(
     ...compareMembers<LockedResource>(name, before.resources, after.resources, {
       key: (r) => r.uri,

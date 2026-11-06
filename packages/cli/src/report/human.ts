@@ -60,8 +60,38 @@ function renderSteering(report: AuditReport): string[] {
   return lines;
 }
 
+
+/**
+ * Capabilities the committed policy forbids.
+ *
+ * Printed above drift, because it is the finding that acceptance cannot clear: `review` writes
+ * the new surface into the lock and this still fails, which is what makes it a policy rather
+ * than a default.
+ */
+function renderViolations(report: AuditReport): string[] {
+  const found = report.violations ?? [];
+  if (found.length === 0) return [];
+  const lines = ["", bold(red(`${found.length} capability(ies) this project does not permit:`)), ""];
+  for (const violation of found) {
+    lines.push(
+      `  ${red("denied")} ${bold(`${violation.server} \u203a ${violation.tool}`)}  ${dim(violation.kind)}`,
+      `      ${violation.severity} \u00b7 ${violation.evidence}`,
+    );
+  }
+  lines.push(
+    "",
+    dim("Set by `policy.deniedCapabilities` in the lockfile. Accepting the change does not clear"),
+    dim("this; remove the capability, or change the policy deliberately."),
+    "",
+  );
+  return lines;
+}
+
 export function renderHumanReport(report: AuditReport): string {
   const lines: string[] = [];
+
+  // Above drift, because it is the one finding that accepting the change does not clear.
+  lines.push(...renderViolations(report));
 
   if (report.changes.length > 0) {
     /*
@@ -109,7 +139,7 @@ export function renderHumanReport(report: AuditReport): string {
 
   lines.push(...renderSteering(report));
 
-  if (report.changes.length === 0 && report.unreachable.length === 0) {
+  if (report.changes.length === 0 && report.unreachable.length === 0 && (report.violations ?? []).length === 0) {
     lines.push(green(`✓ ${report.serversChecked} server(s) match ${report.lockPath}`));
     return `${lines.join("\n")}\n`;
   }

@@ -34,6 +34,7 @@ ${bold("Options")}
   --allow-unreachable    a server that cannot be reached warns instead of failing
   --json                 machine-readable output (check)
   --sarif                SARIF 2.1.0 output (check)
+  --sarif-steering       also emit steering passages as SARIF notes (off: an alert is a gate)
   --accept-all           accept every change without prompting (review)
   --force                re-pin over an existing lockfile, discarding it (init)
   --api <url>            control plane to push to (push; or NULLADRIFT_API_URL)
@@ -63,6 +64,7 @@ async function main(): Promise<ExitCode> {
       "allow-unreachable": { type: "boolean", default: false },
       json: { type: "boolean", default: false },
       sarif: { type: "boolean", default: false },
+      "sarif-steering": { type: "boolean", default: false },
       "accept-all": { type: "boolean", default: false },
       force: { type: "boolean", default: false },
       api: { type: "string" },
@@ -104,6 +106,7 @@ async function main(): Promise<ExitCode> {
     timeoutMs,
     allowUnreachable: values["allow-unreachable"],
     format: values.sarif ? "sarif" : values.json ? "json" : "human",
+    sarifSteering: values["sarif-steering"] === true,
     comment: values.comment,
   };
 

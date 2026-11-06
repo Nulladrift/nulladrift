@@ -1,5 +1,5 @@
 /** `nulladrift check` -- re-capture, diff against the lock, fail on drift. */
-import { newSteering } from "@nulladrift/core";
+import { capabilityViolations, newSteering } from "@nulladrift/core";
 import { dim, yellow } from "../lib/ui";
 import { captureAll } from "../audit";
 import { diffLockfiles } from "../diff";
@@ -36,6 +36,11 @@ export async function buildReport(options: CommonOptions): Promise<{ report: Aud
      * first" must not be able to fail somebody's build.
      */
     steering: newSteering(committed, result.lock),
+    /*
+     * Against the freshly read surface, not the diff. A rule saying nothing here may execute
+     * processes has to fail on the day it is added, not on the next day a server happens to move.
+     */
+    violations: capabilityViolations(result.lock, committed.policy?.deniedCapabilities),
     unreachable: result.unreachable,
     serversChecked: Object.keys(result.lock.subjects).length,
     lockPath: options.lockPath,
@@ -45,7 +50,12 @@ export async function buildReport(options: CommonOptions): Promise<{ report: Aud
   return {
     report,
     exitCode: resolveExitCode({
-      driftCount: changes.length,
+      /*
+       * A forbidden capability fails the build like drift does. It is not drift -- nothing moved
+       * -- but the surface is not one the project permits, and `review --accept-all` must not be
+       * able to make it pass: policy is the thing acceptance cannot overrule.
+       */
+      driftCount: changes.length + (report.violations?.length ?? 0),
       incompleteCount: allowUnreachable ? 0 : result.unreachable.length,
     }),
   };
@@ -55,7 +65,7 @@ export async function runCheck(options: CommonOptions): Promise<ExitCode> {
   const { report, exitCode } = await buildReport(options);
 
   if (options.format === "json") process.stdout.write(renderJsonReport(report, exitCode));
-  else if (options.format === "sarif") process.stdout.write(renderSarifReport(report));
+  else if (options.format === "sarif") process.stdout.write(renderSarifReport(report, { steering: options.sarifSteering }));
   else process.stdout.write(renderHumanReport(report));
 
   // Opt-in, and only when the picture has changed since the last delivered report.

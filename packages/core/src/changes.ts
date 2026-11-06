@@ -28,6 +28,7 @@ export const CHANGE_KINDS = [
   "tool.behavior.escalated",
   "tool.behavior.relaxed",
   "tool.header_params.changed",
+  "tool.capability.gained",
   "tool.changed",
   "resource.added",
   "resource.removed",
@@ -72,6 +73,12 @@ export const SEVERITY: Record<ChangeKind, Severity> = {
   "tool.behavior.escalated": "high",
   "tool.behavior.relaxed": "low",
   "tool.header_params.changed": "high",
+  /*
+   * Severity is set per change rather than read from here: what a tool gained decides it. A
+   * `command` argument is not the same finding as a `url` one, and flattening both to one number
+   * is how "accepts input it did not before" came to describe arbitrary command execution.
+   */
+  "tool.capability.gained": "high",
   "tool.changed": "medium",
   "resource.added": "medium",
   "resource.removed": "low",

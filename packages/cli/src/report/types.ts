@@ -1,4 +1,4 @@
-import type { ServerSteering } from "@nulladrift/core";
+import type { CapabilityViolation, ServerSteering } from "@nulladrift/core";
 import type { Change } from "../diff/types";
 
 export interface Unreachable {
@@ -24,6 +24,11 @@ export interface AuditReport {
    * code: it is reported beside the verdict, not as part of it.
    */
   steering?: ServerSteering[];
+  /**
+   * Capabilities the committed policy forbids, found in the surface as it is. Unlike steering
+   * these DO decide the verdict: they are derived from schema shape, not matched against prose.
+   */
+  violations?: CapabilityViolation[];
   /** Servers we could not reach, or configs we could not resolve. Drives exit code 2. */
   unreachable: Unreachable[];
   serversChecked: number;

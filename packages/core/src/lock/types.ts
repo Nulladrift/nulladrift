@@ -15,6 +15,8 @@
  */
 export const LOCKFILE_VERSION = 2;
 
+import type { CapabilityKind } from "../risk/capability";
+
 export type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
 export type JsonObject = { [key: string]: JsonValue };
 
@@ -43,6 +45,15 @@ export interface LockPolicy {
   /** Reverse-DNS `_meta` key prefixes to leave out, for servers that put build ids there. */
   ignoreMetaPrefixes?: string[];
   allowUnreachable?: boolean;
+  /**
+   * Capabilities no server in this project may have. Checked against the surface itself rather
+   * than against the diff, so accepting drift cannot make one allowed and a repository that never
+   * changes is still covered.
+   *
+   * There is deliberately no steering equivalent: a capability is a fact about schema shape, and
+   * a steering signal is a regular expression over prose that legitimate servers trip.
+   */
+  deniedCapabilities?: CapabilityKind[];
 }
 
 export type ClientKind =

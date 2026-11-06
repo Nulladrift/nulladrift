@@ -261,3 +261,53 @@ describe("steering findings are reported, never gated on", () => {
     expect(body).toContain("did not affect the result");
   });
 });
+
+/*
+ * A forbidden capability is the one finding acceptance cannot clear, which is what separates a
+ * policy from a default. It fails the build; steering, beside it, never does.
+ */
+describe("capability policy decides the verdict", () => {
+  const denied: AuditReport = {
+    changes: [],
+    unreachable: [],
+    serversChecked: 1,
+    lockPath: "mcp.lock",
+    violations: [{ server: "rep", tool: "build_report", kind: "process-exec", severity: "critical", evidence: "arg:command" }],
+  };
+
+  it("does not call the run clean when a capability is forbidden", () => {
+    const text = renderHumanReport(denied);
+    expect(text).not.toContain("server(s) match");
+    expect(text).toContain("does not permit");
+  });
+
+  it("names the tool and the evidence, so the rule can be checked", () => {
+    const text = renderHumanReport(denied);
+    expect(text).toContain("build_report");
+    expect(text).toContain("arg:command");
+  });
+
+  it("says that accepting the change will not clear it", () => {
+    expect(renderHumanReport(denied)).toContain("Accepting the change does not clear");
+  });
+
+  it("counts violations apart from changes in JSON", () => {
+    const body = JSON.parse(renderJsonReport(denied, 1));
+    expect(body.summary.changes).toBe(0);
+    expect(body.summary.violations).toBe(1);
+    expect(body.violations[0].kind).toBe("process-exec");
+  });
+
+  it("raises a SARIF error, unlike steering, because it is derived from shape", () => {
+    const sarif = JSON.parse(renderSarifReport(denied));
+    const result = sarif.runs[0].results.find((r: { ruleId: string }) => r.ruleId === "policy.capability.denied");
+    expect(result.level).toBe("error");
+  });
+
+  it("puts steering into SARIF only when asked, and only as a note", () => {
+    const both = { ...denied, steering: [{ server: "rep", signals: [{ kind: "model-directive" as const, field: "t.description", quote: "Before answering" }] }] };
+    expect(renderSarifReport(both)).not.toContain("steering.passage.arrived");
+    const opted = JSON.parse(renderSarifReport(both, { steering: true }));
+    expect(opted.runs[0].results.find((r: { ruleId: string }) => r.ruleId === "steering.passage.arrived").level).toBe("note");
+  });
+});
