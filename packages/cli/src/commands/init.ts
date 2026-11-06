@@ -1,10 +1,11 @@
 /** `nulladrift init` -- discover servers, capture their surface, write the lock. */
+import { steeringSignals, surfaceCapabilities } from "@nulladrift/core";
 import { describeSearch } from "../config/discover";
 import { lstat } from "node:fs/promises";
 import { captureAll } from "../audit";
 import { writeLockfile } from "../lock/io";
 import { EXIT_CLEAN, EXIT_INCOMPLETE, type ExitCode } from "../lib/exit";
-import { bold, dim, green, red } from "../lib/ui";
+import { bold, dim, green, red, truncate, yellow } from "../lib/ui";
 import { maybeOfferTelemetry } from "./telemetry";
 import type { CommonOptions } from "./options";
 
@@ -96,6 +97,35 @@ export async function runInit(options: InitOptions): Promise<ExitCode> {
     lines.push(`  ${green("✓")} ${bold(name)}  ${dim(counts)}`);
     const deprecated = entry?.transport.type === "sse" ? " · HTTP+SSE transport is deprecated in the spec" : "";
     lines.push(`      ${dim(`${entry?.protocol.era}/${entry?.protocol.version} · from ${entry?.source.file}${deprecated}`)}`);
+
+    /*
+     * What is being approved, at the moment of approving it. The counts say how much surface
+     * there is; they do not say that one of those tools takes a `command` argument. The drift
+     * report already explains an escalation after the fact -- "may now reach external systems" --
+     * and saying nothing at the point of consent was the asymmetry.
+     */
+    const tools = (entry?.tools ?? []) as Array<{ name?: string; inputSchema?: unknown; description?: string }>;
+    const capabilities = surfaceCapabilities(tools);
+    if (capabilities.length > 0) {
+      const worst = capabilities.filter((capability) => capability.severity === "critical" || capability.severity === "high");
+      const paint = worst.length > 0 ? yellow : dim;
+      lines.push(`      ${paint(`can: ${capabilities.map((capability) => capability.kind).join(", ")}`)}`);
+      for (const capability of worst) {
+        lines.push(`        ${dim(`${capability.kind} · ${capability.tools.slice(0, 3).join(", ")}${capability.tools.length > 3 ? ` +${capability.tools.length - 3}` : ""}`)}`);
+      }
+    }
+
+    const steering = [
+      ...steeringSignals(entry?.instructions, "instructions"),
+      ...tools.flatMap((tool) => steeringSignals(tool.description, `${tool.name}.description`)),
+    ];
+    if (steering.length > 0) {
+      lines.push(`      ${yellow(`${steering.length} passage(s) read as instructions to the model, not documentation:`)}`);
+      for (const signal of steering.slice(0, 3)) {
+        lines.push(`        ${dim(`${signal.field}: ${truncate(signal.quote, 90)}`)}`);
+      }
+      lines.push(`        ${dim("A signal to read, not a verdict. It never fails a build.")}`);
+    }
   }
 
   for (const failure of result.unreachable) {
