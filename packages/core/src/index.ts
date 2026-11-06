@@ -21,3 +21,7 @@ export {
 export { diffLockfiles } from "./diff/index";
 export { classifySchemaChange } from "./diff/schema";
 export { CHANGE_KINDS, SEVERITY, SEVERITY_RANK, sortChanges, serversThatShippedNothing, type Change, type ChangeKind, type Severity } from "./diff/types";
+export { CAPABILITY_KINDS, CAPABILITY_SEVERITIES, surfaceCapabilities, toolCapabilities } from "./risk/capability";
+export type { Capability, CapabilityKind, CapabilitySeverity } from "./risk/capability";
+export { STEERING_KINDS, steeringSignals } from "./risk/steering";
+export type { SteeringKind, SteeringSignal } from "./risk/steering";
