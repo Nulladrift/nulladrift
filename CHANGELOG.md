@@ -104,6 +104,15 @@ format, transport and exit path.
 
 ### Fixed
 
+- **A path given with `--config` that does not exist is an error, not silence.** It was reported
+  as "No MCP servers found" with exit 0, so a mistyped `--config` in CI passed a project nothing
+  had audited. Candidates that are merely absent stay silent, because those are a guess.
+- **The lockfile is written to a temporary file and renamed.** An interrupt during `init` left a
+  truncated lock on disk. The next `check` failed loudly rather than passing, which is the right
+  failure, but the reviewed baseline was gone.
+- `Drift in 50001 of 1 server(s)` is not a fraction. `drifted` counts servers in the lock that
+  moved, including ones the config no longer declares; `serversChecked` counts the ones that
+  answered.
 - `push` names the argument that is missing. Supplying the API URL and omitting the token
   produced a message about the API URL, which was the part already correct.
 - A lockfile that cannot be written reports why instead of printing Node's `ENOENT` and four

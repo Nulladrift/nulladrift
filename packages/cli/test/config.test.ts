@@ -411,3 +411,31 @@ describe("a committed lockfile does not carry the credentials used to reach a se
     expect(sanitizeUrl("not-a-url-at-all")).toBe("not-a-url-at-all");
   });
 });
+
+/*
+ * A path given with --config was asked for by name. The candidate list is a guess and may
+ * legitimately be absent; an explicit path that is not there is a mistake. Reporting
+ * "No MCP servers found" and exiting 0 for a mistyped --config is a silent pass over a project
+ * nothing audited, which is the failure this tool exists to prevent elsewhere.
+ */
+describe("a config named with --config must exist", () => {
+  it("reports a missing explicit path as a problem", async () => {
+    const project = await mkdtemp(join(tmpdir(), "mcp-cfg-"));
+    try {
+      const found = await discoverServers(project, ["./not-here.json"]);
+      expect(found.problems.map((p) => p.reason).join(" ")).toMatch(/no such file/i);
+    } finally {
+      await rm(project, { recursive: true, force: true });
+    }
+  });
+
+  it("says nothing about candidates that are merely absent", async () => {
+    const project = await mkdtemp(join(tmpdir(), "mcp-cfg-"));
+    try {
+      const found = await discoverServers(project);
+      expect(found.problems).toEqual([]);
+    } finally {
+      await rm(project, { recursive: true, force: true });
+    }
+  });
+});

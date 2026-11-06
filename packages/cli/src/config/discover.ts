@@ -140,9 +140,19 @@ export async function discoverServers(projectRoot: string, extraFiles: string[] 
   const shadowed: Discovery["shadowed"] = [];
   const problems: Discovery["problems"] = [];
 
+  // A file named with --config was asked for by name. The candidate list is a guess and may
+  // legitimately be absent; an explicit path that is not there is a mistake, and reporting
+  // "no servers found, exit 0" for a mistyped --config is a silent pass over an unaudited project.
+  const requested = new Set(files.filter((file) => file.client === "generic").map((file) => file.path));
+
   for (const file of files) {
     const read = await readJsonIfPresent(file.path);
-    if (!read.present) continue;
+    if (!read.present) {
+      if (requested.has(file.path)) {
+        problems.push({ file: portablePath(file.path, projectRoot), reason: "no such file; it was named with --config" });
+      }
+      continue;
+    }
     if (!read.ok) {
       problems.push({ file: portablePath(file.path, projectRoot), reason: read.reason });
       continue;
