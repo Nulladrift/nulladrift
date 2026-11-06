@@ -311,6 +311,31 @@ describe("a server that stops answering", () => {
     },
     TIMEOUT_MS,
   );
+
+  /*
+   * `--timeout` is documented as a per-server timeout and was applied per request. Capturing a
+   * surface takes several, so a server that accepts a connection and never answers held the
+   * audit for two and a half to three times the configured value: `--timeout 2000` measured
+   * 6.1s, `--timeout 4000` measured 10.1s. At the 30s default that is a minute and a half that
+   * a server nobody controls gets to decide.
+   *
+   * The bound is generous because it is a timing assertion, and the point is the multiple: two
+   * and a half times the budget fails this, and the budget plus teardown passes.
+   */
+  it(
+    "spends the configured budget once, not once per request",
+    async () => {
+      const root = await workspace({ fixture: fixtureServer("silent") });
+      const budget = 1_500;
+      const started = Date.now();
+      const { unreachable } = await withIsolatedHome(root, () => captureAll({ projectRoot: root, timeoutMs: budget }));
+      const elapsed = Date.now() - started;
+
+      expect(unreachable[0]?.server).toBe("fixture");
+      expect(elapsed).toBeLessThan(budget * 2);
+    },
+    TIMEOUT_MS,
+  );
 });
 
 describe("the lock is diffed, not just hashed", () => {

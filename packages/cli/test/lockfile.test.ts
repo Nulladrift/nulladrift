@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import Ajv2020 from "ajv/dist/2020";
 import addFormats from "ajv-formats";
 import { beforeAll, describe, expect, it } from "vitest";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { LockfileError, parseLockfile, readLockfile, serializeLockfile, writeLockfile } from "../src/lock/io";
@@ -207,5 +207,54 @@ describe("a lockfile read from disk is resealed, not taken at its word", () => {
       (Object.values(lock.subjects)[0] as { digest: string }).digest = `sha256:${"0".repeat(64)}`;
     });
     expect(subjectOf(zeroed).digest).not.toBe(`sha256:${"0".repeat(64)}`);
+  });
+});
+
+/*
+ * `init` in a freshly cloned repository is the ordinary way to use this tool, and git can carry
+ * a symlink. A repository shipping `mcp.lock` as a link to `~/.npmrc`, a CI script, or any other
+ * file the user can write had that file written, and the run reported "Pinned 1 server(s)".
+ *
+ * The dangling case was worse: `access()` followed the link, found nothing, concluded there was
+ * no lockfile, and created the target -- outside the project, without `--force`, announced as a
+ * success.
+ */
+describe("a lockfile path that is a symlink is refused, not followed", () => {
+  it("will not write through an existing symlink", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "mcp-link-"));
+    try {
+      const victim = join(dir, "victim.txt");
+      const lockPath = join(dir, "mcp.lock");
+      await writeFile(victim, "ORIGINAL", "utf8");
+      await symlink(victim, lockPath);
+      await expect(writeLockfile(lockPath, lockOfTools([makeTool({ name: "t" })]))).rejects.toThrow(/symbolic link/i);
+      expect(await readFile(victim, "utf8")).toBe("ORIGINAL");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("will not create the target of a dangling symlink", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "mcp-link-"));
+    try {
+      const target = join(dir, "not-yet-there.txt");
+      const lockPath = join(dir, "mcp.lock");
+      await symlink(target, lockPath);
+      await expect(writeLockfile(lockPath, lockOfTools([makeTool({ name: "t" })]))).rejects.toThrow(/symbolic link/i);
+      await expect(readFile(target, "utf8")).rejects.toThrow();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("writes an ordinary path exactly as before", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "mcp-link-"));
+    try {
+      const lockPath = join(dir, "mcp.lock");
+      await writeLockfile(lockPath, lockOfTools([makeTool({ name: "t" })]));
+      expect((await readFile(lockPath, "utf8")).length).toBeGreaterThan(0);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });

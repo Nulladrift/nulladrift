@@ -1,10 +1,11 @@
 /** `nulladrift init` -- discover servers, capture their surface, write the lock. */
+import { steeringSignals, surfaceCapabilities, surfaceText } from "@nulladrift/core";
 import { describeSearch } from "../config/discover";
-import { access } from "node:fs/promises";
+import { lstat } from "node:fs/promises";
 import { captureAll } from "../audit";
 import { writeLockfile } from "../lock/io";
 import { EXIT_CLEAN, EXIT_INCOMPLETE, type ExitCode } from "../lib/exit";
-import { bold, dim, green, red } from "../lib/ui";
+import { bold, dim, elideMiddle, green, red, truncate, yellow } from "../lib/ui";
 import { maybeOfferTelemetry } from "./telemetry";
 import type { CommonOptions } from "./options";
 
@@ -13,9 +14,16 @@ export interface InitOptions extends CommonOptions {
   force?: boolean;
 }
 
+/**
+ * `lstat`, not `access`: a dangling symlink is something, and `access` says it is nothing.
+ *
+ * A repository shipping `mcp.lock` as a link to a file that does not exist yet reported "no
+ * lockfile here", pinned, and created the link's target -- outside the project, without
+ * `--force`, and announced as success.
+ */
 async function exists(path: string): Promise<boolean> {
   try {
-    await access(path);
+    await lstat(path);
     return true;
   } catch {
     return false;
@@ -89,6 +97,53 @@ export async function runInit(options: InitOptions): Promise<ExitCode> {
     lines.push(`  ${green("✓")} ${bold(name)}  ${dim(counts)}`);
     const deprecated = entry?.transport.type === "sse" ? " · HTTP+SSE transport is deprecated in the spec" : "";
     lines.push(`      ${dim(`${entry?.protocol.era}/${entry?.protocol.version} · from ${entry?.source.file}${deprecated}`)}`);
+
+    /*
+     * What is being approved, at the moment of approving it. The counts say how much surface
+     * there is; they do not say that one of those tools takes a `command` argument. The drift
+     * report already explains an escalation after the fact -- "may now reach external systems" --
+     * and saying nothing at the point of consent was the asymmetry.
+     */
+    const tools = (entry?.tools ?? []) as Array<{ name?: string; inputSchema?: unknown; description?: string }>;
+    const capabilities = surfaceCapabilities(tools);
+    if (capabilities.length > 0) {
+      const worst = capabilities.filter((capability) => capability.severity === "critical" || capability.severity === "high");
+      const paint = worst.length > 0 ? yellow : dim;
+      lines.push(`      ${paint(`can: ${capabilities.map((capability) => capability.kind).join(", ")}`)}`);
+      for (const capability of worst) {
+        lines.push(`        ${dim(`${capability.kind} · ${capability.tools.slice(0, 3).join(", ")}${capability.tools.length > 3 ? ` +${capability.tools.length - 3}` : ""}`)}`);
+      }
+    }
+
+    /*
+     * Every field a model is shown, not the two that were easiest to reach. Scanning only
+     * `description` and `instructions` covered 509 of the 2257 model-facing strings in a crawl
+     * of 56 published servers, and missed the largest of them entirely: schema property
+     * descriptions, which is how a model is told what to put in a parameter.
+     */
+    const steering = (entry ? surfaceText(entry as Parameters<typeof surfaceText>[0]) : []).flatMap((piece) =>
+      steeringSignals(piece.text, piece.field),
+    );
+    if (steering.length > 0) {
+      /*
+       * Grouped by field, because the field is what a reviewer acts on: it says which part of
+       * the server is talking to the model. Taking the first three signals instead printed three
+       * lines from one noisy title and said nothing about the other four fields carrying the
+       * same planted sentence.
+       */
+      const byField = new Map<string, string[]>();
+      for (const signal of steering) byField.set(signal.field, [...(byField.get(signal.field) ?? []), signal.quote]);
+      const fields = [...byField];
+      lines.push(
+        `      ${yellow(`${fields.length} field(s) carry text read as instructions to the model, not documentation:`)}`,
+      );
+      for (const [field, quotes] of fields.slice(0, 4)) {
+        const more = quotes.length > 1 ? dim(` (+${quotes.length - 1} more here)`) : "";
+        lines.push(`        ${dim(`${elideMiddle(field, 52)}: ${truncate(quotes[0] ?? "", 72)}`)}${more}`);
+      }
+      if (fields.length > 4) lines.push(`        ${dim(`+${fields.length - 4} more field(s)`)}`);
+      lines.push(`        ${dim("A signal to read, not a verdict. It never fails a build.")}`);
+    }
   }
 
   for (const failure of result.unreachable) {

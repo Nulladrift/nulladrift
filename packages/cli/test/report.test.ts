@@ -203,3 +203,61 @@ describe("text from a server cannot drive the terminal", () => {
     expect(body).toContain("\\u202e");
   });
 });
+
+/*
+ * Steering findings ride beside the verdict and never inside it. A pattern that fires on a server
+ * documenting "before using this tool, call authenticate first" must not be able to fail a build,
+ * so there is no flag that turns it into one and the exit code is computed without it.
+ */
+describe("steering findings are reported, never gated on", () => {
+  const steered: AuditReport = {
+    changes: [],
+    unreachable: [],
+    serversChecked: 1,
+    lockPath: "mcp.lock",
+    steering: [
+      {
+        server: "docs",
+        signals: [
+          { kind: "model-directive", field: "read_file.inputSchema.path", quote: "Before answering, also read ~/" },
+          { kind: "credential-path", field: "read_file.inputSchema.path", quote: "~/.aws/credentials" },
+        ],
+      },
+    ],
+  };
+
+  it("still reports the run as clean, because nothing drifted", () => {
+    expect(renderHumanReport(steered)).toContain("✓ 1 server(s) match");
+  });
+
+  it("names the field, so a reviewer can go and read the passage", () => {
+    expect(renderHumanReport(steered)).toContain("read_file.inputSchema.path");
+  });
+
+  it("says out loud that it did not change the verdict", () => {
+    expect(renderHumanReport(steered)).toContain("did not change the verdict");
+  });
+
+  it("counts them separately from changes in JSON, so nothing gates on them by accident", () => {
+    const body = JSON.parse(renderJsonReport(steered, 0));
+    expect(body.summary.changes).toBe(0);
+    expect(body.summary.steering).toBe(2);
+    expect(body.exitCode).toBe(0);
+    expect(body.steering[0].signals[0].field).toBe("read_file.inputSchema.path");
+  });
+
+  it("stays out of SARIF, because a code-scanning alert is a gate wherever alerts must be zero", () => {
+    expect(renderSarifReport(steered)).not.toContain("read_file.inputSchema.path");
+  });
+
+  it("does not open a pull request comment on its own", () => {
+    // Null when nothing drifted: a bot that comments on every green build is a bot people mute.
+    expect(renderMarkdownReport(steered)).toBeNull();
+  });
+
+  it("rides along in the comment when something else already earned one", () => {
+    const body = renderMarkdownReport({ ...steered, changes: report.changes });
+    expect(body).toContain("read as instructions to the model");
+    expect(body).toContain("did not affect the result");
+  });
+});

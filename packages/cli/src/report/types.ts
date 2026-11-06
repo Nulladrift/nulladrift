@@ -1,3 +1,4 @@
+import type { ServerSteering } from "@nulladrift/core";
 import type { Change } from "../diff/types";
 
 export interface Unreachable {
@@ -18,6 +19,11 @@ export interface Unreachable {
 
 export interface AuditReport {
   changes: Change[];
+  /**
+   * Text that began addressing the model since the lock was approved. Never affects the exit
+   * code: it is reported beside the verdict, not as part of it.
+   */
+  steering?: ServerSteering[];
   /** Servers we could not reach, or configs we could not resolve. Drives exit code 2. */
   unreachable: Unreachable[];
   serversChecked: number;
