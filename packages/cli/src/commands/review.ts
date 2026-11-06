@@ -79,6 +79,13 @@ export async function runReview(options: ReviewOptions): Promise<ExitCode> {
     configFiles: options.configFiles,
     timeoutMs: options.timeoutMs,
     policy: committed.policy,
+    /*
+     * What review writes is what gets committed. Without the previous lock, accepting a change
+     * while a registry was unreachable would drop every artifact pin in the file -- and the next
+     * run would re-pin whatever had been published since, with nothing to compare it against.
+     */
+    previous: committed,
+    provenance: options.provenance,
   });
 
   const changes = diffLockfiles(committed, result.lock);

@@ -97,6 +97,40 @@ export interface LockedProtocol {
   supportedVersions?: string[];
 }
 
+/**
+ * What a stdio invocation actually ran: the artifact behind the command, by content address.
+ *
+ * Everything else in a locked server describes what the server *says* -- its tools, its
+ * instructions, even `serverInfo.version`, which is self-reported over the wire. None of it says
+ * what code is answering. A release that keeps every tool name, description and schema byte for
+ * byte while changing what the tools do is invisible to all of it, and that is the supply-chain
+ * attack this category exists to catch.
+ *
+ * Deliberately outside the server digest. A lock written before this existed, or a run that
+ * could not reach a registry, has no provenance; folding it into the digest would turn every
+ * upgrade of this tool and every offline run into drift against servers nobody touched. It is
+ * compared on its own instead -- before the digest short-circuit, since the case it exists for
+ * is the one where the digest has not moved.
+ */
+export interface LockedProvenance {
+  ecosystem: "npm" | "pypi" | "oci" | "file";
+  /** The package, image or path, as its registry names it. */
+  name: string;
+  /** The exact version that ran: never a range, a dist-tag or `latest`. Absent for a file. */
+  version?: string;
+  /**
+   * A content address for exactly those bytes: npm's `dist.integrity`, a PyPI distribution's
+   * sha256, an OCI manifest digest, or the sha256 of the file. Absent when it could not be
+   * established, which is a gap in the record rather than a claim about the artifact.
+   */
+  integrity?: string;
+  /**
+   * How the invocation asked for it -- `@1.2.3`, `^1`, or nothing at all. Kept because it is the
+   * actionable half: a server that floats will move on its own, and the fix is in the config.
+   */
+  requested?: string;
+}
+
 export interface LockedServerInfo {
   name?: string;
   title?: string;
@@ -195,6 +229,8 @@ export interface LockedSubjectBase {
 export interface LockedMcpServer extends LockedSubjectBase {
   kind: "mcp-server";
   transport: LockedTransport;
+  /** What the command resolved to. Stdio only, and only when it could be established. */
+  provenance?: LockedProvenance;
   protocol: LockedProtocol;
   serverInfo?: LockedServerInfo;
   capabilities?: JsonObject;

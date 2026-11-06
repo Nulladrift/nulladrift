@@ -137,6 +137,16 @@ export function renderHumanReport(report: AuditReport): string {
     }
   }
 
+  const unverified = report.unverified ?? [];
+  if (unverified.length > 0) {
+    lines.push(
+      yellow(`Could not establish what ${unverified.length} server(s) run:`),
+      ...unverified.map((server) => `  ${bold(server)}`),
+      dim("  Their surfaces were checked; the package or file behind them was not. A pin the config names exactly is kept."),
+      "",
+    );
+  }
+
   lines.push(...renderSteering(report));
 
   if (report.changes.length === 0 && report.unreachable.length === 0 && (report.violations ?? []).length === 0) {

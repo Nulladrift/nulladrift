@@ -52,6 +52,10 @@ const RULE_HELP: Partial<Record<ChangeKind, string>> = {
     "x-mcp-header mirrors an argument's value into an HTTP header, where proxies and other intermediaries can read it.",
   "server.transport.changed": "The configured name now points at a different command or URL. This is a different server, not a changed one.",
   "server.identity.changed": "The server reports a different identity or version than the one that was reviewed.",
+  "server.artifact.changed":
+    "The package, image or file behind this server is a different release than the one pinned. When the declared surface did not change, nothing else in the report describes what the new code does; read the release, not just this diff.",
+  "server.artifact.substituted":
+    "The same published version now has different contents. Registries treat a version as immutable, so this means a mirror, proxy or registry served different bytes, or an image tag was repointed. Treat it as a supply-chain incident until shown otherwise.",
 };
 
 function fingerprint(change: Change): string {

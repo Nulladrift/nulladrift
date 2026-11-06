@@ -129,6 +129,8 @@ rule ids, and as the `kind` field in opt-in telemetry.
 | `server.renamed` | See §7. |
 | `server.transport.changed` | Same name, different command or URL. Treated as identity, not a field edit. |
 | `server.identity.changed` | `serverInfo` moved, the postmark-mcp signal. |
+| `server.artifact.changed` | The package, image or file behind the server is a different release. Medium. See §9. |
+| `server.artifact.substituted` | The same npm version now has different bytes. High: npm never republishes a version. See §9. |
 | `server.protocol.changed` | Era or revision changed between runs. |
 | `server.instructions.changed` | |
 | `server.capabilities.widened` / `.narrowed` | |
@@ -172,8 +174,10 @@ collapsing it would hide the capability change inside a cosmetic one.
   interactive grant, or `oauth.clientId` / `oauth.clientSecret` for an unattended one. A server
   that refuses the client is reported as needing credentials, not as drift and not as an
   outage, because an anonymous capture of a gated server pins a surface nobody uses.
-- **Declaration is not behaviour.** This pins what a server says about itself. postmark-mcp
-  is the standing counterexample.
+- **Declaration is not behaviour.** The surface records what a server says about itself, and
+  postmark-mcp is the standing counterexample. §9 closes half of this: new code behind an
+  unchanged declaration is now detected, by pinning the artifact rather than reading it. What
+  the new code *does* is still not something this tool can tell you.
 - **Pagination is capped** at 64 pages per list, the SDK default. A server exceeding that is
   reported as an error rather than silently pinning a truncated surface.
 - **A config whose credentials cannot be resolved is skipped, not guessed at.** `${input:…}`
@@ -184,6 +188,61 @@ collapsing it would hide the capability change inside a cosmetic one.
 - **`lockfileVersion` is refused, not guessed.** An unknown version exits 2 with a message
   to upgrade, rather than reading the file optimistically. Version 1 is the exception: it is
   upgraded on read, for the reason in the next section.
+
+## 9. Provenance: what actually ran
+
+Everything above pins what a server *says*. `provenance` pins what it *is*: the artifact behind
+a stdio invocation, by content address.
+
+```json
+"provenance": {
+  "ecosystem": "npm",
+  "name": "@modelcontextprotocol/server-filesystem",
+  "version": "2.2.0",
+  "integrity": "sha512-mNLj/qhV+P4kj1qP8...",
+  "requested": "latest"
+}
+```
+
+| Ecosystem | Read from | `integrity` |
+| ---- | ---- | ---- |
+| `npm` | `npx`, `bunx`, `pnpm dlx`, `yarn dlx`, `npm exec` | The registry's `dist.integrity` for that version |
+| `pypi` | `uvx`, `uv tool run`, `pipx run` | sha256 of the source distribution, else the first universal wheel |
+| `oci` | `docker run`, `podman run` | The manifest digest the tag resolves to, read anonymously |
+| `file` | `node index.js`, `python server.py`, `./bin/server` | sha256 of the file |
+
+**Outside the server digest, compared on its own.** A lock written before this field existed,
+or a run that could not reach a registry, has no provenance. Folding it into the digest would
+turn every upgrade of this tool, and every offline run, into drift against servers nobody
+touched. It is compared separately instead -- *before* the digest short-circuit, because the
+case it exists for is new code behind a surface whose digest has not moved.
+
+**Absence is not a change.** A missing record on either side produces nothing. A run that
+could not establish what a server runs lists it as unverified beside the verdict, without
+affecting the exit code: a registry being down is not the server's fault.
+
+**A pin survives an outage only when it cannot be wrong.** If the configuration asks for an
+exact npm or PyPI version, or an image by digest, the previous pin is kept when this run
+could not re-establish it -- the registry's own rule guarantees it still means the same bytes.
+A floating request (`latest`, a range, an image tag) is not carried forward, because that
+would claim yesterday's version for code that may have moved since.
+
+**Substitution is claimed only where it cannot be innocent.** npm refuses to republish a
+version, so the same version with different bytes means something between here and the
+registry served them: `server.artifact.substituted`, high, which the default policy blocks.
+PyPI lets a maintainer add files to an existing release, and an image tag is a pointer by
+design, so the same comparison there is the ordinary `server.artifact.changed`.
+
+**What is not read, deliberately:**
+
+- A command found on `PATH` by bare name. Which file that is depends on the machine, and a pin
+  that means something different on every laptop is not a pin.
+- `python -m module`. A module name does not say which package provides it.
+- Private images. This tool holds no registry credentials and should not go looking for them.
+- Anything past a script's entry point. `node dist/index.js` hashes `dist/index.js`, so a server
+  split across many modules is covered only as far as its first file.
+
+`--no-provenance` skips every lookup, for an air-gapped run. Exact pins are kept either way.
 
 ## Version 2: the root stopped naming a protocol
 

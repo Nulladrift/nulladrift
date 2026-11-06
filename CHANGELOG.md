@@ -38,6 +38,34 @@ telemetry). Renaming a change kind breaks every consumer that matched on it.
 
 ### Added
 
+- **The lock pins what each stdio server runs, not just what it says.** Everything in a locked
+  server described the server's own account of itself -- its tools, its instructions, even the
+  version it reports over the wire. A release keeping every tool name, description and schema
+  identical while changing what the tools do passed every comparison this product made, and
+  `check` printed `✓ match`. That is the supply-chain attack the category exists to catch.
+
+  A new `provenance` field records the artifact behind `npx`, `uvx`, `pipx`, `docker run`, and
+  an interpreter given a script, by content address: npm's integrity, a PyPI distribution's
+  sha256, an image's manifest digest, or a file's hash. Two change kinds: `server.artifact.changed`
+  (medium) when a different release runs, saying so explicitly when the declared surface did not
+  move; and `server.artifact.substituted` (high, blocked by the default policy) when the same npm
+  version arrives with different bytes, which npm's no-republish rule leaves no innocent
+  explanation for. See `docs/lockfile.md` §9.
+
+  It sits outside the server digest and absence is never a change, so upgrading to this release
+  and running offline both report nothing against servers nobody touched. A registry being down
+  never fails a build; servers whose artifact could not be established are listed as unverified
+  beside the verdict. `--no-provenance` skips the lookups for air-gapped runs.
+
+- **`push` can prove which build sent a reading.** A reading names its own ref and commit, and the
+  control plane could only take the request's word for them -- so the collector token alone let
+  whoever held it report any branch as clean. `push` now sends the CI provider's signed identity
+  token alongside it: fetched from GitHub Actions automatically when the job has
+  `permissions: id-token: write`, or taken from `NULLADRIFT_ID_TOKEN` for GitLab's `id_tokens:`
+  and any other provider. The output says whether the control plane trusted it, and when a job
+  could have sent one and did not, says the one line to add. Never a reason to fail: no token is
+  an unverified reading, which is what every reading was before.
+
 - **Failure streaks, so a server that retired in March is told apart from one that blinked this
   morning.** `unreachable` was a single counter and an eighth of the last run was in it. The
   coverage table splits servers failing three or more runs in a row from servers failing for
