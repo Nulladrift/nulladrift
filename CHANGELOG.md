@@ -12,6 +12,44 @@ telemetry). Renaming a change kind breaks every consumer that matched on it.
 
 Nothing yet.
 
+## [0.3.0] - 2026-11-06
+
+### Added
+
+- **The diff says what a tool gained, not only that its schema moved.** `accepts input it did not
+  before` is the same sentence whether the new argument is `nickname` or `command`. The
+  classifier already knew the difference and said so at pin time; the diff never asked, so a
+  reviewer approving arbitrary command execution read it in the words of an optional string --
+  and the signed approval record said no more than the screen did.
+
+  `tool.capability.gained` carries the capability and the evidence it was derived from, and takes
+  its severity from the capability rather than from the schema change. A tool that is new is
+  still reported once, by `tool.added`, which now names what it can do: two findings for one
+  arrival is a reviewer reading the same fact twice.
+
+- **`review` shows what is being approved.** `init` printed capabilities and steering at the
+  moment a surface was first pinned, `check` printed them when something arrived, and the screen
+  between them -- where a person actually says yes -- showed neither. It now prints what the
+  server will be able to do once accepted, and any passage that has begun addressing the model.
+
+- **`policy.deniedCapabilities`: a rule about what a server *is*.** Every gate until now was a
+  gate on movement, which cannot express *nothing in this repository may execute processes* and
+  is not enforced at all on a repository that never changes. The rule is checked against the
+  surface itself, so it fails on the day it is added, and `review --accept-all` cannot clear it:
+  policy is the thing acceptance does not overrule.
+
+  Capability is the right thing to gate on and steering is not, so there is deliberately no
+  steering equivalent. A capability is a fact about schema shape and yields the same answer for
+  everyone; a steering signal is a regular expression over prose that a server documenting
+  "before using this tool, call authenticate first" trips. Values are validated against the real
+  capability list, because a policy containing `process_exec` would otherwise parse, forbid
+  nothing, and read as though the rule were in force.
+
+- **`--sarif-steering`**, off by default. Capability violations always raise a SARIF `error`;
+  steering passages raise a `note` only when asked for. A SARIF result becomes a code-scanning
+  alert, and an alert is a gate wherever a team requires zero open alerts -- which a regular
+  expression over prose should not acquire by default.
+
 ## [0.2.0] - 2026-11-06
 
 ### Fixed

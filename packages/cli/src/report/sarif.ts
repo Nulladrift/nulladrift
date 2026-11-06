@@ -20,7 +20,27 @@ const LEVEL: Record<Severity, "error" | "warning" | "note"> = {
   low: "note",
 };
 
+/**
+ * Not a change kind: a standing rule about the surface, so it has no entry in the taxonomy and
+ * cannot collide with one.
+ */
+const DENIED_RULE = "policy.capability.denied";
+
+/**
+ * Steering findings are omitted unless asked for, and the asking is a flag rather than the
+ * default.
+ *
+ * A SARIF result becomes a code-scanning alert, and an alert is a gate wherever a team requires
+ * zero open alerts. A regular expression over prose must not be able to acquire that power by
+ * default: a server documenting "before using this tool, call authenticate first" would raise
+ * one. Capability violations are the opposite case -- derived from schema shape, already fatal to
+ * the build -- so they are always here.
+ */
+const STEERING_RULE = "steering.passage.arrived";
+
 const RULE_HELP: Partial<Record<ChangeKind, string>> = {
+  "tool.capability.gained":
+    "A tool gained a capability it did not declare before, derived from its name, its argument names and the shape of its schema. The severity is the capability's, not the schema change's: gaining a `command` argument is not the same finding as gaining an optional string.",
   "tool.description.changed":
     "A tool description is injected into the model's context. A change here can carry instructions to the agent and should be read in full, not skimmed.",
   "server.instructions.changed":
@@ -54,8 +74,49 @@ function sarifUri(report: AuditReport): string {
   return rel.split(sep).join("/");
 }
 
-export function renderSarifReport(report: AuditReport): string {
+export function renderSarifReport(report: AuditReport, options: { steering?: boolean } = {}): string {
   const used = [...new Set(report.changes.map((change) => change.kind))].sort();
+  const violations = report.violations ?? [];
+  const steering = options.steering ? (report.steering ?? []) : [];
+
+  /*
+   * One shape for all three sources. Without it the three `map`s infer three different literal
+   * types for `level` and refuse to join.
+   */
+  interface SarifResult {
+    ruleId: string;
+    level: "error" | "warning" | "note";
+    message: { text: string };
+    locations: unknown[];
+    partialFingerprints: Record<string, string>;
+  }
+  const at = (name: string, qualified: string): unknown[] => [
+    {
+      physicalLocation: { artifactLocation: { uri: sarifUri(report), uriBaseId: "%SRCROOT%" } },
+      logicalLocations: [{ name, fullyQualifiedName: qualified, kind: "member" }],
+    },
+  ];
+
+  const extraRules = [
+    ...(violations.length > 0
+      ? [{
+          id: DENIED_RULE,
+          name: "PolicyCapabilityDenied",
+          shortDescription: { text: "A capability this project does not permit" },
+          fullDescription: { text: "A pinned tool has a capability listed in policy.deniedCapabilities. Derived from the shape of the declaration, and not cleared by accepting the change." },
+          defaultConfiguration: { level: "error" as const },
+        }]
+      : []),
+    ...(steering.length > 0
+      ? [{
+          id: STEERING_RULE,
+          name: "SteeringPassageArrived",
+          shortDescription: { text: "Text that began addressing the model" },
+          fullDescription: { text: "A passage a model is shown started reading as an instruction since this lock was approved. A signal to read, not a verdict: legitimate servers trip the same shape. It does not affect the exit code." },
+          defaultConfiguration: { level: "note" as const },
+        }]
+      : []),
+  ];
 
   const document = {
     $schema: "https://json.schemastore.org/sarif-2.1.0.json",
@@ -67,7 +128,8 @@ export function renderSarifReport(report: AuditReport): string {
             name: "nulladrift",
             version: VERSION,
             ...(publishedDocsUrl() === undefined ? {} : { informationUri: publishedDocsUrl() }),
-            rules: (used.length > 0 ? used : CHANGE_KINDS.slice(0, 0)).map((kind) => ({
+            rules: [
+              ...(used.length > 0 ? used : CHANGE_KINDS.slice(0, 0)).map((kind) => ({
               id: kind,
               name: kind
                 .split(/[._]/)
@@ -78,20 +140,35 @@ export function renderSarifReport(report: AuditReport): string {
               defaultConfiguration: { level: LEVEL[SEVERITY[kind]] },
               ...(helpUriFor("6-change-taxonomy") === undefined ? {} : { helpUri: helpUriFor("6-change-taxonomy") }),
             })),
+            ...extraRules,
+            ],
           },
         },
-        results: report.changes.map((change) => ({
-          ruleId: change.kind,
-          level: LEVEL[change.severity],
-          message: { text: change.member ? `${change.server} › ${change.member}: ${change.summary}` : `${change.server}: ${change.summary}` },
-          locations: [
-            {
-              physicalLocation: { artifactLocation: { uri: sarifUri(report), uriBaseId: "%SRCROOT%" } },
-              logicalLocations: [{ name: change.member ?? change.server, fullyQualifiedName: change.member ? `${change.server}/${change.member}` : change.server, kind: "member" }],
-            },
-          ],
-          partialFingerprints: { "mcpAuditChange/v1": fingerprint(change) },
-        })),
+        results: [
+          ...report.changes.map<SarifResult>((change) => ({
+            ruleId: change.kind,
+            level: LEVEL[change.severity],
+            message: { text: change.member ? `${change.server} \u203a ${change.member}: ${change.summary}` : `${change.server}: ${change.summary}` },
+            locations: at(change.member ?? change.server, change.member ? `${change.server}/${change.member}` : change.server),
+            partialFingerprints: { "mcpAuditChange/v1": fingerprint(change) },
+          })),
+          ...violations.map<SarifResult>((violation) => ({
+            ruleId: DENIED_RULE,
+            level: "error",
+            message: { text: `${violation.server} \u203a ${violation.tool}: ${violation.kind} is not permitted here (${violation.evidence})` },
+            locations: at(violation.tool, `${violation.server}/${violation.tool}`),
+            partialFingerprints: { "mcpAuditChange/v1": `${violation.server}/${violation.tool}/${violation.kind}` },
+          })),
+          ...steering.flatMap(({ server, signals }) =>
+            signals.map<SarifResult>((signal) => ({
+              ruleId: STEERING_RULE,
+              level: "note",
+              message: { text: `${server} \u203a ${signal.field}: ${signal.quote}` },
+              locations: at(signal.field, `${server}/${signal.field}`),
+              partialFingerprints: { "mcpAuditChange/v1": `${server}/${signal.field}/${signal.kind}` },
+            })),
+          ),
+        ],
       },
     ],
   };

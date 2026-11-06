@@ -20,6 +20,8 @@ export function renderJsonReport(report: AuditReport, exitCode: ExitCode): strin
          * that gates on this field is gating on a regex, which is the thing this must never be.
          */
         steering: (report.steering ?? []).reduce((sum, server) => sum + server.signals.length, 0),
+        /** Unlike steering, these DO decide the exit code. */
+        violations: (report.violations ?? []).length,
       },
       changes: report.changes.map((change) => ({
         kind: change.kind,
@@ -33,6 +35,7 @@ export function renderJsonReport(report: AuditReport, exitCode: ExitCode): strin
       unreachable: report.unreachable,
       /** Text that began addressing the model since the lock was approved. Reported, never gated. */
       steering: report.steering ?? [],
+      violations: report.violations ?? [],
     },
     null,
     2,
