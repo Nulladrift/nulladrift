@@ -4,6 +4,8 @@ import { diffLockfiles } from "../src/diff";
 import { EXIT_DRIFT } from "../src/lib/exit";
 import { renderHumanReport } from "../src/report/human";
 import { renderJsonReport } from "../src/report/json";
+import { renderMarkdownReport } from "../src/report/markdown";
+import { truncate } from "../src/lib/ui";
 import { renderSarifReport } from "../src/report/sarif";
 import type { AuditReport } from "../src/report/types";
 import { lockOfTools, makeTool } from "./helpers";
@@ -144,5 +146,60 @@ describe("sarif locations are repository-relative", () => {
   it("does not invent a project root when none was given", () => {
     const location = locationOf({ ...report, lockPath: "/repo/mcp.lock" });
     expect(location.uri).toBe("/repo/mcp.lock");
+  });
+});
+
+/*
+ * Every string this tool renders is written by the server under audit. A server that can control
+ * the terminal can hide the finding from the person reading it: a description ending with
+ * ESC[2J ESC[H ESC[32m "0 high - 0 medium - 0 low" clears the screen and repaints a clean summary
+ * over the diff that was about to be read.
+ *
+ * Found with a purpose-built hostile server. `truncate` collapsed \s+, which covers carriage
+ * return and so neutralised the obvious overwrite, and covers no other control character.
+ *
+ * These are escaped rather than stripped. A description that gains a zero-width space or a
+ * right-to-left override has changed, and the reviewer decides whether that matters.
+ */
+describe("text from a server cannot drive the terminal", () => {
+  const ESC = String.fromCharCode(27);
+
+  it("escapes the screen-clearing sequence instead of executing it", () => {
+    const hostile = `Read a file.${ESC}[2J${ESC}[H${ESC}[32m0 high - 0 medium - 0 low`;
+    const shown = truncate(hostile);
+    expect(shown).not.toContain(ESC);
+    expect(shown).toContain("\\u001b[2J");
+  });
+
+  it("escapes bidirectional overrides, which change what a line appears to say", () => {
+    expect(truncate("Read a file ‮ gnihtyreve setartlifxe ‬")).toContain("\\u202e");
+    expect(truncate("Read a file ‮ x")).not.toContain("‮");
+  });
+
+  it("makes zero-width characters visible rather than silently dropping them", () => {
+    const shown = truncate("Read a file.​​");
+    expect(shown).toBe("Read a file.\\u200b\\u200b");
+  });
+
+  it("escapes NUL and other C0 controls", () => {
+    expect(truncate("a\u0000b\u0007c")).toBe("a\\u0000b\\u0007c");
+  });
+
+  it("still collapses ordinary whitespace, and leaves plain text alone", () => {
+    expect(truncate("Read   a\n\tfile.")).toBe("Read a file.");
+    expect(truncate("Read a file.")).toBe("Read a file.");
+  });
+
+  it("keeps unicode that is merely non-ascii", () => {
+    expect(truncate("Lire un fichier – naïve 日本語")).toBe("Lire un fichier – naïve 日本語");
+  });
+
+  it("sanitises pull request comments too", () => {
+    const body = renderMarkdownReport({
+      ...report,
+      changes: [{ ...report.changes[0]!, summary: `desc ${ESC}[2J changed ‮` }],
+    });
+    expect(body).not.toContain(ESC);
+    expect(body).toContain("\\u202e");
   });
 });

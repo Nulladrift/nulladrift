@@ -10,6 +10,7 @@
  * `renderSarifReport` is for a code-scanning tab; this is prose with a table, and it says what to
  * do next rather than only what happened.
  */
+import { visibleControls } from "../lib/ui";
 import { serversThatShippedNothing } from "../diff/types";
 import type { Change, Severity } from "../diff/types";
 import type { AuditReport } from "./types";
@@ -31,7 +32,9 @@ const MARK: Record<Severity, string> = { high: "🔴", medium: "🟠", low: "⚪
  * code span, pipes break out of the table cell, and the rest of Markdown follows from there.
  */
 function cell(text: string): string {
-  return text.replace(/\|/g, "\\|").replace(/`/g, "\\`").replace(/\r?\n/g, " ").trim();
+  // Same reasoning as the terminal reporter: this text is written by the server under audit, and
+  // a bidirectional override renders a pull request comment as something other than what it says.
+  return visibleControls(text).replace(/\|/g, "\\|").replace(/`/g, "\\`").replace(/\r?\n/g, " ").trim();
 }
 
 function row(change: Change): string {

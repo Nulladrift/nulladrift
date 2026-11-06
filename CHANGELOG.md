@@ -12,6 +12,26 @@ telemetry). Renaming a change kind breaks every consumer that matched on it.
 
 Nothing yet.
 
+## [0.1.4] - 2026-11-05
+
+### Security
+
+- **A server can no longer drive the terminal of the person auditing it.** Every string this
+  tool renders -- a tool description, a server's `instructions`, its name -- is written by the
+  server under audit. A description ending `\u001b[2J\u001b[H\u001b[32m0 high · 0 medium · 0 low`
+  cleared the screen and repainted a clean summary over the diff that was about to be read,
+  which defeats the point of showing somebody what changed. `truncate` collapsed `\s+`, which in
+  JavaScript covers carriage return and so neutralised the obvious overwrite, and covers no other
+  control character.
+
+  C0 and C1 controls, DEL, bidirectional overrides and zero-width characters are now escaped in
+  the terminal report and in pull request comments. They are escaped rather than stripped: a
+  description that gains a zero-width space has changed, and the reviewer is the one who should
+  decide whether that matters.
+
+  The lockfile was never affected -- JSON encoding already stored these as `\u001b` text rather
+  than raw bytes -- so no pinned surface was wrong, only what a reader was shown.
+
 ## [0.1.3] - 2026-11-05
 
 ### Fixed
