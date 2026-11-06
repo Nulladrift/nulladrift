@@ -10,8 +10,9 @@ import { afterEach, describe, expect, it } from "vitest";
 import type { ConfiguredServer } from "../src/config/types";
 import { crawl } from "../src/crawl/run";
 import { MIN_SERVER_DAYS, renderMarkdown, summarize } from "../src/crawl/report";
-import type { Corpus } from "../src/crawl/registry";
+import type { Corpus, CrawlTarget } from "../src/crawl/registry";
 import type { History } from "../src/crawl/state";
+import { PRUNE_AFTER_ABSENT_RUNS } from "../src/crawl/state";
 import { readLockfile } from "../src/lock/io";
 import { isAuthFailure, UnreachableServerError } from "../src/mcp/types";
 
@@ -38,8 +39,17 @@ function target(name: string, variant: string): ConfiguredServer {
   };
 }
 
-function corpusOf(targets: ConfiguredServer[]): Corpus {
-  return { targets, stats: { latest: targets.length, remote: targets.length, stdioOnly: 0, stdioSandboxed: 0, stdioUnsupported: 0 }, truncated: false };
+function corpusOf(targets: CrawlTarget[], truncated = false): Corpus {
+  return {
+    targets,
+    stats: { latest: targets.length, remote: targets.length, stdioOnly: 0, stdioSandboxed: 0, stdioUnsupported: 0, truncated },
+  };
+}
+
+const UNREACHABLE: ConfiguredServer["transport"] = { type: "stdio", command: join(tmpdir(), "not-a-real-binary-xyz"), args: [], env: {} };
+
+function broken(name: string): ConfiguredServer {
+  return { name, source: { client: "manual", file: "test" }, transport: UNREACHABLE };
 }
 
 describe("isAuthFailure", () => {
@@ -82,12 +92,7 @@ describe("a crawl over time", () => {
       const state = await stateDir();
       await crawl({ stateDir: state, corpus: corpusOf([target("alpha", "base")]), now: new Date(T0), timeoutMs: 20_000 });
 
-      const broken: ConfiguredServer = {
-        name: "alpha",
-        source: { client: "manual", file: "test" },
-        transport: { type: "stdio", command: join(tmpdir(), "not-a-real-binary-xyz"), args: [], env: {} },
-      };
-      const second = await crawl({ stateDir: state, corpus: corpusOf([broken]), now: new Date(T0 + DAY), timeoutMs: 5_000 });
+      const second = await crawl({ stateDir: state, corpus: corpusOf([broken("alpha")]), now: new Date(T0 + DAY), timeoutMs: 5_000 });
 
       // A server we could not reach is absent from the fresh snapshot. Diffing the whole corpus
       // would call that `server.removed` -- drift that says nothing about the server.
@@ -114,10 +119,93 @@ describe("a crawl over time", () => {
     },
     120_000,
   );
+
+  it(
+    "tries the other endpoints an entry advertises before calling the server unreachable",
+    async () => {
+      const state = await stateDir();
+      // The shape of a registry entry that lists a dead SSE endpoint ahead of a working one.
+      const withFallback: CrawlTarget = {
+        ...broken("alpha"),
+        alternates: [{ type: "stdio", command: process.execPath, args: [SERVER], env: { NULLADRIFT_FIXTURE_VARIANT: "base" } }],
+      };
+
+      const result = await crawl({ stateDir: state, corpus: corpusOf([withFallback]), now: new Date(T0), timeoutMs: 20_000 });
+
+      expect(result.run.outcomes).toMatchObject({ baseline: 1, unreachable: 0 });
+      const lock = await readLockfile(join(state, "corpus.lock"));
+      expect(lock.subjects["alpha"]?.tools?.length).toBeGreaterThan(0);
+    },
+    120_000,
+  );
+
+  it(
+    "counts consecutive failures, and forgets them on the next success",
+    async () => {
+      const state = await stateDir();
+
+      await crawl({ stateDir: state, corpus: corpusOf([broken("alpha")]), now: new Date(T0), timeoutMs: 5_000 });
+      const twice = await crawl({ stateDir: state, corpus: corpusOf([broken("alpha")]), now: new Date(T0 + DAY), timeoutMs: 5_000 });
+
+      // A tally cannot tell a server that retired in March from one that blinked this morning.
+      expect(twice.history.failures["alpha"]).toMatchObject({ consecutive: 2, kind: "unreachable" });
+
+      const recovered = await crawl({ stateDir: state, corpus: corpusOf([target("alpha", "base")]), now: new Date(T0 + 2 * DAY), timeoutMs: 20_000 });
+      expect(recovered.history.failures["alpha"]).toBeUndefined();
+    },
+    120_000,
+  );
+
+  it(
+    "drops a delisted subject, but only after a week of absences",
+    async () => {
+      const state = await stateDir();
+      await crawl({ stateDir: state, corpus: corpusOf([target("alpha", "base")]), now: new Date(T0), timeoutMs: 20_000 });
+
+      let last = await crawl({ stateDir: state, corpus: corpusOf([]), now: new Date(T0 + DAY) });
+      for (let run = 2; run < PRUNE_AFTER_ABSENT_RUNS; run += 1) {
+        last = await crawl({ stateDir: state, corpus: corpusOf([]), now: new Date(T0 + run * DAY) });
+        expect(last.pruned).toEqual([]);
+      }
+      // Still pinned on the last run before the threshold: a short walk is not a delisting.
+      expect((await readLockfile(join(state, "corpus.lock"))).subjects["alpha"]).toBeDefined();
+      expect(last.history.absent["alpha"]).toBe(PRUNE_AFTER_ABSENT_RUNS - 1);
+
+      const final = await crawl({ stateDir: state, corpus: corpusOf([]), now: new Date(T0 + PRUNE_AFTER_ABSENT_RUNS * DAY) });
+      expect(final.pruned).toEqual(["alpha"]);
+      expect((await readLockfile(join(state, "corpus.lock"))).subjects["alpha"]).toBeUndefined();
+
+      // The observation survives the snapshot: it is the record the all-time rate is built from.
+      expect(final.history.servers["alpha"]).toBeDefined();
+    },
+    120_000,
+  );
+
+  it(
+    "prunes nothing on a truncated walk, where absence means the paging stopped",
+    async () => {
+      const state = await stateDir();
+      await crawl({ stateDir: state, corpus: corpusOf([target("alpha", "base")]), now: new Date(T0), timeoutMs: 20_000 });
+
+      for (let run = 1; run <= PRUNE_AFTER_ABSENT_RUNS + 2; run += 1) {
+        const result = await crawl({ stateDir: state, corpus: corpusOf([], true), now: new Date(T0 + run * DAY) });
+        expect(result.pruned).toEqual([]);
+      }
+
+      expect((await readLockfile(join(state, "corpus.lock"))).subjects["alpha"]).toBeDefined();
+    },
+    120_000,
+  );
 });
 
 describe("summarize", () => {
-  const history = (servers: History["servers"], runs: History["runs"] = []): History => ({ version: 1, runs, servers });
+  const history = (servers: History["servers"], runs: History["runs"] = []): History => ({
+    version: 1,
+    runs,
+    servers,
+    failures: {},
+    absent: {},
+  });
 
   it("withholds a rate until enough observation has accumulated", () => {
     const thin = summarize(
@@ -156,16 +244,16 @@ describe("renderMarkdown", () => {
     outcomes: { baseline: 0, stable: 8, drifted: 2, "auth-required": 3, unreachable: 1 },
     changeKinds: { "tool.description.changed": 2 },
     protocols: { "legacy/2025-11-25": 7, "modern/2026-07-28": 1 },
-    corpus: { latest: 20, remote: 14, stdioOnly: 6, stdioSandboxed: 0, stdioUnsupported: 0 },
+    corpus: { latest: 20, remote: 14, stdioOnly: 6, stdioSandboxed: 0, stdioUnsupported: 2, truncated: false },
     driftedServers: ["one", "two"],
   };
 
+  const observed = (days: number, comparisons: number, driftEvents: number): History["servers"] => ({
+    one: { firstSeenAt: new Date(T0).toISOString(), lastCheckedAt: new Date(T0 + days).toISOString(), comparisons, driftEvents },
+  });
+
   it("says what it cannot measure, not just what it did", () => {
-    const history: History = {
-      version: 1,
-      runs: [run],
-      servers: { one: { firstSeenAt: new Date(T0).toISOString(), lastCheckedAt: new Date(T0 + 200 * DAY).toISOString(), comparisons: 10, driftEvents: 2 } },
-    };
+    const history: History = { version: 1, runs: [run], servers: observed(200 * DAY, 10, 2), failures: {}, absent: {} };
     const text = renderMarkdown(history, summarize(history));
 
     expect(text).toContain("remote servers only");
@@ -173,14 +261,45 @@ describe("renderMarkdown", () => {
     expect(text).toContain("stdio packages");
     expect(text).toContain("legacy/2025-11-25");
     expect(text).toMatch(/changes per server-year/i);
+    // The entries no sandbox could express are a coverage gap, not a rounding error.
+    expect(text).toContain("unpinned or not an npm package");
   });
 
-  it("refuses to print a rate it cannot support", () => {
+  it("calls the rate a lower bound, because sampling cannot see a change that was reverted", () => {
+    const history: History = { version: 1, runs: [run], servers: observed(200 * DAY, 10, 2), failures: {}, absent: {} };
+    expect(renderMarkdown(history, summarize(history))).toContain("lower bounds");
+  });
+
+  it("separates a server that has been failing for weeks from one that failed once", () => {
     const history: History = {
       version: 1,
       runs: [run],
-      servers: { one: { firstSeenAt: new Date(T0).toISOString(), lastCheckedAt: new Date(T0 + 60_000).toISOString(), comparisons: 1, driftEvents: 0 } },
+      servers: observed(200 * DAY, 10, 2),
+      failures: {
+        gone: { consecutive: 9, kind: "unreachable", firstFailedAt: new Date(T0).toISOString(), lastFailedAt: new Date(T0 + 9 * DAY).toISOString() },
+        blinked: { consecutive: 1, kind: "unreachable", firstFailedAt: new Date(T0).toISOString(), lastFailedAt: new Date(T0).toISOString() },
+      },
+      absent: {},
     };
+    const stats = summarize(history);
+
+    expect(stats.failing).toEqual({ persistent: 1, transient: 1 });
+    expect(renderMarkdown(history, stats)).toMatch(/treated as gone/);
+  });
+
+  it("says when the registry walk stopped early, so the counts are not read as the whole registry", () => {
+    const history: History = {
+      version: 1,
+      runs: [{ ...run, corpus: { ...run.corpus, truncated: true } }],
+      servers: observed(200 * DAY, 10, 2),
+      failures: {},
+      absent: {},
+    };
+    expect(renderMarkdown(history, summarize(history))).toContain("stopped at the paging cap");
+  });
+
+  it("refuses to print a rate it cannot support", () => {
+    const history: History = { version: 1, runs: [run], servers: observed(60_000, 1, 0), failures: {}, absent: {} };
     const text = renderMarkdown(history, summarize(history));
     expect(text).toContain("Not enough observation time yet");
     expect(text).not.toMatch(/changes per server-year/i);

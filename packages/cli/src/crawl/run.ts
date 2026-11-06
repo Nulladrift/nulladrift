@@ -1,7 +1,6 @@
 /** One pass over the corpus: capture every server, compare against the pinned snapshot. */
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
-import type { ConfiguredServer } from "../config/types";
 import { diffLockfiles } from "../diff";
 import type { Change } from "../diff/types";
 import { buildLockedServer } from "../lock/build";
@@ -11,9 +10,9 @@ import { LOCKFILE_VERSION } from "../lock/types";
 import { VERSION } from "../lib/version";
 import { captureSurface } from "../mcp/capture";
 import { isAuthFailure } from "../mcp/types";
-import type { Corpus } from "./registry";
-import type { History, Outcome, RunRecord, ServerObservation } from "./state";
-import { CORPUS_LOCK, emptyHistory, readHistory, writeHistory } from "./state";
+import type { Corpus, CrawlTarget } from "./registry";
+import type { FailureStreak, History, Outcome, RunRecord, ServerObservation } from "./state";
+import { CORPUS_LOCK, emptyHistory, PRUNE_AFTER_ABSENT_RUNS, readHistory, writeHistory } from "./state";
 
 export interface CrawlOptions {
   stateDir: string;
@@ -22,6 +21,8 @@ export interface CrawlOptions {
   concurrency?: number;
   /** Minimum gap between starting requests. Hundreds of third-party hosts deserve a queue, not a flood. */
   delayMs?: number;
+  /** Minimum gap between requests aimed at the same host. See `mapWithLimit`. */
+  hostDelayMs?: number;
   now?: Date;
   onProgress?: (done: number, total: number, name: string, outcome: Outcome) => void;
 }
@@ -31,14 +32,39 @@ export interface CrawlResult {
   history: History;
   /** Every change seen this pass, for the detailed section of the report. */
   changes: Change[];
+  /** Subjects dropped from the corpus lock because the registry no longer lists them. */
+  pruned: string[];
 }
 
 const sleep = (ms: number): Promise<void> => new Promise((done) => setTimeout(done, ms));
 
-async function mapWithLimit<T, R>(items: T[], limit: number, delayMs: number, worker: (item: T) => Promise<R>): Promise<R[]> {
+/** The host a target is dialled at, or nothing for a stdio server, which contacts no one. */
+function hostOf(target: CrawlTarget): string | undefined {
+  if (target.transport.type === "stdio") return undefined;
+  try {
+    return new URL(target.transport.url).host;
+  } catch {
+    return undefined;
+  }
+}
+
+async function mapWithLimit<T, R>(
+  items: T[],
+  limit: number,
+  delayMs: number,
+  hostDelayMs: number,
+  hostOfItem: (item: T) => string | undefined,
+  worker: (item: T) => Promise<R>,
+): Promise<R[]> {
   const results = new Array<R>(items.length);
   let next = 0;
   let earliestStart = 0;
+  /*
+   * The global clock caps what leaves this process; it says nothing about where any of it lands.
+   * One operator hosting twenty of the servers in the corpus took twenty requests inside a
+   * second while the aggregate rate looked polite, which is the operator's view of a flood.
+   */
+  const hostFreeAt = new Map<string, number>();
 
   await Promise.all(
     Array.from({ length: Math.min(limit, items.length) }, async () => {
@@ -49,10 +75,12 @@ async function mapWithLimit<T, R>(items: T[], limit: number, delayMs: number, wo
 
         // A shared clock rather than a per-worker sleep: the point is to cap the rate at which
         // requests leave this process, not to slow each worker down independently.
-        if (delayMs > 0) {
+        if (delayMs > 0 || hostDelayMs > 0) {
+          const host = hostOfItem(item);
           const now = Date.now();
-          const start = Math.max(now, earliestStart);
+          const start = Math.max(now, earliestStart, host === undefined ? 0 : (hostFreeAt.get(host) ?? 0));
           earliestStart = start + delayMs;
+          if (host !== undefined) hostFreeAt.set(host, start + hostDelayMs);
           if (start > now) await sleep(start - now);
         }
         results[index] = await worker(item);
@@ -63,9 +91,31 @@ async function mapWithLimit<T, R>(items: T[], limit: number, delayMs: number, wo
 }
 
 interface Captured {
-  target: ConfiguredServer;
+  target: CrawlTarget;
   entry?: LockedMcpServer;
   failure?: "auth-required" | "unreachable";
+}
+
+/**
+ * Every endpoint the entry advertises, in order, until one answers.
+ *
+ * A credential wall is not a reason to try the next one: it is a definitive answer about this
+ * server -- it exists, it works, and it will not talk to us -- and re-dialling its other URLs
+ * only hands the operator a second rejected request to log.
+ */
+async function captureAny(target: CrawlTarget, timeoutMs: number): Promise<Captured> {
+  const candidates = [target.transport, ...(target.alternates ?? [])];
+
+  for (const transport of candidates) {
+    const attempt: CrawlTarget = { ...target, transport };
+    try {
+      const surface = await captureSurface(attempt, timeoutMs);
+      return { target: attempt, entry: buildLockedServer(attempt, surface) };
+    } catch (error) {
+      if (isAuthFailure(error)) return { target: attempt, failure: "auth-required" };
+    }
+  }
+  return { target, failure: "unreachable" };
 }
 
 export async function crawl(options: CrawlOptions): Promise<CrawlResult> {
@@ -83,18 +133,20 @@ export async function crawl(options: CrawlOptions): Promise<CrawlResult> {
   const history = await readHistory(stateDir).catch(() => emptyHistory());
 
   let done = 0;
-  const captured = await mapWithLimit(corpus.targets, options.concurrency ?? 8, options.delayMs ?? 50, async (target): Promise<Captured> => {
-    try {
-      const surface = await captureSurface(target, options.timeoutMs ?? 20_000);
-      const result: Captured = { target, entry: buildLockedServer(target, surface) };
-      options.onProgress?.(++done, corpus.targets.length, target.name, previous.subjects[target.name] ? "stable" : "baseline");
+  const timeoutMs = options.timeoutMs ?? 20_000;
+  const captured = await mapWithLimit(
+    corpus.targets,
+    options.concurrency ?? 8,
+    options.delayMs ?? 50,
+    options.hostDelayMs ?? 1_000,
+    hostOf,
+    async (target): Promise<Captured> => {
+      const result = await captureAny(target, timeoutMs);
+      const outcome: Outcome = result.failure ?? (previous.subjects[target.name] ? "stable" : "baseline");
+      options.onProgress?.(++done, corpus.targets.length, target.name, outcome);
       return result;
-    } catch (error) {
-      const failure = isAuthFailure(error) ? "auth-required" : "unreachable";
-      options.onProgress?.(++done, corpus.targets.length, target.name, failure);
-      return { target, failure };
-    }
-  });
+    },
+  );
 
   /*
    * Only servers captured on this pass are diffed. A server we could not reach is absent from
@@ -125,8 +177,21 @@ export async function crawl(options: CrawlOptions): Promise<CrawlResult> {
     const name = result.target.name;
     if (result.failure) {
       outcomes[result.failure] += 1;
+      /*
+       * A streak, not a tally. Without the run of consecutive failures a server that retired
+       * months ago is indistinguishable from one that blinked once, and both quietly depress
+       * the coverage the report publishes.
+       */
+      const prior = history.failures[name];
+      const streak: FailureStreak =
+        prior === undefined || prior.kind !== result.failure
+          ? { consecutive: 1, kind: result.failure, firstFailedAt: at, lastFailedAt: at }
+          : { ...prior, consecutive: prior.consecutive + 1, lastFailedAt: at };
+      history.failures[name] = streak;
       continue;
     }
+    delete history.failures[name];
+
     const entry = result.entry as LockedMcpServer;
     const revision = `${entry.protocol.era}/${entry.protocol.version}`;
     protocols[revision] = (protocols[revision] ?? 0) + 1;
@@ -149,14 +214,40 @@ export async function crawl(options: CrawlOptions): Promise<CrawlResult> {
   const run: RunRecord = { at, targets: corpus.targets.length, outcomes, changeKinds, protocols, corpus: corpus.stats, driftedServers };
   history.runs.push(run);
 
-  // Servers we could not reach keep their previous entry, so a transient outage does not erase
-  // a baseline that took weeks to accumulate.
-  await writeLockfile(lockPath, {
-    lockfileVersion: LOCKFILE_VERSION,
-    generatedBy: `nulladrift@${VERSION}`,
-    subjects: { ...previous.subjects, ...fresh },
-  });
+  /*
+   * Servers we could not reach keep their previous entry, so a transient outage does not erase a
+   * baseline that took weeks to accumulate. A server the registry no longer lists is a different
+   * case: it will never be dialled again, so holding its snapshot forever is only a corpus lock
+   * that grows without bound. It takes a week of consecutive absences, because one short walk is
+   * not evidence of a delisting -- and on a truncated walk, which is missing targets for reasons
+   * that have nothing to do with the registry's contents, nothing is pruned at all.
+   */
+  const inCorpus = new Set(corpus.targets.map((target) => target.name));
+  const subjects: Record<string, LockedMcpServer> = { ...previous.subjects, ...fresh };
+  const pruned: string[] = [];
+
+  for (const name of Object.keys(subjects)) {
+    if (inCorpus.has(name)) {
+      delete history.absent[name];
+      continue;
+    }
+    if (corpus.stats.truncated) continue;
+
+    const absences = (history.absent[name] ?? 0) + 1;
+    if (absences < PRUNE_AFTER_ABSENT_RUNS) {
+      history.absent[name] = absences;
+      continue;
+    }
+    // The observation in `history.servers` stays: it is the record of what was measured while
+    // the server existed, and the all-time rate is computed from it.
+    delete history.absent[name];
+    delete history.failures[name];
+    delete subjects[name];
+    pruned.push(name);
+  }
+
+  await writeLockfile(lockPath, { lockfileVersion: LOCKFILE_VERSION, generatedBy: `nulladrift@${VERSION}`, subjects });
   await writeHistory(stateDir, history);
 
-  return { run, history, changes };
+  return { run, history, changes, pruned: pruned.sort() };
 }

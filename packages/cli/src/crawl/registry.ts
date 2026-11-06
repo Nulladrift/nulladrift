@@ -9,7 +9,8 @@
  * implied.
  */
 import { z } from "zod";
-import type { ConfiguredServer } from "../config/types";
+import type { ConfiguredServer, ConfiguredTransport } from "../config/types";
+import { USER_AGENT } from "../lib/version";
 import type { SandboxOptions } from "./sandbox";
 import { sandboxedStdio } from "./sandbox";
 
@@ -64,20 +65,48 @@ export interface CorpusStats {
   stdioSandboxed: number;
   /** stdio entries a sandbox could not express (a registry we do not support). */
   stdioUnsupported: number;
-}
-
-export interface Corpus {
-  targets: ConfiguredServer[];
-  stats: CorpusStats;
-  /** True when paging stopped at the cap rather than at the end of the registry. */
+  /**
+   * True when paging stopped at the cap rather than at the end of the registry.
+   *
+   * It belongs in the stats rather than beside them because the stats are what the run record
+   * keeps. A truncated pass yields fewer targets, and without this in the history a short run
+   * six months from now reads as an ecosystem that shrank.
+   */
   truncated: boolean;
 }
 
-function toTarget(name: string, url: string, type: string): ConfiguredServer {
+/** A registry entry may advertise several endpoints; the extras are tried only if the first fails. */
+export interface CrawlTarget extends ConfiguredServer {
+  alternates?: ConfiguredTransport[];
+}
+
+export interface Corpus {
+  targets: CrawlTarget[];
+  stats: CorpusStats;
+}
+
+type Remote = { type: string; url: string };
+
+function toTransport(remote: Remote): ConfiguredTransport {
+  return { type: remote.type === "sse" ? "sse" : "http", url: remote.url, headers: {} };
+}
+
+/**
+ * Every endpoint the entry advertises, Streamable HTTP first.
+ *
+ * `remotes[0]` is whatever order the publisher wrote them in. A server that lists its deprecated
+ * SSE endpoint first and no longer answers there counted as unreachable while the working HTTP
+ * endpoint sat untouched in the same entry -- an outage invented by the reader, which then
+ * depressed the coverage figure this report publishes.
+ */
+function toTarget(name: string, remotes: Remote[]): CrawlTarget {
+  const ordered = [...remotes].sort((a, b) => Number(a.type === "sse") - Number(b.type === "sse"));
+  const [first, ...rest] = ordered as [Remote, ...Remote[]];
   return {
     name,
     source: { client: "manual", file: "registry.modelcontextprotocol.io" },
-    transport: { type: type === "sse" ? "sse" : "http", url, headers: {} },
+    transport: toTransport(first),
+    ...(rest.length > 0 ? { alternates: rest.map(toTransport) } : {}),
   };
 }
 
@@ -96,9 +125,9 @@ export async function fetchCorpus(options: FetchCorpusOptions = {}): Promise<Cor
   const limit = options.limit ?? Number.POSITIVE_INFINITY;
   const timeoutMs = options.timeoutMs ?? 30_000;
 
-  const targets: ConfiguredServer[] = [];
+  const targets: CrawlTarget[] = [];
   const seen = new Set<string>();
-  const stats: CorpusStats = { latest: 0, remote: 0, stdioOnly: 0, stdioSandboxed: 0, stdioUnsupported: 0 };
+  const stats: CorpusStats = { latest: 0, remote: 0, stdioOnly: 0, stdioSandboxed: 0, stdioUnsupported: 0, truncated: false };
 
   let cursor: string | undefined;
   let pages = 0;
@@ -112,7 +141,11 @@ export async function fetchCorpus(options: FetchCorpusOptions = {}): Promise<Cor
     url.searchParams.set("limit", String(PAGE_SIZE));
     if (cursor !== undefined) url.searchParams.set("cursor", cursor);
 
-    const response = await fetch(url, { headers: { accept: "application/json" }, signal: AbortSignal.timeout(timeoutMs) });
+    const response = await fetch(url, {
+      // Identified, so an operator reading their logs can find out what this is. See USER_AGENT.
+      headers: { accept: "application/json", "user-agent": USER_AGENT },
+      signal: AbortSignal.timeout(timeoutMs),
+    });
     if (!response.ok) throw new Error(`registry ${url.pathname} → ${response.status}`);
 
     const page = pageSchema.parse(await response.json());
@@ -122,18 +155,24 @@ export async function fetchCorpus(options: FetchCorpusOptions = {}): Promise<Cor
       if (official?.isLatest !== true || (official.status !== undefined && official.status !== "active")) continue;
       stats.latest += 1;
 
-      const remote = entry.server.remotes?.[0];
-      if (!remote) {
+      const remotes = entry.server.remotes ?? [];
+      if (remotes.length === 0) {
         const pkg = entry.server.packages?.[0];
         if (pkg === undefined) continue;
         stats.stdioOnly += 1;
-        if (options.includeStdio !== true) continue;
 
+        /*
+         * Classified before the `--include-stdio` gate rather than after it. The check used to
+         * sit below, so a default run always left `stdioUnsupported` at 0 -- a figure that reads
+         * as "every stdio entry could have been measured" when it means "none were looked at".
+         * Deciding here costs nothing and says what the npm-only sandbox actually excludes.
+         */
         const sandboxed = sandboxedStdio(pkg, options.sandbox);
         if (!sandboxed.ok) {
           stats.stdioUnsupported += 1;
           continue;
         }
+        if (options.includeStdio !== true) continue;
         if (seen.has(entry.server.name) || targets.length >= limit) continue;
         seen.add(entry.server.name);
         stats.stdioSandboxed += 1;
@@ -144,7 +183,7 @@ export async function fetchCorpus(options: FetchCorpusOptions = {}): Promise<Cor
 
       if (seen.has(entry.server.name) || targets.length >= limit) continue;
       seen.add(entry.server.name);
-      targets.push(toTarget(entry.server.name, remote.url, remote.type));
+      targets.push(toTarget(entry.server.name, remotes));
     }
 
     pages += 1;
@@ -163,5 +202,6 @@ export async function fetchCorpus(options: FetchCorpusOptions = {}): Promise<Cor
     }
   } while (cursor !== undefined && targets.length < limit);
 
-  return { targets, stats, truncated };
+  stats.truncated = truncated;
+  return { targets, stats };
 }

@@ -11,7 +11,7 @@ import { getDefaultEnvironment, StdioClientTransport } from "@modelcontextprotoc
 import type { Transport } from "@modelcontextprotocol/client";
 import type { ConfiguredServer } from "../config/types";
 import { createAuthProvider } from "./oauth";
-import { VERSION } from "../lib/version";
+import { USER_AGENT, VERSION } from "../lib/version";
 import { UnreachableServerError } from "./types";
 
 export const DEFAULT_TIMEOUT_MS = 30_000;
@@ -48,7 +48,12 @@ export function buildTransport(
     return child;
   }
 
-  const headers = { ...transport.headers, "user-agent": `nulladrift/${VERSION}` };
+  /*
+   * Spread after the default, so a config that sets its own `user-agent` keeps it: some servers
+   * key on it, and overriding a deliberate choice would audit a server under conditions the
+   * owner never configured.
+   */
+  const headers = { "user-agent": USER_AGENT, ...transport.headers };
   const url = new URL(transport.url);
 
   /*
