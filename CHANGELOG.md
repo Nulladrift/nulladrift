@@ -12,6 +12,18 @@ telemetry). Renaming a change kind breaks every consumer that matched on it.
 
 Nothing yet.
 
+## [0.1.3] - 2026-11-05
+
+### Fixed
+
+- **SARIF locations are expressed relative to the project.** `artifactLocation.uri` was the
+  lockfile's absolute path, with no `uriBaseId`. GitHub code scanning resolves that URI against
+  the repository root, so an absolute path matched no file and every alert arrived with nothing
+  to click through to -- in the one feature whose pitch is that drift shows up in code scanning
+  with no integration to write. It is now the path relative to the project, with
+  `uriBaseId: "%SRCROOT%"`. A lockfile outside the project has no repository-relative form, so
+  that case keeps the absolute path rather than inventing one.
+
 ## [0.1.2] - 2026-11-05
 
 Found by running 0.1.1 across a matrix of real and synthetic projects covering every config

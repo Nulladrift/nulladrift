@@ -32,6 +32,7 @@ export async function buildReport(options: CommonOptions): Promise<{ report: Aud
     unreachable: result.unreachable,
     serversChecked: Object.keys(result.lock.subjects).length,
     lockPath: options.lockPath,
+    projectRoot: options.projectRoot,
   };
 
   return {

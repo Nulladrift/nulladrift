@@ -112,3 +112,37 @@ describe("sarif output", () => {
     expect(first.runs[0].results[0].partialFingerprints).toEqual(second.runs[0].results[0].partialFingerprints);
   });
 });
+
+/*
+ * GitHub code scanning resolves `artifactLocation.uri` against the repository root. This emitted
+ * `report.lockPath` verbatim, which is absolute, so every alert arrived with no file attached to
+ * it -- in the one feature whose pitch is that drift shows up in code scanning with no
+ * integration to write. Found by reading the SARIF a real drift produced.
+ */
+describe("sarif locations are repository-relative", () => {
+  const locationOf = (r: AuditReport): { uri?: string; uriBaseId?: string } => {
+    const sarif = JSON.parse(renderSarifReport(r)) as Record<string, any>;
+    return sarif["runs"][0].results[0].locations[0].physicalLocation.artifactLocation;
+  };
+
+  it("expresses the lockfile relative to the project, with %SRCROOT%", () => {
+    const location = locationOf({ ...report, projectRoot: "/repo", lockPath: "/repo/mcp.lock" });
+    expect(location.uri).toBe("mcp.lock");
+    expect(location.uriBaseId).toBe("%SRCROOT%");
+  });
+
+  it("keeps a nested lockfile's path, still relative", () => {
+    const location = locationOf({ ...report, projectRoot: "/repo", lockPath: "/repo/config/mcp.lock" });
+    expect(location.uri).toBe("config/mcp.lock");
+  });
+
+  it("falls back to the absolute path for a lock outside the project, which has no relative form", () => {
+    const location = locationOf({ ...report, projectRoot: "/repo", lockPath: "/elsewhere/mcp.lock" });
+    expect(location.uri).toBe("/elsewhere/mcp.lock");
+  });
+
+  it("does not invent a project root when none was given", () => {
+    const location = locationOf({ ...report, lockPath: "/repo/mcp.lock" });
+    expect(location.uri).toBe("/repo/mcp.lock");
+  });
+});

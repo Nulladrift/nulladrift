@@ -22,4 +22,11 @@ export interface AuditReport {
   unreachable: Unreachable[];
   serversChecked: number;
   lockPath: string;
+  /**
+   * The project the audit ran in. SARIF locations have to be expressed relative to it: GitHub
+   * code scanning resolves `artifactLocation.uri` against the repository root, and an absolute
+   * path like `/Users/someone/work/repo/mcp.lock` resolves to nothing, so the alert arrives with
+   * no file attached to it.
+   */
+  projectRoot?: string;
 }

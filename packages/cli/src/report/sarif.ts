@@ -1,3 +1,4 @@
+import { isAbsolute, relative, sep } from "node:path";
 /**
  * SARIF 2.1.0, so drift lands in GitHub code scanning or any other AppSec tool without anyone
  * writing an integration.
@@ -37,6 +38,22 @@ function fingerprint(change: Change): string {
   return createHash("sha256").update(`${change.kind}\u0000${change.server}\u0000${change.member ?? ""}`).digest("hex").slice(0, 32);
 }
 
+/**
+ * The lockfile's path as SARIF wants it: relative to the repository, with forward slashes.
+ *
+ * This emitted `report.lockPath` verbatim, which is absolute. GitHub code scanning resolves
+ * `artifactLocation.uri` against the repository root, so an absolute path matched no file and
+ * the alert arrived with nothing to click through to -- in a feature whose whole pitch is that
+ * drift shows up in code scanning with no integration to write.
+ */
+function sarifUri(report: AuditReport): string {
+  if (report.projectRoot === undefined) return report.lockPath;
+  const rel = relative(report.projectRoot, report.lockPath);
+  // A lock outside the project has no repository-relative form; absolute is the honest fallback.
+  if (rel === "" || rel.startsWith("..") || isAbsolute(rel)) return report.lockPath;
+  return rel.split(sep).join("/");
+}
+
 export function renderSarifReport(report: AuditReport): string {
   const used = [...new Set(report.changes.map((change) => change.kind))].sort();
 
@@ -69,7 +86,7 @@ export function renderSarifReport(report: AuditReport): string {
           message: { text: change.member ? `${change.server} › ${change.member}: ${change.summary}` : `${change.server}: ${change.summary}` },
           locations: [
             {
-              physicalLocation: { artifactLocation: { uri: report.lockPath } },
+              physicalLocation: { artifactLocation: { uri: sarifUri(report), uriBaseId: "%SRCROOT%" } },
               logicalLocations: [{ name: change.member ?? change.server, fullyQualifiedName: change.member ? `${change.server}/${change.member}` : change.server, kind: "member" }],
             },
           ],
