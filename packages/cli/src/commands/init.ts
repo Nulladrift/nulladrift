@@ -1,5 +1,5 @@
 /** `nulladrift init` -- discover servers, capture their surface, write the lock. */
-import { steeringSignals, surfaceCapabilities } from "@nulladrift/core";
+import { steeringSignals, surfaceCapabilities, surfaceText } from "@nulladrift/core";
 import { describeSearch } from "../config/discover";
 import { lstat } from "node:fs/promises";
 import { captureAll } from "../audit";
@@ -28,6 +28,18 @@ async function exists(path: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+/*
+ * A field path names a place to go and look, so both ends carry information: the head says which
+ * tool and which argument, the tail says which leaf. Text buried twenty levels down produced a
+ * path that wrapped over two lines and pushed the quote off the screen entirely, which is a way
+ * of hiding in the report rather than in the schema.
+ */
+function elideMiddle(path: string, limit: number): string {
+  if (path.length <= limit) return path;
+  const keep = Math.floor((limit - 1) / 2);
+  return `${path.slice(0, keep)}\u2026${path.slice(-keep)}`;
 }
 
 export async function runInit(options: InitOptions): Promise<ExitCode> {
@@ -115,15 +127,33 @@ export async function runInit(options: InitOptions): Promise<ExitCode> {
       }
     }
 
-    const steering = [
-      ...steeringSignals(entry?.instructions, "instructions"),
-      ...tools.flatMap((tool) => steeringSignals(tool.description, `${tool.name}.description`)),
-    ];
+    /*
+     * Every field a model is shown, not the two that were easiest to reach. Scanning only
+     * `description` and `instructions` covered 509 of the 2257 model-facing strings in a crawl
+     * of 56 published servers, and missed the largest of them entirely: schema property
+     * descriptions, which is how a model is told what to put in a parameter.
+     */
+    const steering = (entry ? surfaceText(entry as Parameters<typeof surfaceText>[0]) : []).flatMap((piece) =>
+      steeringSignals(piece.text, piece.field),
+    );
     if (steering.length > 0) {
-      lines.push(`      ${yellow(`${steering.length} passage(s) read as instructions to the model, not documentation:`)}`);
-      for (const signal of steering.slice(0, 3)) {
-        lines.push(`        ${dim(`${signal.field}: ${truncate(signal.quote, 90)}`)}`);
+      /*
+       * Grouped by field, because the field is what a reviewer acts on: it says which part of
+       * the server is talking to the model. Taking the first three signals instead printed three
+       * lines from one noisy title and said nothing about the other four fields carrying the
+       * same planted sentence.
+       */
+      const byField = new Map<string, string[]>();
+      for (const signal of steering) byField.set(signal.field, [...(byField.get(signal.field) ?? []), signal.quote]);
+      const fields = [...byField];
+      lines.push(
+        `      ${yellow(`${fields.length} field(s) carry text read as instructions to the model, not documentation:`)}`,
+      );
+      for (const [field, quotes] of fields.slice(0, 4)) {
+        const more = quotes.length > 1 ? dim(` (+${quotes.length - 1} more here)`) : "";
+        lines.push(`        ${dim(`${elideMiddle(field, 52)}: ${truncate(quotes[0] ?? "", 72)}`)}${more}`);
       }
+      if (fields.length > 4) lines.push(`        ${dim(`+${fields.length - 4} more field(s)`)}`);
       lines.push(`        ${dim("A signal to read, not a verdict. It never fails a build.")}`);
     }
   }
