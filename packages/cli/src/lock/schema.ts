@@ -5,6 +5,7 @@
  * format; this is the parser that guards against a hand-edited or truncated file. They are kept
  * honest by a test that validates freshly generated locks against the published JSON Schema.
  */
+import { CAPABILITY_KINDS } from "@nulladrift/core";
 import { z } from "zod";
 import type { JsonValue } from "./types";
 import { LOCKFILE_VERSION } from "./types";
@@ -141,6 +142,12 @@ export const lockfileSchema = z.object({
     .object({
       ignoreMetaPrefixes: z.array(z.string()).optional(),
       allowUnreachable: z.boolean().optional(),
+      /*
+       * Validated against the real list rather than accepted as free strings: a policy with
+       * `process_exec` in it would otherwise parse, forbid nothing, and read in the diff of
+       * whoever added it as though the rule were in force.
+       */
+      deniedCapabilities: z.array(z.enum(CAPABILITY_KINDS)).optional(),
     })
     .optional(),
   /*

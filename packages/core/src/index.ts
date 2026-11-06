@@ -25,6 +25,8 @@ export { CAPABILITY_KINDS, CAPABILITY_SEVERITIES, surfaceCapabilities, toolCapab
 export type { Capability, CapabilityKind, CapabilitySeverity } from "./risk/capability";
 export { STEERING_KINDS, steeringSignals } from "./risk/steering";
 export type { SteeringKind, SteeringSignal } from "./risk/steering";
+export { capabilityViolations } from "./risk/policy";
+export type { CapabilityViolation } from "./risk/policy";
 export { newSteering } from "./risk/arrival";
 export type { ServerSteering } from "./risk/arrival";
 export { surfaceText } from "./risk/surface-text";

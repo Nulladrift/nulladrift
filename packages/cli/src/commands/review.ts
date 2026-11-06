@@ -6,14 +6,58 @@
  * ever served -- a lock that looks reviewed and matches nothing.
  */
 import { createInterface } from "node:readline/promises";
+import { steeringSignals, surfaceCapabilities, surfaceText } from "@nulladrift/core";
 import { captureAll } from "../audit";
 import { diffLockfiles } from "../diff";
 import type { Change } from "../diff/types";
 import { readLockfile, writeLockfile } from "../lock/io";
 import type { Lockfile } from "../lock/types";
 import { EXIT_CLEAN, EXIT_DRIFT, EXIT_INCOMPLETE, type ExitCode } from "../lib/exit";
-import { bold, dim, green, red, truncate, yellow } from "../lib/ui";
+import { bold, dim, elideMiddle, green, red, truncate, yellow } from "../lib/ui";
 import type { CommonOptions } from "./options";
+
+
+/**
+ * What the surface being accepted can do, and what in it addresses the model.
+ *
+ * `init` prints this at the moment a surface is first approved and `check` prints it when
+ * something arrives; between them sat the screen where a person actually says yes, which showed
+ * neither. Accepting a tool that had just gained a `command` argument read "accepts input it did
+ * not before" -- the same sentence as gaining an optional string -- and the signed record of that
+ * approval said no more than the screen did.
+ */
+function describeSurface(subject: unknown, previous: unknown): string[] {
+  if (typeof subject !== "object" || subject === null) return [];
+  const entry = subject as Parameters<typeof surfaceText>[0];
+  const lines: string[] = [];
+
+  const capabilities = surfaceCapabilities(entry.tools ?? []);
+  if (capabilities.length > 0) {
+    const worst = capabilities.some((c) => c.severity === "critical" || c.severity === "high");
+    const text = `  after accepting, this server can: ${capabilities.map((c) => c.kind).join(", ")}`;
+    lines.push(worst ? yellow(text) : dim(text));
+  }
+
+  const had = new Set(
+    (typeof previous === "object" && previous !== null
+      ? surfaceText(previous as Parameters<typeof surfaceText>[0]).flatMap((piece) => steeringSignals(piece.text, piece.field))
+      : []
+    ).map((signal) => `${signal.field}\u0000${signal.kind}\u0000${signal.quote}`),
+  );
+  const steering = surfaceText(entry)
+    .flatMap((piece) => steeringSignals(piece.text, piece.field))
+    .filter((signal) => !had.has(`${signal.field}\u0000${signal.kind}\u0000${signal.quote}`));
+
+  if (steering.length > 0) {
+    lines.push(yellow(`  ${steering.length} new passage(s) here read as instructions to the model:`));
+    const byField = new Map<string, string>();
+    for (const signal of steering) if (!byField.has(signal.field)) byField.set(signal.field, signal.quote);
+    for (const [field, quote] of [...byField].slice(0, 3)) {
+      lines.push(dim(`      ${elideMiddle(field, 52)}: ${truncate(quote, 72)}`));
+    }
+  }
+  return lines;
+}
 
 interface ReviewOptions extends CommonOptions {
   acceptAll: boolean;
@@ -64,7 +108,10 @@ export async function runReview(options: ReviewOptions): Promise<ExitCode> {
 
   try {
     for (const [serverName, serverChanges] of grouped) {
-      process.stdout.write(`\n${bold(serverName)}\n${serverChanges.map(describe).join("\n")}\n`);
+      const context = describeSurface(result.lock.subjects[serverName], committed.subjects[serverName]);
+      process.stdout.write(
+        `\n${bold(serverName)}\n${serverChanges.map(describe).join("\n")}\n${context.length > 0 ? `${context.join("\n")}\n` : ""}`,
+      );
 
       let take = options.acceptAll;
       if (readline) {
