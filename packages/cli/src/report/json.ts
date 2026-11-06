@@ -15,6 +15,11 @@ export function renderJsonReport(report: AuditReport, exitCode: ExitCode): strin
         drifted: new Set(report.changes.map((change) => change.server)).size,
         changes: report.changes.length,
         unreachable: report.unreachable.length,
+        /*
+         * Counted separately from `changes` because it is not part of the verdict. A consumer
+         * that gates on this field is gating on a regex, which is the thing this must never be.
+         */
+        steering: (report.steering ?? []).reduce((sum, server) => sum + server.signals.length, 0),
       },
       changes: report.changes.map((change) => ({
         kind: change.kind,
@@ -26,6 +31,8 @@ export function renderJsonReport(report: AuditReport, exitCode: ExitCode): strin
         after: change.after,
       })),
       unreachable: report.unreachable,
+      /** Text that began addressing the model since the lock was approved. Reported, never gated. */
+      steering: report.steering ?? [],
     },
     null,
     2,

@@ -1,11 +1,11 @@
 /** `nulladrift init` -- discover servers, capture their surface, write the lock. */
-import { steeringSignals, surfaceCapabilities } from "@nulladrift/core";
+import { steeringSignals, surfaceCapabilities, surfaceText } from "@nulladrift/core";
 import { describeSearch } from "../config/discover";
 import { lstat } from "node:fs/promises";
 import { captureAll } from "../audit";
 import { writeLockfile } from "../lock/io";
 import { EXIT_CLEAN, EXIT_INCOMPLETE, type ExitCode } from "../lib/exit";
-import { bold, dim, green, red, truncate, yellow } from "../lib/ui";
+import { bold, dim, elideMiddle, green, red, truncate, yellow } from "../lib/ui";
 import { maybeOfferTelemetry } from "./telemetry";
 import type { CommonOptions } from "./options";
 
@@ -115,15 +115,33 @@ export async function runInit(options: InitOptions): Promise<ExitCode> {
       }
     }
 
-    const steering = [
-      ...steeringSignals(entry?.instructions, "instructions"),
-      ...tools.flatMap((tool) => steeringSignals(tool.description, `${tool.name}.description`)),
-    ];
+    /*
+     * Every field a model is shown, not the two that were easiest to reach. Scanning only
+     * `description` and `instructions` covered 509 of the 2257 model-facing strings in a crawl
+     * of 56 published servers, and missed the largest of them entirely: schema property
+     * descriptions, which is how a model is told what to put in a parameter.
+     */
+    const steering = (entry ? surfaceText(entry as Parameters<typeof surfaceText>[0]) : []).flatMap((piece) =>
+      steeringSignals(piece.text, piece.field),
+    );
     if (steering.length > 0) {
-      lines.push(`      ${yellow(`${steering.length} passage(s) read as instructions to the model, not documentation:`)}`);
-      for (const signal of steering.slice(0, 3)) {
-        lines.push(`        ${dim(`${signal.field}: ${truncate(signal.quote, 90)}`)}`);
+      /*
+       * Grouped by field, because the field is what a reviewer acts on: it says which part of
+       * the server is talking to the model. Taking the first three signals instead printed three
+       * lines from one noisy title and said nothing about the other four fields carrying the
+       * same planted sentence.
+       */
+      const byField = new Map<string, string[]>();
+      for (const signal of steering) byField.set(signal.field, [...(byField.get(signal.field) ?? []), signal.quote]);
+      const fields = [...byField];
+      lines.push(
+        `      ${yellow(`${fields.length} field(s) carry text read as instructions to the model, not documentation:`)}`,
+      );
+      for (const [field, quotes] of fields.slice(0, 4)) {
+        const more = quotes.length > 1 ? dim(` (+${quotes.length - 1} more here)`) : "";
+        lines.push(`        ${dim(`${elideMiddle(field, 52)}: ${truncate(quotes[0] ?? "", 72)}`)}${more}`);
       }
+      if (fields.length > 4) lines.push(`        ${dim(`+${fields.length - 4} more field(s)`)}`);
       lines.push(`        ${dim("A signal to read, not a verdict. It never fails a build.")}`);
     }
   }

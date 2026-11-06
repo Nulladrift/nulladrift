@@ -14,6 +14,15 @@ Nothing yet.
 
 ## [0.2.0] - 2026-11-06
 
+### Fixed
+
+- **A surface too deeply nested to parse said `Maximum call stack size exceeded`.** The refusal
+  was correct -- nothing was pinned and the audit failed -- but the message described the
+  validator's recursion rather than the thing an operator has to decide about, and sent them
+  looking for a bug in this tool. It now says the declaration is nested too deeply to parse and
+  that nothing was pinned, which is the same answer canonicalization already gives past a hundred
+  levels.
+
 ### Added
 
 - **`init` says what is being approved, not just how much of it there is.** The counts told you a
@@ -48,8 +57,7 @@ Nothing yet.
   confusable letters are folded now, in both halves, and the quote shown to a reader is still cut
   from the server's own text so the substituted character remains visible. A `command` argument
   nested one object deep was also invisible, because only top-level properties were examined;
-  nested properties and array items are walked to a bounded depth, since a schema is
-  attacker-supplied and need not terminate.
+  nested properties and array items are walked too, under a bound described below.
 
   Scanning 468 tools from 56 servers on the public registry corrected two more rules in the other
   direction: `location_code` was reported as arbitrary code execution at CRITICAL, and
@@ -59,6 +67,44 @@ Nothing yet.
   reference servers): **zero steering signals, zero capability false positives.** Three rules were
   narrowed to get there -- `copy_file(source, destination)` was being called code evaluation at
   CRITICAL, and `browser_select_option` a database.
+
+- **The steering scan reads every field a model is shown, not the two easiest to reach.** It
+  began by reading `tool.description` and `instructions`. Against the stored crawl of 56
+  published servers that is 509 of 2993 model-facing strings, and it missed the largest field
+  entirely: `inputSchema.*.description`, 1311 of them, which is how a model is told what to put
+  in a parameter and therefore text it acts on. Moving the identical sentence from `description`
+  into `properties.path.description` produced no finding at all.
+
+  A check that reads a subset of the places text reaches the model is not a weaker version of the
+  control; against anybody who has read the source it is none of it. Titles, both schemas, prompt
+  arguments, resources and templates are all read now, each finding carrying a field path precise
+  enough to go and look at.
+
+  **The bound is total work, not depth.** A depth ceiling is itself an evasion window, since text
+  one level below it still reaches the model: a limit of eight is a published instruction to nest
+  nine deep. The deepest description in the crawl sits at depth 4. The walk is iterative, so a
+  schema nested a million deep exhausts a budget rather than the stack, and a self-referencing
+  schema terminates.
+
+  Widening coverage nearly sixfold moved the corpus from 2 signals to 3 -- all three verbose
+  model-addressing prose from real servers rather than attacks.
+
+- **`check` says what newly-arrived text says, not only that it changed.** The pin-time scan
+  covers the surface as it was approved and nothing after it, which is the wrong half: the rug
+  pull (CVE-2025-54136) is defined by being clean at approval and changing afterwards. `check`
+  already failed on that change, but it reported `tool.description.changed` and left a reviewer
+  to notice unaided that the new text is an instruction. Worse, poison planted in a schema
+  property surfaced only as `input schema changed`, with nothing quoted at all.
+
+  Passages that began addressing the model since the lock was approved are now named, with their
+  field, in the human report, in `--json`, and in the pull request comment when one is already
+  being posted.
+
+  It is a difference and not a scan. Signals present when the lock was approved were shown at
+  `init` and accepted by somebody; repeating them every build is how a signal becomes noise that
+  gets muted. **The exit code is computed exactly as before.** There is no flag that turns this
+  into a gate, it raises no SARIF result -- a code-scanning alert is a gate wherever alerts must
+  be zero -- and it never opens a pull request comment on its own.
 
 ## [0.1.6] - 2026-11-06
 
