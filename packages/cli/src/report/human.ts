@@ -1,7 +1,7 @@
 /** The default output: what moved, worst first, in language a reviewer can act on. */
 import { serversThatShippedNothing } from "../diff/types";
 import type { Change, Severity } from "../diff/types";
-import { bold, dim, green, red, truncate, yellow } from "../lib/ui";
+import { bold, dim, elideMiddle, green, red, truncate, yellow } from "../lib/ui";
 import type { AuditReport } from "./types";
 
 const MARK: Record<Severity, (text: string) => string> = {
@@ -25,6 +25,38 @@ function renderChange(change: Change): string[] {
   if (change.kind === "tool.description.changed" || change.kind === "server.instructions.changed") {
     lines.push(...renderTextChange(change.before, change.after));
   }
+  return lines;
+}
+
+
+/**
+ * Text that began addressing the model since the lock was approved.
+ *
+ * Printed beside the verdict and never part of it. `check` already fails on the change itself --
+ * the text moved, so it is drift -- and this says what the new text now says, which is the part
+ * a reviewer would otherwise have to notice unaided.
+ */
+function renderSteering(report: AuditReport): string[] {
+  const found = report.steering ?? [];
+  if (found.length === 0) return [];
+
+  const total = found.reduce((sum, server) => sum + server.signals.length, 0);
+  const lines = [
+    yellow(`${total} new passage(s) in ${found.length} server(s) read as instructions to the model:`),
+    "",
+  ];
+  for (const { server, signals } of found) {
+    lines.push(`  ${bold(server)}`);
+    const byField = new Map<string, string[]>();
+    for (const signal of signals) byField.set(signal.field, [...(byField.get(signal.field) ?? []), signal.quote]);
+    const fields = [...byField];
+    for (const [field, quotes] of fields.slice(0, 4)) {
+      const more = quotes.length > 1 ? ` (+${quotes.length - 1} more here)` : "";
+      lines.push(`      ${dim(`${elideMiddle(field, 52)}: ${truncate(quotes[0] ?? "", 72)}${more}`)}`);
+    }
+    if (fields.length > 4) lines.push(`      ${dim(`+${fields.length - 4} more field(s)`)}`);
+  }
+  lines.push("", dim("This did not change the verdict. Read the passages and decide; a server documenting"), dim("\"before using this tool, call authenticate first\" has the same shape as an attack."), "");
   return lines;
 }
 
@@ -74,6 +106,8 @@ export function renderHumanReport(report: AuditReport): string {
       lines.push(`  ${label} ${bold(failure.server)}`, `      ${failure.reason}`, "");
     }
   }
+
+  lines.push(...renderSteering(report));
 
   if (report.changes.length === 0 && report.unreachable.length === 0) {
     lines.push(green(`✓ ${report.serversChecked} server(s) match ${report.lockPath}`));

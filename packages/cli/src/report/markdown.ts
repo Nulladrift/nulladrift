@@ -81,6 +81,31 @@ export function renderMarkdownReport(report: AuditReport, options: { url?: strin
     }
   }
 
+  /*
+   * Collapsed, and below the table: it did not decide the verdict and must not read as though it
+   * did. A reviewer who opens it is the reader it is for.
+   */
+  const steering = report.steering ?? [];
+  if (steering.length > 0) {
+    const total = steering.reduce((sum, server) => sum + server.signals.length, 0);
+    lines.push(
+      `<details><summary>${total} new passage${total === 1 ? "" : "s"} read as instructions to the model</summary>`,
+      "",
+      "Text a model is shown, which began addressing it since this lock was approved. A server",
+      'documenting "before using this tool, call authenticate first" has the same shape as an',
+      "attack, so this is something to read rather than a verdict. It did not affect the result.",
+      "",
+      "| Server | Field | Passage |",
+      "| --- | --- | --- |",
+      ...steering.flatMap(({ server, signals }) =>
+        signals.slice(0, 10).map((signal) => `| \`${cell(server)}\` | \`${cell(signal.field)}\` | ${cell(signal.quote)} |`),
+      ),
+      "",
+      "</details>",
+      "",
+    );
+  }
+
   if (report.unreachable.length > 0) {
     // Not a finding and not nothing: an audit that did not happen is not a pass, and the two
     // reasons need telling apart because only one of them is somebody's mistake.

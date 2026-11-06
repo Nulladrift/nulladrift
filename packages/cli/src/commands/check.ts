@@ -1,4 +1,5 @@
 /** `nulladrift check` -- re-capture, diff against the lock, fail on drift. */
+import { newSteering } from "@nulladrift/core";
 import { dim, yellow } from "../lib/ui";
 import { captureAll } from "../audit";
 import { diffLockfiles } from "../diff";
@@ -29,6 +30,12 @@ export async function buildReport(options: CommonOptions): Promise<{ report: Aud
 
   const report: AuditReport = {
     changes,
+    /*
+     * Reported, never gated. The exit code below is computed from drift and unreachable servers
+     * exactly as before: a pattern that fires on "before using this tool, call authenticate
+     * first" must not be able to fail somebody's build.
+     */
+    steering: newSteering(committed, result.lock),
     unreachable: result.unreachable,
     serversChecked: Object.keys(result.lock.subjects).length,
     lockPath: options.lockPath,

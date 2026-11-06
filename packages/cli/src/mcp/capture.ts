@@ -14,6 +14,24 @@ import { UnreachableServerError } from "./types";
  */
 const FRESH = { cacheMode: "bypass" } as const;
 
+/**
+ * `Maximum call stack size exceeded` is what a server gets told it did wrong when it declares a
+ * schema nested tens of thousands deep: the validator recurses over the declaration before any of
+ * this code sees it. The refusal is correct -- nothing is pinned and the audit fails -- but the
+ * message describes an implementation detail of the parser rather than the thing the operator has
+ * to decide about, and sends them looking for a bug here.
+ *
+ * Canonicalization already refuses past a hundred levels in words that say so. This gives the
+ * same answer for a surface that does not survive being parsed at all.
+ */
+function describeListFailure(error: unknown): string {
+  const message = (error as Error)?.message ?? String(error);
+  if (error instanceof RangeError || /maximum call stack|stack size exceeded|too much recursion/i.test(message)) {
+    return "the declared surface is nested too deeply to parse. Nothing was pinned. A legitimate schema is a few levels deep; this one is deep enough to exhaust the parser, which is a property of the declaration and not of your project.";
+  }
+  return message;
+}
+
 async function listOrEmpty<T>(label: string, serverName: string, fetchList: () => Promise<T[]>): Promise<T[]> {
   try {
     return await fetchList();
@@ -23,7 +41,7 @@ async function listOrEmpty<T>(label: string, serverName: string, fetchList: () =
      * a surface to pin, so this is an audit failure rather than an empty section. Capability it
      * never declared returns an empty list from the SDK and never reaches here.
      */
-    throw new UnreachableServerError(serverName, `${label} failed: ${(error as Error).message}`, error);
+    throw new UnreachableServerError(serverName, `${label} failed: ${describeListFailure(error)}`, error);
   }
 }
 

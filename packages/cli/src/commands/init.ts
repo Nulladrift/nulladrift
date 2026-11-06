@@ -5,7 +5,7 @@ import { lstat } from "node:fs/promises";
 import { captureAll } from "../audit";
 import { writeLockfile } from "../lock/io";
 import { EXIT_CLEAN, EXIT_INCOMPLETE, type ExitCode } from "../lib/exit";
-import { bold, dim, green, red, truncate, yellow } from "../lib/ui";
+import { bold, dim, elideMiddle, green, red, truncate, yellow } from "../lib/ui";
 import { maybeOfferTelemetry } from "./telemetry";
 import type { CommonOptions } from "./options";
 
@@ -28,18 +28,6 @@ async function exists(path: string): Promise<boolean> {
   } catch {
     return false;
   }
-}
-
-/*
- * A field path names a place to go and look, so both ends carry information: the head says which
- * tool and which argument, the tail says which leaf. Text buried twenty levels down produced a
- * path that wrapped over two lines and pushed the quote off the screen entirely, which is a way
- * of hiding in the report rather than in the schema.
- */
-function elideMiddle(path: string, limit: number): string {
-  if (path.length <= limit) return path;
-  const keep = Math.floor((limit - 1) / 2);
-  return `${path.slice(0, keep)}\u2026${path.slice(-keep)}`;
 }
 
 export async function runInit(options: InitOptions): Promise<ExitCode> {
