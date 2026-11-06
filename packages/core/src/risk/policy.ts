@@ -17,6 +17,7 @@
  */
 import { toolCapabilities, type CapabilityKind, type CapabilitySeverity } from "./capability";
 import type { Lockfile } from "../lock/types";
+import { objectOr, objectsIn, stringOr } from "./untrusted";
 
 export interface CapabilityViolation {
   server: string;
@@ -39,11 +40,11 @@ export function capabilityViolations(lock: Lockfile, denied: readonly Capability
   const forbidden = new Set<string>(denied);
   const found: CapabilityViolation[] = [];
 
-  for (const [server, subject] of Object.entries(lock.subjects ?? {})) {
-    for (const tool of (subject as { tools?: Array<{ name?: string }> }).tools ?? []) {
+  for (const [server, subject] of Object.entries(lock?.subjects ?? {})) {
+    for (const tool of objectsIn(objectOr(subject).tools)) {
       for (const capability of toolCapabilities(tool)) {
         if (!forbidden.has(capability.kind)) continue;
-        found.push({ server, tool: tool.name ?? "?", kind: capability.kind, severity: capability.severity, evidence: capability.evidence });
+        found.push({ server, tool: stringOr(tool.name) ?? "?", kind: capability.kind, severity: capability.severity, evidence: capability.evidence });
       }
     }
   }

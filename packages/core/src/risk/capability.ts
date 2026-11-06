@@ -17,6 +17,8 @@
  */
 
 /** Ordered worst-first; the order is the comparison. */
+import { objectOr, objectsIn, stringOr } from "./untrusted";
+
 export const CAPABILITY_SEVERITIES = ["critical", "high", "medium", "low"] as const;
 export type CapabilitySeverity = (typeof CAPABILITY_SEVERITIES)[number];
 
@@ -124,9 +126,11 @@ function argumentNames(inputSchema: unknown, depth = 0): string[] {
  * The capabilities one tool declares. Worst first, one entry per kind: a tool matching
  * `process-exec` by both its name and an argument is not twice as dangerous.
  */
-export function toolCapabilities(tool: { name?: string; inputSchema?: unknown }): Capability[] {
-  const name = normalize(tool.name ?? "");
-  const args = argumentNames(tool.inputSchema).map((argument) => [argument, normalize(argument)] as const);
+export function toolCapabilities(tool: { name?: string; inputSchema?: unknown } | null | undefined): Capability[] {
+  // The argument is whatever was in the JSON; see risk/untrusted.
+  const subject = objectOr(tool);
+  const name = normalize(stringOr(subject.name) ?? "");
+  const args = argumentNames(subject.inputSchema).map((argument) => [argument, normalize(argument)] as const);
   const found = new Map<CapabilityKind, Capability>();
 
   for (const rule of RULES) {
@@ -145,13 +149,16 @@ export function toolCapabilities(tool: { name?: string; inputSchema?: unknown })
 }
 
 /** Every capability a set of tools declares between them, with the tools that declare each. */
-export function surfaceCapabilities(tools: ReadonlyArray<{ name?: string; inputSchema?: unknown }>): Array<Capability & { tools: string[] }> {
+export function surfaceCapabilities(
+  tools: ReadonlyArray<{ name?: string; inputSchema?: unknown }> | null | undefined,
+): Array<Capability & { tools: string[] }> {
   const byKind = new Map<CapabilityKind, Capability & { tools: string[] }>();
-  for (const tool of tools) {
+  for (const tool of objectsIn(tools)) {
+    const label = stringOr(tool.name) ?? "?";
     for (const capability of toolCapabilities(tool)) {
       const existing = byKind.get(capability.kind);
-      if (existing) existing.tools.push(tool.name ?? "?");
-      else byKind.set(capability.kind, { ...capability, tools: [tool.name ?? "?"] });
+      if (existing) existing.tools.push(label);
+      else byKind.set(capability.kind, { ...capability, tools: [label] });
     }
   }
   return [...byKind.values()].sort(
