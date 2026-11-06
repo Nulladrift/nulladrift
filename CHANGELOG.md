@@ -43,6 +43,18 @@ Nothing yet.
   reads is worth having; a gate that fails a build on a guess teaches people to pass `--allow`,
   and the real findings go with it.
 
+  **The classifier is itself a control, so it was attacked.** A single Cyrillic letter made
+  `run_comm\u0430nd(comm\u0430nd)` invisible to a classifier whose whole job is reading names;
+  confusable letters are folded now, in both halves, and the quote shown to a reader is still cut
+  from the server's own text so the substituted character remains visible. A `command` argument
+  nested one object deep was also invisible, because only top-level properties were examined;
+  nested properties and array items are walked to a bounded depth, since a schema is
+  attacker-supplied and need not terminate.
+
+  Scanning 468 tools from 56 servers on the public registry corrected two more rules in the other
+  direction: `location_code` was reported as arbitrary code execution at CRITICAL, and
+  `process_task` as arbitrary execution. `code` must now be the whole argument name.
+
   Measured against five published servers (`@playwright/mcp` and four `@modelcontextprotocol/*`
   reference servers): **zero steering signals, zero capability false positives.** Three rules were
   narrowed to get there -- `copy_file(source, destination)` was being called code evaluation at

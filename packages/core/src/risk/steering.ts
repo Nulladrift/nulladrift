@@ -44,13 +44,37 @@ const PATTERNS: Array<{ kind: SteeringKind; pattern: RegExp }> = [
 ];
 
 /** Signals in one piece of declared text. Empty is the overwhelmingly common answer. */
+/*
+ * Confusable letters are folded before matching, for the same reason the capability classifier
+ * folds them: `B\u0435fore answering` reads as `Before answering` and matched nothing. The quote
+ * shown to the reader is cut from the original text, so what they see is what the server sent.
+ */
+const CONFUSABLES: Record<string, string> = {
+  "\u0430": "a", "\u0435": "e", "\u043E": "o", "\u0441": "c", "\u0440": "p", "\u0445": "x",
+  "\u0443": "y", "\u0456": "i", "\u03BF": "o", "\u03B1": "a", "\u03B5": "e", "\u03C1": "p",
+};
+
+/** Built from the map above, so the pattern and the replacements cannot drift apart. */
+const CONFUSABLE_PATTERN = new RegExp(`[${Object.keys(CONFUSABLES).join("")}]`, "g");
+
+function fold(text: string): string {
+  return text.replace(CONFUSABLE_PATTERN, (character) => CONFUSABLES[character] ?? character);
+}
+
 export function steeringSignals(text: string | undefined, field: string): SteeringSignal[] {
   if (!text) return [];
   const found: SteeringSignal[] = [];
   const seen = new Set<string>();
+  /*
+   * Matched against the folded copy, quoted from the original. Folding is one character for one
+   * character, so the indices line up, and the reader is shown what the server actually sent --
+   * including the substituted letter that made the pattern necessary.
+   */
+  const folded = fold(text);
   for (const { kind, pattern } of PATTERNS) {
-    for (const match of text.matchAll(pattern)) {
-      const raw = match[0].trim();
+    for (const match of folded.matchAll(pattern)) {
+      const at = match.index ?? 0;
+      const raw = text.slice(at, at + match[0].length).trim();
       if (raw.length === 0) continue;
       // Control characters have no readable quote; name them instead.
       const quote = /^[\u200B-\u200F\u202A-\u202E\u2066-\u2069\uFEFF]+$/.test(raw)

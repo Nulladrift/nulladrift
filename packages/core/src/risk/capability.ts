@@ -56,11 +56,13 @@ interface Rule {
  * the real findings need.
  */
 const RULES: Rule[] = [
-  { kind: "process-exec", severity: "critical", name: /(^|_)(exec|execute|spawn|shell|bash|sh|cmd|command|run_command|terminal|process)(_|$)/, arg: /(^|_)(command|cmd|argv|shell|exec|script)(_|$)/ },
+  { kind: "process-exec", severity: "critical", name: /(^|_)(exec|execute|spawn|shell|bash|sh|cmd|command|run_command|terminal|subprocess)(_|$)/, arg: /(^|_)(command|cmd|argv|shell|exec|script)(_|$)/ },
   // `source` is deliberately absent: in `copy_file(source, destination)` it is a path, and
   // labelling a file copy as arbitrary code execution at CRITICAL is the false positive that
-  // teaches people to stop reading the line.
-  { kind: "code-eval", severity: "critical", name: /(^|_)(eval|evaluate|run_code|exec_code|interpret|compile)(_|$)/, arg: /(^|_)(code|source_code|expression|program|snippet)(_|$)/ },
+  // teaches people to stop reading the line. `code` has to be the whole argument name for the
+  // same reason -- a crawl of 468 published tools flagged `location_code` as arbitrary code
+  // execution, and `country_code`, `status_code` and `zip_code` are all waiting behind it.
+  { kind: "code-eval", severity: "critical", name: /(^|_)(eval|evaluate|run_code|exec_code|interpret|compile)(_|$)/, arg: /^code$|(^|_)(source_code|code_to_run|js_code|python_code|expression|program|snippet)(_|$)/ },
   { kind: "credential-access", severity: "critical", name: /(^|_)(secret|secrets|credential|credentials|token|keychain|vault|password)(_|$)/, arg: /(^|_)(secret|credential|password|private_key|api_key|access_token)(_|$)/ },
   { kind: "file-write", severity: "high", name: /(^|_)(write|create_file|put_file|save|delete|remove|unlink|rename|move|copy|chmod|mkdir|rmdir|edit)(_|$)/, arg: /(^|_)(contents|content|data|destination|dest_path|target_path)(_|$)/ },
   { kind: "network-egress", severity: "high", name: /(^|_)(fetch|request|http|curl|download|upload|post|webhook|navigate|browse|send)(_|$)/, arg: /(^|_)(url|uri|endpoint|host|hostname|webhook|callback)(_|$)/ },
@@ -74,16 +76,48 @@ const RULES: Rule[] = [
   { kind: "file-read", severity: "low", name: /(^|_)(read|read_file|cat|open|load|list_directory|ls|glob|search_files)(_|$)/, arg: /(^|_)(path|file|filename|filepath|directory|dir)(_|$)/ },
 ];
 
+/*
+ * Cyrillic and Greek letters that are drawn like Latin ones. `run_comm\u0430nd` reads as
+ * `run_command` to a person and matched nothing at all, so a single substituted character
+ * bought a tool complete invisibility to a classifier whose whole job is reading names.
+ * Folding them is the difference between a check and a formality.
+ */
+const CONFUSABLES: Record<string, string> = {
+  "\u0430": "a", "\u0435": "e", "\u043E": "o", "\u0441": "c", "\u0440": "p", "\u0445": "x",
+  "\u0443": "y", "\u0456": "i", "\u0458": "j", "\u04BB": "h", "\u0501": "d", "\u051B": "q",
+  "\u03BF": "o", "\u03B1": "a", "\u03B5": "e", "\u03BD": "v", "\u03C1": "p", "\u03C5": "u",
+  "\u0131": "i", "\u1E9E": "s",
+};
+
+/** Built from the map above, so the pattern and the replacements cannot drift apart. */
+const CONFUSABLE_PATTERN = new RegExp(`[${Object.keys(CONFUSABLES).join("")}]`, "g");
+
 /** `browser.take-screenshot` and `browser_take_screenshot` are the same shape. */
 function normalize(identifier: string): string {
-  return identifier.toLowerCase().replace(/[-.\s/]+/g, "_");
+  return identifier
+    .toLowerCase()
+    .replace(CONFUSABLE_PATTERN, (character) => CONFUSABLES[character] ?? character)
+    .replace(/[-.\s/]+/g, "_");
 }
 
-function argumentNames(inputSchema: unknown): string[] {
-  if (typeof inputSchema !== "object" || inputSchema === null) return [];
-  const properties = (inputSchema as { properties?: unknown }).properties;
-  if (typeof properties !== "object" || properties === null) return [];
-  return Object.keys(properties as Record<string, unknown>);
+/*
+ * Nested properties count. `tool({ opts: { command } })` is the same capability as
+ * `tool({ command })`, and only the top level was examined, so one wrapping object hid it.
+ * Depth is bounded because a schema is attacker-supplied and need not terminate.
+ */
+function argumentNames(inputSchema: unknown, depth = 0): string[] {
+  if (depth > 6 || typeof inputSchema !== "object" || inputSchema === null) return [];
+  const node = inputSchema as { properties?: unknown; items?: unknown };
+  const names: string[] = [];
+  const properties = node.properties;
+  if (typeof properties === "object" && properties !== null) {
+    for (const [name, child] of Object.entries(properties as Record<string, unknown>)) {
+      names.push(name);
+      names.push(...argumentNames(child, depth + 1));
+    }
+  }
+  if (node.items !== undefined) names.push(...argumentNames(node.items, depth + 1));
+  return names;
 }
 
 /**
