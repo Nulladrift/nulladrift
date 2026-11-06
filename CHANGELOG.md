@@ -12,6 +12,27 @@ telemetry). Renaming a change kind breaks every consumer that matched on it.
 
 Nothing yet.
 
+## [0.3.2] - 2026-11-06
+
+### Fixed
+
+- **A schema validation failure is said once instead of dumped.** When a server's reply does not
+  match the specification the SDK raises the validator's own issue array, and that array reached
+  the operator verbatim: forty lines of `code`, `values` and `path` for what is usually one
+  mistake repeated once per tool. It buried the finding, buried every other server in the report
+  under it, and read like a crash in this tool rather than a defect in the server being audited.
+
+  `@modelcontextprotocol/server-filesystem@2025.8.21` is a real example -- every tool declares an
+  `inputSchema` whose `type` is not `"object"`, which is thirteen identical issues. It now reads:
+
+  > this server's reply does not match the MCP specification, so nothing was pinned for it.
+  > `tools[0].inputSchema.type`: Invalid input: expected "object" (and 12 more like it). This is a
+  > defect in the server, not in your project; the usual cause is an old release predating a
+  > tightening of the schema.
+
+  Identical issues are grouped, the field path stays precise enough to go and look at, and
+  anything the summariser cannot parse falls through to the original message unchanged.
+
 ## [0.3.1] - 2026-11-06
 
 ### Fixed
