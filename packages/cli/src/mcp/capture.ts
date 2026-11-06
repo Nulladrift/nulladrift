@@ -24,10 +24,60 @@ const FRESH = { cacheMode: "bypass" } as const;
  * Canonicalization already refuses past a hundred levels in words that say so. This gives the
  * same answer for a surface that does not survive being parsed at all.
  */
-function describeListFailure(error: unknown): string {
+/**
+ * A schema validation failure, said in one line instead of dumped.
+ *
+ * When a server's reply does not match the specification the SDK raises the validator's own
+ * issue array, and that array reaches the operator verbatim: forty lines of `code`, `values` and
+ * `path` for what is usually one mistake repeated once per tool. It buries the finding, it buries
+ * every other server in the report under it, and it reads like a crash in this tool rather than
+ * a defect in the server being audited.
+ *
+ * `@modelcontextprotocol/server-filesystem@2025.8.21` is a real example: every tool declares an
+ * `inputSchema` whose `type` is not `"object"`, which is fourteen identical issues.
+ */
+function describeValidationIssues(message: string): string | undefined {
+  const start = message.indexOf("[");
+  if (start < 0) return undefined;
+
+  let issues: Array<{ path?: unknown[]; message?: string }>;
+  try {
+    issues = JSON.parse(message.slice(start)) as Array<{ path?: unknown[]; message?: string }>;
+  } catch {
+    return undefined;
+  }
+  if (!Array.isArray(issues) || issues.length === 0) return undefined;
+
+  const where = (issue: { path?: unknown[] }): string =>
+    (issue.path ?? [])
+      .map((part) => (typeof part === "number" ? `[${part}]` : `.${String(part)}`))
+      .join("")
+      .replace(/^\./, "");
+
+  // Grouped, because one malformed field per tool is one defect reported fourteen times.
+  const byMessage = new Map<string, string[]>();
+  for (const issue of issues) {
+    const text = issue.message ?? "did not validate";
+    byMessage.set(text, [...(byMessage.get(text) ?? []), where(issue)]);
+  }
+
+  const lines = [...byMessage].slice(0, 3).map(([text, paths]) => {
+    const rest = paths.length > 1 ? ` (and ${paths.length - 1} more like it)` : "";
+    return `${paths[0]}: ${text}${rest}`;
+  });
+  const more = byMessage.size > 3 ? ` +${byMessage.size - 3} other problem(s)` : "";
+
+  return `this server's reply does not match the MCP specification, so nothing was pinned for it. ${lines.join("; ")}${more}. This is a defect in the server, not in your project; the usual cause is an old release predating a tightening of the schema.`;
+}
+
+export function describeListFailure(error: unknown): string {
   const message = (error as Error)?.message ?? String(error);
   if (error instanceof RangeError || /maximum call stack|stack size exceeded|too much recursion/i.test(message)) {
     return "the declared surface is nested too deeply to parse. Nothing was pinned. A legitimate schema is a few levels deep; this one is deep enough to exhaust the parser, which is a property of the declaration and not of your project.";
+  }
+  if (/invalid result for|invalid literal|invalid_value|invalid_type/i.test(message)) {
+    const described = describeValidationIssues(message);
+    if (described) return described;
   }
   return message;
 }
