@@ -112,6 +112,13 @@ export function sanitizeUrl(raw: string): string {
     const url = new URL(raw);
     url.search = "";
     url.hash = "";
+    /*
+     * `https://alice:s3cr3t@host/mcp` survived this untouched, because `toString()` keeps
+     * userinfo. The query string was stripped on the grounds that credentials usually sit there;
+     * userinfo is the one place a credential sits by definition.
+     */
+    url.username = "";
+    url.password = "";
     return url.toString();
   } catch {
     // Not a parseable URL. Keep it as configured so the mismatch is visible rather than silent.

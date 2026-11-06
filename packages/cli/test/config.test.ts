@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { sanitizeUrl } from "@nulladrift/core";
 import { describeSearch, discoverServers, portablePath } from "../src/config/discover";
 import { detectMapKey, parseClaudeJson, parseServerMap, readEnvFile } from "../src/config/parsers";
 
@@ -343,5 +344,70 @@ describe("discovery reports every path it looked at", () => {
     } finally {
       await rm(project, { recursive: true, force: true });
     }
+  });
+});
+
+/*
+ * `mcp.lock` is a file the README tells you to commit. Environment values and header values were
+ * never written to it, only their names, and a URL lost its query and fragment -- all on the
+ * stated grounds that credentials usually sit there.
+ *
+ * `args` were written expanded, which undid it. A config keeps a secret out of the repository by
+ * writing `--token=${API_KEY}`; the lockfile then put the expanded value straight back into git,
+ * past the exact protection the placeholder exists to provide. Found by planting canaries in the
+ * environment and grepping the lockfile for them.
+ */
+describe("a committed lockfile does not carry the credentials used to reach a server", () => {
+  const pin = async (config: unknown, env: Record<string, string>) => {
+    const project = await mkdtemp(join(tmpdir(), "mcp-secret-"));
+    const saved = { ...process.env };
+    Object.assign(process.env, env);
+    try {
+      await writeFile(join(project, ".mcp.json"), JSON.stringify(config), "utf8");
+      const found = await discoverServers(project);
+      return lockTransport(found.servers[0]!);
+    } finally {
+      for (const key of Object.keys(env)) delete process.env[key];
+      Object.assign(process.env, saved);
+      await rm(project, { recursive: true, force: true });
+    }
+  };
+
+  it("writes the placeholder an author chose, not the value it expanded to", async () => {
+    const locked = await pin(
+      { mcpServers: { s: { command: "node", args: ["server.js", "--token=${API_KEY}", "${BARE}"] } } },
+      { API_KEY: "sk_live_CANARY", BARE: "CANARY_BARE" },
+    );
+    expect(JSON.stringify(locked)).not.toContain("CANARY");
+    expect(locked).toMatchObject({ args: ["server.js", "--token=${API_KEY}", "${BARE}"] });
+  });
+
+  it("writes an unsubstituted command the same way", async () => {
+    const locked = await pin({ mcpServers: { s: { command: "${RUNNER}", args: [] } } }, { RUNNER: "node" });
+    expect(locked).toMatchObject({ command: "${RUNNER}" });
+  });
+
+  it("leaves a config with no placeholders exactly as it is", async () => {
+    const locked = await pin({ mcpServers: { s: { command: "node", args: ["server.js", "--verbose"] } } }, {});
+    expect(locked).toMatchObject({ command: "node", args: ["server.js", "--verbose"] });
+  });
+
+  it("records environment and header names, never their values", async () => {
+    const locked = await pin(
+      { mcpServers: { s: { command: "node", args: [], env: { API_KEY: "${API_KEY}", PLAIN: "CANARY_PLAIN" } } } },
+      { API_KEY: "sk_live_CANARY" },
+    );
+    expect(JSON.stringify(locked)).not.toContain("CANARY");
+    expect(locked).toMatchObject({ envKeys: ["API_KEY", "PLAIN"] });
+  });
+
+  it("strips userinfo from a URL, which is where a credential sits by definition", () => {
+    expect(sanitizeUrl("https://alice:s3cr3t@mcp.example.com/mcp/x?q=1#f")).toBe("https://mcp.example.com/mcp/x");
+    expect(sanitizeUrl("https://:onlypass@host/mcp")).toBe("https://host/mcp");
+  });
+
+  it("leaves a URL with no credentials alone apart from query and fragment", () => {
+    expect(sanitizeUrl("https://mcp.example.com/mcp?token=abc#frag")).toBe("https://mcp.example.com/mcp");
+    expect(sanitizeUrl("not-a-url-at-all")).toBe("not-a-url-at-all");
   });
 });

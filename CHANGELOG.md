@@ -12,6 +12,22 @@ telemetry). Renaming a change kind breaks every consumer that matched on it.
 
 Nothing yet.
 
+## [0.1.6] - 2026-11-06
+
+### Security
+
+- **A credential passed to a server in `args` no longer ends up in the committed lockfile.**
+  Environment values and header values were never written down, only their names, and a URL lost
+  its query and fragment, all on the stated grounds that credentials usually sit there. `args`
+  were written expanded, which undid it: a config keeps a secret out of the repository by writing
+  `--token=${API_KEY}`, and `mcp.lock` -- the file you are told to commit -- then carried the
+  expanded value. The configured form is written down now, so the lockfile holds `${API_KEY}`,
+  the thing its author chose to put in version control. A config that changes which variable it
+  reads is still drift and is still visible.
+- **`sanitizeUrl` strips userinfo.** `https://alice:s3cr3t@host/mcp` survived untouched, because
+  `URL.toString()` keeps it. The query string was already being stripped on the grounds that
+  credentials usually sit there; userinfo is where one sits by definition.
+
 ## [0.1.5] - 2026-11-05
 
 No code changes from 0.1.4.
