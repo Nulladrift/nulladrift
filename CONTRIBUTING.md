@@ -86,6 +86,33 @@ the check, not a second person.
 Releasing is: open a pull request from `develop` to `main`, merge it, then tag `main`. The tag is
 what publishes, and the workflow refuses a tag that disagrees with either package's version.
 
+## Releases are weekly, and you do not bump the version
+
+**Do not touch `package.json` versions or `src/lib/version.ts` in a feature branch.** Write what
+changed under `## [Unreleased]` in `CHANGELOG.md` and stop there.
+
+On Thursday the `release-pr` workflow reads those notes, works out whether they amount to a minor
+or a patch, writes the bump and the dated changelog entry onto a `release/x.y.z` branch, and opens
+a pull request. A week with nothing under `## [Unreleased]` opens nothing.
+
+This exists because the version used to be bumped in whichever branch happened to be open, and
+twelve versions reached the registry in fourteen hours. Two of them were ten minutes apart, for
+work that was one change; nobody could have installed the first, and npm never lets a version
+number be reused. The author of one change cannot see what else is going out beside it, which is
+the thing a version number is supposed to describe.
+
+Nothing past the pull request is automatic. Merging it is a person reading what is about to be
+published, which is the whole point of batching -- an auto-merge would hand back exactly what the
+cadence was meant to buy.
+
+**A fix that disables or bypasses a control does not wait for Thursday.** Run `release-pr` by
+hand, or cut the release the usual way. A week is the wrong answer for something an attacker can
+switch off; it is the right answer for everything else.
+
+It follows that this repository's own `minimumReleaseAge` policy and its practice now agree. A
+tool whose subject is dependency drift should not be installing packages nobody has looked at,
+including its own.
+
 ## Before you push
 
 ```sh
