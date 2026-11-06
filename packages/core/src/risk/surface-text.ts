@@ -12,6 +12,8 @@
  * reads the source it is none of it.
  */
 
+import { objectsIn, stringOr } from "./untrusted";
+
 export interface SurfaceText {
   /** Where it was found, precise enough to go and look: `read_file.inputSchema.path`. */
   field: string;
@@ -63,45 +65,45 @@ interface Describable {
 }
 
 /** Every model-facing string in one locked server, with the field it came from. */
-export function surfaceText(subject: {
+export function surfaceText(subject: ({
   instructions?: string;
   tools?: ReadonlyArray<Describable & { inputSchema?: unknown; outputSchema?: unknown }>;
   prompts?: ReadonlyArray<Describable & { arguments?: ReadonlyArray<Describable> }>;
   resources?: ReadonlyArray<Describable & { uri?: string }>;
   resourceTemplates?: ReadonlyArray<Describable & { uriTemplate?: string }>;
-}): SurfaceText[] {
+}) | null | undefined): SurfaceText[] {
   const out: SurfaceText[] = [];
   const push = (field: string, text: unknown): void => {
     if (typeof text === "string" && text.length > 0) out.push({ field, text });
   };
 
-  push("instructions", subject.instructions);
+  push("instructions", subject?.instructions);
 
-  for (const tool of subject.tools ?? []) {
-    const where = tool.name ?? "?";
+  for (const tool of objectsIn(subject?.tools)) {
+    const where = stringOr(tool.name) ?? "?";
     push(`${where}.title`, tool.title);
     push(`${where}.description`, tool.description);
     schemaText(tool.inputSchema, `${where}.inputSchema`, out);
     schemaText(tool.outputSchema, `${where}.outputSchema`, out);
   }
 
-  for (const prompt of subject.prompts ?? []) {
-    const where = prompt.name ?? "?";
+  for (const prompt of objectsIn(subject?.prompts)) {
+    const where = stringOr(prompt.name) ?? "?";
     push(`prompt:${where}.title`, prompt.title);
     push(`prompt:${where}.description`, prompt.description);
-    for (const argument of prompt.arguments ?? []) {
-      push(`prompt:${where}.${argument.name ?? "?"}`, argument.description);
+    for (const argument of objectsIn(prompt.arguments)) {
+      push(`prompt:${where}.${stringOr(argument.name) ?? "?"}`, argument.description);
     }
   }
 
-  for (const resource of subject.resources ?? []) {
-    const where = resource.name ?? resource.uri ?? "?";
+  for (const resource of objectsIn(subject?.resources)) {
+    const where = stringOr(resource.name) ?? stringOr(resource.uri) ?? "?";
     push(`resource:${where}.title`, resource.title);
     push(`resource:${where}.description`, resource.description);
   }
 
-  for (const template of subject.resourceTemplates ?? []) {
-    const where = template.name ?? template.uriTemplate ?? "?";
+  for (const template of objectsIn(subject?.resourceTemplates)) {
+    const where = stringOr(template.name) ?? stringOr(template.uriTemplate) ?? "?";
     push(`template:${where}.title`, template.title);
     push(`template:${where}.description`, template.description);
   }

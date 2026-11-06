@@ -12,6 +12,31 @@ telemetry). Renaming a change kind breaks every consumer that matched on it.
 
 Nothing yet.
 
+## [0.3.1] - 2026-11-06
+
+### Fixed
+
+- **A `null` in a tool list stopped the classifier rather than being skipped.** Everything in
+  `risk/` reads a declaration a server sent or a reading a collector posted. The types say
+  `{ name?: string }[]`; the value is whatever was in the JSON, so it can be absent, a string, or
+  an array with a `null` in it -- and `surfaceCapabilities` read `.name` off each element.
+
+  The CLI never reached it: the MCP SDK validates `tools/list` and refuses the response first.
+  The exposure is anywhere the surface arrives as a request body rather than as a server's answer
+  -- a control plane's ingest, where the field is necessarily accepted loosely, because it holds
+  a third-party server's declaration verbatim and cannot be given a strict schema. One malformed
+  element in one tool of one server took down the whole request, every other server in that
+  reading included.
+
+  A security control that can be switched off by sending it a `null` is one an attacker turns off
+  rather than evades, so the guard is at the point the value is first believed rather than at
+  each place that goes on to read it.
+
+  Malformed members are now skipped and their neighbours still classified: one bad element no
+  longer costs the real finding sitting next to it. A `name` that is not a string is no longer
+  used as a tool label. The same coercion covers `surfaceText`, `capabilityViolations` and
+  `newSteering`, which read the same values from the same place.
+
 ## [0.3.0] - 2026-11-06
 
 ### Added
