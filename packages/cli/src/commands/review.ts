@@ -28,10 +28,11 @@ import type { CommonOptions } from "./options";
  */
 function describeSurface(subject: unknown, previous: unknown): string[] {
   if (typeof subject !== "object" || subject === null) return [];
-  const entry = subject as Parameters<typeof surfaceText>[0];
+  const entry = subject as NonNullable<Parameters<typeof surfaceText>[0]>;
   const lines: string[] = [];
 
-  const capabilities = surfaceCapabilities(entry.tools ?? []);
+  // Both of these coerce what they are given; see risk/untrusted in the engine.
+  const capabilities = surfaceCapabilities(entry.tools);
   if (capabilities.length > 0) {
     const worst = capabilities.some((c) => c.severity === "critical" || c.severity === "high");
     const text = `  after accepting, this server can: ${capabilities.map((c) => c.kind).join(", ")}`;
