@@ -7,6 +7,7 @@
  * one to quote.
  */
 import type { History } from "./state";
+import { PERSISTENT_FAILURE_RUNS } from "./state";
 
 const MS_PER_DAY = 24 * 60 * 60 * 1_000;
 
@@ -40,7 +41,24 @@ export interface DriftStats {
   serversEverDrifted: number;
   changeKinds: Record<string, number>;
   protocols: Record<string, number>;
-  coverage: { remote: number; stdioOnly: number; stdioSandboxed: number; authRequired: number; unreachable: number };
+  coverage: {
+    remote: number;
+    stdioOnly: number;
+    stdioSandboxed: number;
+    stdioUnsupported: number;
+    authRequired: number;
+    unreachable: number;
+    /** The last run stopped at the paging cap, so its corpus is a prefix of the registry. */
+    truncatedCorpus: boolean;
+  };
+  /**
+   * Servers currently failing, split by how long they have been failing.
+   *
+   * A server that retired months ago and one that blinked once are the same row in a plain
+   * unreachable count, and they call for opposite responses: drop the first from the corpus,
+   * re-read the second tomorrow.
+   */
+  failing: { persistent: number; transient: number };
 }
 
 export function summarize(history: History): DriftStats {
@@ -58,6 +76,13 @@ export function summarize(history: History): DriftStats {
     if (observation.driftEvents > 0) serversEverDrifted += 1;
     const span = Date.parse(observation.lastCheckedAt) - Date.parse(observation.firstSeenAt);
     if (Number.isFinite(span) && span > 0) serverDays += span / MS_PER_DAY;
+  }
+
+  let persistent = 0;
+  let transient = 0;
+  for (const streak of Object.values(history.failures ?? {})) {
+    if (streak.consecutive >= PERSISTENT_FAILURE_RUNS) persistent += 1;
+    else transient += 1;
   }
 
   const changeKinds: Record<string, number> = {};
@@ -83,9 +108,12 @@ export function summarize(history: History): DriftStats {
       remote: last?.corpus.remote ?? 0,
       stdioOnly: last?.corpus.stdioOnly ?? 0,
       stdioSandboxed: last?.corpus.stdioSandboxed ?? 0,
+      stdioUnsupported: last?.corpus.stdioUnsupported ?? 0,
       authRequired: last?.outcomes["auth-required"] ?? 0,
       unreachable: last?.outcomes.unreachable ?? 0,
+      truncatedCorpus: last?.corpus.truncated ?? false,
     },
+    failing: { persistent, transient },
   };
 }
 
@@ -142,6 +170,10 @@ export function renderMarkdown(history: History, stats: DriftStats): string {
       "Quote the per-server-year figure. The per-comparison share depends on how often the crawl",
       "runs and is not comparable to anything measured on a different schedule.",
       "",
+      "Both are lower bounds. The crawl samples a surface rather than watching it, so two changes",
+      "between consecutive readings count once, and a change reverted before the next reading is",
+      "not counted at all. The true rate is at least this.",
+      "",
     );
   }
 
@@ -164,6 +196,9 @@ export function renderMarkdown(history: History, stats: DriftStats): string {
         ["Unreachable", String(stats.coverage.unreachable)],
         ["stdio packages run in a container", String(stats.coverage.stdioSandboxed)],
         ["stdio packages skipped", String(Math.max(0, stats.coverage.stdioOnly - stats.coverage.stdioSandboxed))],
+        ["\u2003of those, unpinned or not an npm package", String(stats.coverage.stdioUnsupported)],
+        [`Failing ${PERSISTENT_FAILURE_RUNS}+ runs in a row (treated as gone)`, String(stats.failing.persistent)],
+        ["Failing for fewer runs than that (an outage, so far)", String(stats.failing.transient)],
       ],
       ["Population", "Count"],
     ),
@@ -177,6 +212,14 @@ export function renderMarkdown(history: History, stats: DriftStats): string {
         "skipped. Remote servers skew toward hosted and commercial operators, so a remote-only sample " +
         "is not a uniform sample of everything anyone runs.",
     "",
+    ...(stats.coverage.truncatedCorpus
+      ? [
+          "The registry walk in this run **stopped at the paging cap**, so this corpus is a prefix of",
+          "the registry rather than the whole of it. These counts are not comparable with a run that",
+          "reached the end, and nothing was pruned from the corpus on the strength of it.",
+          "",
+        ]
+      : []),
     "Servers behind a credential are excluded as well: what an anonymous client sees is not what an",
     "authorized one sees, so counting them would mix two different measurements.",
     "",

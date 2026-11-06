@@ -39,9 +39,18 @@ export function sandboxedStdio(pkg: RegistryPackage, options: SandboxOptions = {
   if (pkg.identifier === undefined || pkg.identifier === "") return { ok: false, reason: "package has no identifier" };
   if (pkg.registryType !== "npm") return { ok: false, reason: `unsupported package registry "${pkg.registryType ?? "unknown"}"` };
 
-  // A bare name would resolve to whatever `latest` is at the moment of the run, which is not a
-  // thing you can pin or re-measure.
-  const spec = pkg.version === undefined || pkg.version === "" ? pkg.identifier : `${pkg.identifier}@${pkg.version}`;
+  /*
+   * A versionless entry is not measurable, so it is refused rather than measured badly.
+   *
+   * `npx --yes pkg` resolves to whatever `latest` is at the moment of the run. Two passes then
+   * execute different code while the lockfile records the identical argv, and the diff attributes
+   * the maintainer's release to the server's capability surface -- inflating the one number this
+   * crawl exists to produce. Counted as unsupported, it shows up as a coverage gap instead.
+   */
+  if (pkg.version === undefined || pkg.version === "") {
+    return { ok: false, reason: "package has no version; an unpinned `latest` cannot be re-measured" };
+  }
+  const spec = `${pkg.identifier}@${pkg.version}`;
   if (!/^(@[a-z0-9][\w.-]*\/)?[a-z0-9][\w.-]*(@[\w.+-]+)?$/i.test(spec)) {
     return { ok: false, reason: `package specifier is not a plain npm name: ${spec}` };
   }

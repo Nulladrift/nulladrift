@@ -20,6 +20,7 @@ const { values } = parseArgs({
     timeout: { type: "string", default: "20000" },
     concurrency: { type: "string", default: "8" },
     delay: { type: "string", default: "50" },
+    "host-delay": { type: "string", default: "1000" },
     "include-stdio": { type: "boolean", default: false },
     "sandbox-image": { type: "string" },
     report: { type: "string" },
@@ -42,7 +43,7 @@ const corpus = await fetchCorpus({
 });
 if (!values.quiet) {
   process.stderr.write("\r".padEnd(78) + "\r");
-  if (corpus.truncated) {
+  if (corpus.stats.truncated) {
     process.stderr.write(`${yellow("registry paging stopped early; this is a partial corpus, not the whole registry.")}\n`);
   }
   process.stderr.write(
@@ -62,6 +63,7 @@ const result = await crawl({
   timeoutMs: Number.parseInt(values.timeout, 10),
   concurrency: Number.parseInt(values.concurrency, 10),
   delayMs: Number.parseInt(values.delay, 10),
+  hostDelayMs: Number.parseInt(values["host-delay"], 10),
   onProgress: values.quiet
     ? undefined
     : (done, total, name, outcome) => {
@@ -82,7 +84,9 @@ if (values.json) {
       bold(`Crawled ${result.run.targets} server(s)`),
       `  ${green(String(outcomes.stable))} unchanged · ${yellow(String(outcomes.drifted))} drifted · ${dim(String(outcomes.baseline))} new baseline`,
       `  ${dim(`${outcomes["auth-required"]} need credentials · ${outcomes.unreachable} unreachable`)}`,
-      "",
+      ...(result.pruned.length > 0
+        ? [dim(`  ${result.pruned.length} subject(s) dropped: no longer listed in the registry`), ""]
+        : [""]),
       stats.driftPerServerYear === null
         ? dim(
             stats.comparisons === 0
