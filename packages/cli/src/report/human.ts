@@ -38,8 +38,15 @@ export function renderHumanReport(report: AuditReport): string {
      * none. Say that instead of pairing the two numbers as if they were a fraction.
      */
     const drifted = new Set(report.changes.map((change) => change.server)).size;
+    /*
+     * Not a fraction. `drifted` counts servers in the lock that moved, including ones the config
+     * no longer declares; `serversChecked` counts the ones that answered. A lock carrying entries
+     * for servers that are gone printed "Drift in 50001 of 1 server(s)".
+     */
     const heading =
-      report.serversChecked === 0 ? `Drift in ${drifted} server(s), none of which is still configured:` : `Drift in ${drifted} of ${report.serversChecked} server(s):`;
+      drifted > report.serversChecked
+        ? `Drift in ${drifted} server(s); ${report.serversChecked} still configured:`
+        : `Drift in ${drifted} of ${report.serversChecked} server(s):`;
     lines.push("", bold(heading), "");
     for (const change of report.changes) lines.push(...renderChange(change), "");
 

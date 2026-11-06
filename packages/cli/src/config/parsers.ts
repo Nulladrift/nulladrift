@@ -80,6 +80,7 @@ function resolveTransport(name: string, entry: ServerEntry, context: ExpandConte
     transport = {
       type: declared === "sse" ? "sse" : "http",
       url: take(entry.url),
+      asWritten: { url: String(entry.url) },
       headers: Object.fromEntries(Object.entries(scalarsToStrings(entry.headers)).map(([key, value]) => [key, take(value)])),
       ...(oauth === undefined
         ? {}
@@ -98,6 +99,7 @@ function resolveTransport(name: string, entry: ServerEntry, context: ExpandConte
       type: "stdio",
       command: take(entry.command),
       args: (entry.args ?? []).map((argument) => take(String(argument))),
+      asWritten: { command: String(entry.command), args: (entry.args ?? []).map((argument) => String(argument)) },
       env: Object.fromEntries(Object.entries(scalarsToStrings(entry.env)).map(([key, value]) => [key, take(value)])),
       cwd: entry.cwd ? take(entry.cwd) : undefined,
     };

@@ -1,6 +1,6 @@
 /** `nulladrift init` -- discover servers, capture their surface, write the lock. */
 import { describeSearch } from "../config/discover";
-import { access } from "node:fs/promises";
+import { lstat } from "node:fs/promises";
 import { captureAll } from "../audit";
 import { writeLockfile } from "../lock/io";
 import { EXIT_CLEAN, EXIT_INCOMPLETE, type ExitCode } from "../lib/exit";
@@ -13,9 +13,16 @@ export interface InitOptions extends CommonOptions {
   force?: boolean;
 }
 
+/**
+ * `lstat`, not `access`: a dangling symlink is something, and `access` says it is nothing.
+ *
+ * A repository shipping `mcp.lock` as a link to a file that does not exist yet reported "no
+ * lockfile here", pinned, and created the link's target -- outside the project, without
+ * `--force`, and announced as success.
+ */
 async function exists(path: string): Promise<boolean> {
   try {
-    await access(path);
+    await lstat(path);
     return true;
   } catch {
     return false;

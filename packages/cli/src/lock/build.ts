@@ -37,13 +37,27 @@ function sealed<T extends object>(entry: T): T & { digest: string } {
   return { ...entry, digest: digest(toJson(entry)) };
 }
 
+/**
+ * What a server is reached by, written down without the credentials used to reach it.
+ *
+ * Environment values and header values were never stored, only their names, and a URL loses its
+ * query and fragment. `args` were stored expanded, which undid all of that: a config keeps a
+ * secret out of the repository by writing `--token=${API_KEY}`, and this wrote the expanded value
+ * into `mcp.lock`, which is the file the README tells you to commit.
+ *
+ * So the configured form is what gets written down -- `${API_KEY}`, the thing the author chose to
+ * put in version control -- while the expanded form is only ever used to start the process. A
+ * config that changes which variable it reads is still drift, and is still visible.
+ */
 export function lockTransport(server: ConfiguredServer): LockedTransport {
   const { transport } = server;
   if (transport.type === "stdio") {
+    const command = transport.asWritten?.command ?? transport.command;
+    const args = transport.asWritten?.args ?? transport.args;
     return {
       type: "stdio",
-      command: transport.command,
-      args: transport.args.length > 0 ? transport.args : undefined,
+      command,
+      args: args.length > 0 ? args : undefined,
       envKeys: Object.keys(transport.env).length > 0 ? Object.keys(transport.env).sort() : undefined,
       cwd: transport.cwd,
     };
@@ -51,7 +65,7 @@ export function lockTransport(server: ConfiguredServer): LockedTransport {
   const headerKeys = Object.keys(transport.headers);
   return {
     type: transport.type,
-    url: sanitizeUrl(transport.url),
+    url: sanitizeUrl(transport.asWritten?.url ?? transport.url),
     headerKeys: headerKeys.length > 0 ? headerKeys.sort() : undefined,
   };
 }
