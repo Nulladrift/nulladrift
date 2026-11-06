@@ -12,6 +12,19 @@ telemetry). Renaming a change kind breaks every consumer that matched on it.
 
 Nothing yet.
 
+## [0.1.5] - 2026-11-05
+
+No code changes from 0.1.4.
+
+The repository's history was rewritten to carry a single author, which changed every commit's
+hash. Each published version's provenance attestation names the commit it was built from, so
+0.1.0 through 0.1.4 now reference commits that no longer exist. Their attestations still verify
+-- they are statements about builds that really happened -- but the source they point at cannot
+be fetched.
+
+This release is identical code built from the rewritten history, so the version anyone installs
+has provenance that resolves. The earlier versions are deprecated in favour of it.
+
 ## [0.1.4] - 2026-11-05
 
 ### Security
