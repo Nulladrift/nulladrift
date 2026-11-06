@@ -69,6 +69,23 @@ not. The useful comment is the one that stops the next person undoing something 
 
 **No em dashes in anything a user reads.**
 
+## Branches
+
+`develop` is the default branch and the one pull requests target. `main` holds the last release
+and nothing else: it changes only when `develop` is merged into it, and every `v*` tag lives
+there. So `main` always answers "what is published" without anybody having to check.
+
+```
+feature ──PR──▶ develop ──merge──▶ main ──tag v0.1.6──▶ npm
+```
+
+Both branches require their pull request to pass CI, and neither accepts a direct push or a
+force push. There is no required reviewer, so a maintainer can merge their own work; the gate is
+the check, not a second person.
+
+Releasing is: open a pull request from `develop` to `main`, merge it, then tag `main`. The tag is
+what publishes, and the workflow refuses a tag that disagrees with either package's version.
+
 ## Before you push
 
 ```sh
