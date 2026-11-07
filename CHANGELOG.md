@@ -10,32 +10,6 @@ telemetry). Renaming a change kind breaks every consumer that matched on it.
 
 ## [Unreleased]
 
-### Fixed
-
-- **The crawl refuses a registry package it cannot pin, rather than measuring whatever `latest`
-  resolved to that morning.** A versionless entry was launched as a bare `npx --yes <name>`, so
-  two passes could execute different code while the lockfile recorded an identical argv -- and the
-  diff then booked the maintainer's release as the server changing its own capability surface,
-  inflating the one number the crawl exists to produce. Those entries are counted as unsupported,
-  where they read as the coverage gap they are.
-
-- **`stdioUnsupported` counts the entries no sandbox could express, instead of sitting at zero.**
-  The classification ran below the `--include-stdio` gate, so every default run reported `0` -- a
-  figure that reads as "every stdio entry could have been measured" when it means "none were
-  looked at". It now runs unconditionally and only the launch is gated.
-
-- **A registry walk that stopped at the paging cap says so in the history.** `truncated` was
-  returned to the script, warned about on stderr and then dropped, so a short pass six months from
-  now would read as an ecosystem that shrank. It moved into `CorpusStats`, which the run record
-  keeps; the report marks such a run as not comparable, and nothing is pruned on the strength of
-  one.
-
-- **A server is dialled at every endpoint its registry entry advertises, Streamable HTTP first.**
-  Only `remotes[0]` was tried, which is publisher order, so a server listing a deprecated SSE
-  endpoint ahead of a working one counted as unreachable -- an outage invented by the reader,
-  which then depressed the published coverage figure. A credential wall still ends the attempt:
-  that is a definitive answer about the server, not a reason to knock on its other doors.
-
 ### Added
 
 - **The lock pins what each stdio server runs, not just what it says.** Everything in a locked
@@ -66,6 +40,41 @@ telemetry). Renaming a change kind breaks every consumer that matched on it.
   could have sent one and did not, says the one line to add. Never a reason to fail: no token is
   an unverified reading, which is what every reading was before.
 
+## [0.5.0] - 2026-11-07
+
+### Fixed
+
+- **The README links to nulladrift.com, a domain the project holds, instead of nulladrift.io,
+  which nobody had registered.** The npm package page shows this README, so every visitor was
+  one click from an address anyone could have bought and filled with a sign-in page of their
+  own.
+
+- **The crawl refuses a registry package it cannot pin, rather than measuring whatever `latest`
+  resolved to that morning.** A versionless entry was launched as a bare `npx --yes <name>`, so
+  two passes could execute different code while the lockfile recorded an identical argv -- and the
+  diff then booked the maintainer's release as the server changing its own capability surface,
+  inflating the one number the crawl exists to produce. Those entries are counted as unsupported,
+  where they read as the coverage gap they are.
+
+- **`stdioUnsupported` counts the entries no sandbox could express, instead of sitting at zero.**
+  The classification ran below the `--include-stdio` gate, so every default run reported `0` -- a
+  figure that reads as "every stdio entry could have been measured" when it means "none were
+  looked at". It now runs unconditionally and only the launch is gated.
+
+- **A registry walk that stopped at the paging cap says so in the history.** `truncated` was
+  returned to the script, warned about on stderr and then dropped, so a short pass six months from
+  now would read as an ecosystem that shrank. It moved into `CorpusStats`, which the run record
+  keeps; the report marks such a run as not comparable, and nothing is pruned on the strength of
+  one.
+
+- **A server is dialled at every endpoint its registry entry advertises, Streamable HTTP first.**
+  Only `remotes[0]` was tried, which is publisher order, so a server listing a deprecated SSE
+  endpoint ahead of a working one counted as unreachable -- an outage invented by the reader,
+  which then depressed the published coverage figure. A credential wall still ends the attempt:
+  that is a definitive answer about the server, not a reason to knock on its other doors.
+
+### Added
+
 - **Failure streaks, so a server that retired in March is told apart from one that blinked this
   morning.** `unreachable` was a single counter and an eighth of the last run was in it. The
   coverage table splits servers failing three or more runs in a row from servers failing for
@@ -91,7 +100,6 @@ telemetry). Renaming a change kind breaks every consumer that matched on it.
 - **The drift report calls its rates lower bounds.** The crawl samples a surface rather than
   watching it: two changes between consecutive readings count once, and a change reverted before
   the next reading is not counted at all.
-
 ## [0.4.0] - 2026-11-06
 
 ### Added

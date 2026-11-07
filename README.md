@@ -202,7 +202,7 @@ Any other CI that can mint an OpenID Connect token for a job can put it in `NULL
 Without one, the reading is recorded as unverified, exactly as before -- `push` never fails for
 want of a token.
 
-See [nulladrift.io](https://nulladrift.io).
+See [nulladrift.com](https://nulladrift.com).
 
 ## Layout
 
