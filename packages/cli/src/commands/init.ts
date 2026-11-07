@@ -56,6 +56,7 @@ export async function runInit(options: InitOptions): Promise<ExitCode> {
     projectRoot: options.projectRoot,
     configFiles: options.configFiles,
     timeoutMs: options.timeoutMs,
+    provenance: options.provenance,
   });
 
   const names = Object.keys(result.lock.subjects);

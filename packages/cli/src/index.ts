@@ -32,6 +32,7 @@ ${bold("Options")}
   --config <path>        audit this config file too; repeatable
   --timeout <ms>         per-server timeout (default: ${DEFAULT_TIMEOUT_MS})
   --allow-unreachable    a server that cannot be reached warns instead of failing
+  --no-provenance        do not look up what each stdio server runs (air-gapped runs)
   --json                 machine-readable output (check)
   --sarif                SARIF 2.1.0 output (check)
   --sarif-steering       also emit steering passages as SARIF notes (off: an alert is a gate)
@@ -62,6 +63,7 @@ async function main(): Promise<ExitCode> {
       config: { type: "string", multiple: true },
       timeout: { type: "string" },
       "allow-unreachable": { type: "boolean", default: false },
+      "no-provenance": { type: "boolean", default: false },
       json: { type: "boolean", default: false },
       sarif: { type: "boolean", default: false },
       "sarif-steering": { type: "boolean", default: false },
@@ -108,6 +110,7 @@ async function main(): Promise<ExitCode> {
     format: values.sarif ? "sarif" : values.json ? "json" : "human",
     sarifSteering: values["sarif-steering"] === true,
     comment: values.comment,
+    provenance: values["no-provenance"] !== true,
   };
 
   switch (command) {

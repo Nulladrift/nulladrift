@@ -2,7 +2,9 @@
 import type { Discovery } from "./config/discover";
 import { discoverServers } from "./config/discover";
 import { buildLockedServer } from "./lock/build";
-import type { Lockfile, LockedMcpServer, LockPolicy } from "./lock/types";
+import { carriedForward, referenceOf, resolveReference } from "./lock/provenance";
+import type { Lockfile, LockedMcpServer, LockedProvenance, LockPolicy } from "./lock/types";
+import type { ConfiguredServer } from "./config/types";
 import { LOCKFILE_VERSION } from "./lock/types";
 import { captureSurface } from "./mcp/capture";
 import { DEFAULT_TIMEOUT_MS } from "./mcp/connect";
@@ -17,6 +19,15 @@ export interface CaptureOptions {
   /** Stdio servers are child processes; a few at a time keeps a large config from thrashing. */
   concurrency?: number;
   policy?: LockPolicy;
+  /**
+   * The lock this run will be compared against or written over, when there is one.
+   *
+   * Used for one thing: keeping an artifact pin that this run could not re-establish, when the
+   * configuration asks for exactly the version that was pinned. See `carriedForward`.
+   */
+  previous?: Lockfile;
+  /** False skips resolving what each server runs. An air-gapped run, or somebody who opted out. */
+  provenance?: boolean;
   onServerDone?: (name: string, outcome: "captured" | "failed") => void;
 }
 
@@ -24,6 +35,41 @@ export interface CaptureResult {
   lock: Lockfile;
   unreachable: Unreachable[];
   discovery: Discovery;
+  /**
+   * Servers whose artifact could not be established on this run.
+   *
+   * Not unreachable: the server answered, and its surface was compared as normal. What is
+   * missing is the check of the code behind it, and saying so is the difference between "the
+   * artifact did not change" and "nobody could look".
+   */
+  unverified: string[];
+}
+
+/**
+ * What a captured server runs, and whether that could be established this time.
+ *
+ * Remote servers have no artifact this tool can see, and an invocation that cannot be read with
+ * confidence has none either; both are simply absent, not unverified. Unverified is reserved for
+ * the case where there was something to check and the check did not happen.
+ */
+async function provenanceOf(
+  server: ConfiguredServer,
+  options: CaptureOptions,
+): Promise<{ provenance?: LockedProvenance; unverified: boolean }> {
+  if (server.transport.type !== "stdio") return { unverified: false };
+  const reference = referenceOf(server.transport, options.projectRoot);
+  if (!reference) return { unverified: false };
+
+  const previous = options.previous?.subjects[server.name]?.provenance;
+  if (options.provenance === false) {
+    const kept = carriedForward(previous, reference);
+    return { ...(kept ? { provenance: kept } : {}), unverified: true };
+  }
+
+  const resolved = await resolveReference(reference, { timeoutMs: options.timeoutMs });
+  if (resolved) return { provenance: resolved, unverified: false };
+  const kept = carriedForward(previous, reference);
+  return { ...(kept ? { provenance: kept } : {}), unverified: true };
 }
 
 async function mapWithLimit<T, R>(items: T[], limit: number, worker: (item: T) => Promise<R>): Promise<R[]> {
@@ -77,8 +123,10 @@ export async function captureAll(options: CaptureOptions): Promise<CaptureResult
       const surface = await withDeadline(options.timeoutMs ?? DEFAULT_TIMEOUT_MS, server.name, () =>
         captureSurface(server, options.timeoutMs ?? DEFAULT_TIMEOUT_MS),
       );
+      const entry = buildLockedServer(server, surface, options.policy);
+      const { provenance, unverified } = await provenanceOf(server, options);
       options.onServerDone?.(server.name, "captured");
-      return { name: server.name, entry: buildLockedServer(server, surface, options.policy) };
+      return { name: server.name, entry: provenance ? { ...entry, provenance } : entry, unverified };
     } catch (error) {
       options.onServerDone?.(server.name, "failed");
       const reason = error instanceof UnreachableServerError ? error.message : (error as Error).message;
@@ -89,9 +137,12 @@ export async function captureAll(options: CaptureOptions): Promise<CaptureResult
 
   const subjects: Record<string, LockedMcpServer> = {};
   const unreachable: Unreachable[] = [];
+  const unverified: string[] = [];
   for (const result of captured) {
-    if ("entry" in result && result.entry) subjects[result.name] = result.entry;
-    else if ("failure" in result && result.failure) unreachable.push(result.failure);
+    if ("entry" in result && result.entry) {
+      subjects[result.name] = result.entry;
+      if (result.unverified) unverified.push(result.name);
+    } else if ("failure" in result && result.failure) unreachable.push(result.failure);
   }
 
   // Configs we understood but cannot audit (unsupported transport, unresolvable placeholder) are
@@ -113,5 +164,6 @@ export async function captureAll(options: CaptureOptions): Promise<CaptureResult
     },
     unreachable,
     discovery,
+    unverified: unverified.sort(),
   };
 }

@@ -111,6 +111,19 @@ not neutral, absent `readOnlyHint` means "may modify", absent `destructiveHint` 
 "may destroy", so a *removed* annotation is an escalation. The lock writes the effective
 values out in full so that escalation appears as a change rather than as an absence.
 
+Everything above is what a server *says*. For a stdio server the lock also records what it *is*:
+the package, image or file behind the command, by content address.
+
+```json
+"provenance": { "ecosystem": "npm", "name": "@modelcontextprotocol/server-filesystem", "version": "2.2.0", "integrity": "sha512-…" }
+```
+
+A release that keeps every tool name, description and schema identical while changing what the
+tools do used to pass `check`. It now fails it, and says that nothing else in the report
+describes the new code. The same npm version arriving with different bytes is
+`server.artifact.substituted`, which has no innocent explanation. `--no-provenance` skips the
+registry lookups for an air-gapped run.
+
 Format and rationale: [docs/lockfile.md](docs/lockfile.md). JSON Schema:
 [schema/mcp.lock.schema.json](schema/mcp.lock.schema.json). Worked example:
 [examples/mcp.lock](examples/mcp.lock).
@@ -159,6 +172,35 @@ a pull request cannot widen what its own build is allowed to do.
 
 **Nothing in this repository depends on it.** `nulladrift check` needs no account, no token and
 no network beyond the servers it is auditing, and that does not change.
+
+### Proving which build sent a reading
+
+A reading names its own ref and commit, so the collector token alone lets whoever holds it report
+any branch as clean. `push` can send your CI provider's signed identity token as well, and the
+control plane then records the repository, ref and commit as the provider stated them. An
+organization can list the builds it trusts and require every reading to come from one.
+
+GitHub Actions needs one permission, and `push` does the rest:
+
+```yaml
+permissions:
+  contents: read
+  id-token: write
+```
+
+GitLab CI mints the token into a variable you name:
+
+```yaml
+nulladrift:
+  id_tokens:
+    NULLADRIFT_ID_TOKEN:
+      aud: nulladrift
+  script: npx nulladrift push
+```
+
+Any other CI that can mint an OpenID Connect token for a job can put it in `NULLADRIFT_ID_TOKEN`.
+Without one, the reading is recorded as unverified, exactly as before -- `push` never fails for
+want of a token.
 
 See [nulladrift.com](https://nulladrift.com).
 

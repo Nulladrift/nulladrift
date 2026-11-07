@@ -60,6 +60,24 @@ describe("conformance to the published JSON Schema", () => {
     expect(validate(JSON.parse(serializeLockfile(RICH))), errorsOf()).toBe(true);
   });
 
+  /*
+   * Both halves, because they are two schemas and either can lose a field. The published one
+   * rejects unknown properties outright; the runtime parser is worse -- it strips them without a
+   * word, and a lock that lost its artifact pins on the way in would compare nothing against
+   * nothing and call every server's code unchanged.
+   */
+  it("keeps an artifact pin through writing, validating and reading back", () => {
+    const pinned: Lockfile = structuredClone(RICH);
+    pinned.subjects["payments"] = {
+      ...pinned.subjects["payments"]!,
+      provenance: { ecosystem: "npm", name: "@acme/payments-mcp", version: "2.4.1", integrity: "sha512-abc==", requested: "latest" },
+    };
+
+    const text = serializeLockfile(pinned);
+    expect(validate(JSON.parse(text)), errorsOf()).toBe(true);
+    expect(parseLockfile(text, "mcp.lock").subjects["payments"]?.provenance).toEqual(pinned.subjects["payments"]?.provenance);
+  });
+
   it("validates the committed example", async () => {
     const example = JSON.parse(await readFile(fileURLToPath(EXAMPLE_URL), "utf8")) as unknown;
     expect(validate(example), errorsOf()).toBe(true);

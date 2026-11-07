@@ -1,0 +1,68 @@
+/**
+ * Asking the CI provider to vouch for this build.
+ *
+ * A reading names its own ref and commit, and the control plane can only take the request's word
+ * for them -- so anyone holding the collector token could report any branch as clean. GitHub
+ * Actions and GitLab CI will each mint a short-lived identity token for a job, signed by the
+ * provider, with the repository, ref and commit filled in by the provider rather than the job.
+ * Sending it lets the control plane believe a reading's account of itself on the provider's word.
+ *
+ * Optional, and never a reason to fail. No token means the reading is recorded as unverified,
+ * which is what every reading was before this existed; whether that blocks is the organization's
+ * policy, decided on the control plane.
+ */
+
+/** The header the control plane reads it from. Kept in step with the server by hand: two repos. */
+export const BUILD_TOKEN_HEADER = "nulladrift-build-token";
+
+/** What the token must be minted for. The control plane checks it, so a token for another service is refused. */
+export const DEFAULT_AUDIENCE = "nulladrift";
+
+export type BuildToken = { token: string; source: "github-actions" | "environment" };
+
+/** Said once, in the push output, when a token could have been sent and was not. */
+export type BuildTokenHint = { hint: string };
+
+export interface AcquireOptions {
+  env?: NodeJS.ProcessEnv;
+  fetch?: typeof fetch;
+  timeoutMs?: number;
+}
+
+/**
+ * The token for this build, a hint about how to get one, or nothing at all outside CI.
+ *
+ * `NULLADRIFT_ID_TOKEN` comes first, because it is the one somebody set on purpose: GitLab's
+ * `id_tokens:` puts a token in a variable of your choosing, and any other provider can do the
+ * same. GitHub Actions is asked directly, which works only when the job has
+ * `permissions: id-token: write` -- the request URL is absent otherwise, and that absence is the
+ * one case worth a hint, since the fix is a single line in the workflow.
+ */
+export async function acquireBuildToken(options: AcquireOptions = {}): Promise<BuildToken | BuildTokenHint | undefined> {
+  const env = options.env ?? process.env;
+  const explicit = env["NULLADRIFT_ID_TOKEN"];
+  if (explicit) return { token: explicit, source: "environment" };
+
+  if (env["GITHUB_ACTIONS"] !== "true") return undefined;
+
+  const requestUrl = env["ACTIONS_ID_TOKEN_REQUEST_URL"];
+  const requestToken = env["ACTIONS_ID_TOKEN_REQUEST_TOKEN"];
+  if (!requestUrl || !requestToken) {
+    return { hint: "add `permissions: id-token: write` to this job so the reading can prove which build sent it" };
+  }
+
+  try {
+    const url = new URL(requestUrl);
+    url.searchParams.set("audience", env["NULLADRIFT_BUILD_AUDIENCE"] ?? DEFAULT_AUDIENCE);
+    const response = await (options.fetch ?? fetch)(url, {
+      headers: { authorization: `bearer ${requestToken}`, accept: "application/json" },
+      signal: AbortSignal.timeout(options.timeoutMs ?? 10_000),
+    });
+    if (!response.ok) return { hint: `GitHub Actions would not mint an identity token (HTTP ${response.status})` };
+    const body = (await response.json()) as { value?: unknown };
+    if (typeof body.value !== "string" || body.value.length === 0) return { hint: "GitHub Actions returned no identity token" };
+    return { token: body.value, source: "github-actions" };
+  } catch (error) {
+    return { hint: `could not reach GitHub Actions for an identity token: ${(error as Error).message}` };
+  }
+}

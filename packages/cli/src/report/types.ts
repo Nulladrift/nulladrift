@@ -31,6 +31,14 @@ export interface AuditReport {
   violations?: CapabilityViolation[];
   /** Servers we could not reach, or configs we could not resolve. Drives exit code 2. */
   unreachable: Unreachable[];
+  /**
+   * Servers that answered, but whose artifact could not be established on this run.
+   *
+   * Never affects the exit code. A registry being down is not the server's fault and must not
+   * fail a build; but "the code behind it did not change" and "nobody could look" are different
+   * statements, and the report should not let one pass for the other.
+   */
+  unverified?: string[];
   serversChecked: number;
   lockPath: string;
   /**
