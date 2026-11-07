@@ -10,6 +10,10 @@ telemetry). Renaming a change kind breaks every consumer that matched on it.
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.5.0] - 2026-11-07
+
 ### Fixed
 
 - **The README links to nulladrift.com, a domain the project holds, instead of nulladrift.io,
@@ -68,7 +72,6 @@ telemetry). Renaming a change kind breaks every consumer that matched on it.
 - **The drift report calls its rates lower bounds.** The crawl samples a surface rather than
   watching it: two changes between consecutive readings count once, and a change reverted before
   the next reading is not counted at all.
-
 ## [0.4.0] - 2026-11-06
 
 ### Added
