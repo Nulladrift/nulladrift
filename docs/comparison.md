@@ -8,6 +8,11 @@ something checkable.
 making.** See [What is actually different](#what-is-actually-different). The October reading
 found one serious competitor. There are now six.
 
+**Updated 8 November 2026 for nulladrift 0.6.0**, which closed two gaps this page recorded
+against it: it pins the artifact behind each stdio server, and a reading can carry the CI
+provider's signed identity. Only nulladrift's column changed. The other tools were not
+re-measured.
+
 ## Method
 
 Each tool is measured against a fixture server that emits **one isolated change at a time**
@@ -67,8 +72,10 @@ proxy, which is complementary rather than competing.
 
 **`ftaakash/MCP-Lock`** (`26d9580`) is provenance, not drift. It reads npm attestations and PyPI
 provenance documents to verify what a package *is* before install. That is the layer `npm audit`
-and OSV occupy, and this project has always said it does not compete there. Worth watching
-anyway: see [Provenance](#the-gap-that-runs-the-other-way).
+and OSV occupy. Since 0.6.0 this project pins the same artifacts by content address and reports
+when they change, but it verifies no attestation: MCP-Lock asks who built a package, nulladrift
+asks whether it is still the bytes you approved. Worth watching anyway: see
+[Provenance](#the-gap-that-runs-the-other-way).
 
 ## Coverage
 
@@ -109,11 +116,20 @@ Beyond the per-change table:
 | Readable content, not only digests | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ |
 | OAuth / credentialled servers | ✅ | ❌ | ❌ | ❌ | ❌ | ✅ |
 | Reads existing client configs | 7 formats | limited | limited | `.mcp.json` | ❌ | limited |
-| **Signed readings** | **❌** | ❌ | ❌ | ❌ | **✅** | **✅** |
+| **Signed readings** | **◐¹** | ❌ | ❌ | ❌ | **✅** | **✅** |
 | **Third-party attestation** | **❌** | ❌ | ❌ | ❌ | **✅** | ❌ |
-| **Artifact / provenance pinning** | **❌** | ❌ | ❌ | ❌ | ❌ | **✅** |
-| Tool-poisoning scanner | ❌ | ❌ | ✅ | ❌ | ❌ | ❌ |
+| **Artifact / provenance pinning** | **✅** | ❌ | ❌ | ❌ | ❌ | **✅** |
+| Tool-poisoning scanner | ✅² | ❌ | ✅ | ❌ | ❌ | ❌ |
 | Runtime enforcement | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ |
+
+◐ partly. ¹ Since 0.6.0, `push` sends the CI provider's signed OpenID Connect token and the
+control plane verifies it, so the repository, ref and commit are recorded as GitHub or GitLab
+stated them. That proves which build sent a reading, not that its contents are what the server
+declared: nothing signs the reading itself. See
+[the gap that runs the other way](#the-gap-that-runs-the-other-way).
+² The steering scan flags text in a declared surface that addresses the model: directives,
+credential paths, exfiltration, hidden markup. It never fails a build and does not judge
+intent.
 
 ## The ones worth reading properly
 
@@ -222,6 +238,10 @@ What survives, measured:
    view shows it as `"destructive": false → true` rather than as a deleted line that reads like
    the server claiming *less*.
 
+0.6.0 closed two gaps rather than opening a lead. Pinning the artifact and a CI-signed origin
+are both things MCPTrust already did, which is why they appear in the table above and not in
+this list.
+
 Tool-definition hashing is solved several times over. The margin is now one field, one protocol
 revision and the legibility of the artifact — and the first two are an afternoon's work for
 anyone who reads this page.
@@ -231,16 +251,18 @@ anyone who reads this page.
 Three tools here answer a question this project cannot: **how do you know the reading is real?**
 
 legion-lock has transparency-log proofs. MCPTrust has Sigstore and keyless CI signing.
-`ftaakash/MCP-Lock` has npm and PyPI attestations. nulladrift has nothing — no signature over a
-reading, no attestation, no external observer. The whole chain is self-observed and self-asserted:
-our collector reads the server, our control plane re-digests it, our code enforces append-only,
-our database holds the row.
+`ftaakash/MCP-Lock` has npm and PyPI attestations. Since 0.6.0 nulladrift has half an answer: a
+reading can carry the CI provider's signed identity, so *which build sent this* is GitHub's or
+GitLab's statement rather than ours, and an organization can require every reading to come from a
+build it trusts. The other half is still missing: no signature over the reading itself, no
+attestation of the artifacts it pins, no external observer. What the server said is
+self-observed and self-asserted: our collector reads it, our control plane re-digests it, our
+code enforces append-only, our database holds the row.
 
 That is tolerable for drift detection, where the lockfile sits in a repository the reader already
 trusts. It is weaker for the thing the hosted product sells, which is evidence somebody hands an
-auditor. The design note and
-the decision not to build it yet is recorded with the product documentation, which is not in
-this repository.
+auditor. The design for signing the reading itself, and the decision not to build it yet, are
+recorded with the product documentation, which is not in this repository.
 
 ## Where an alternative is the better choice
 
@@ -252,8 +274,11 @@ this repository.
 - **Want evidence from somebody who is not the audited party:** legion-lock, with its single
   observer understood.
 - **Want a scanner that judges whether a description is malicious:** `toolgate-pin` or `mcplock`.
-  This project ranks severity by shape and does not judge intent.
-- **Want provenance for the package itself:** `ftaakash/MCP-Lock`, or `npm audit` and OSV.
+  This project ranks severity by shape and flags text addressed to the model, but never fails a
+  build on it and does not judge intent.
+- **Want to verify who built a package, or whether it is vulnerable:** `ftaakash/MCP-Lock` for
+  attestations, `npm audit` and OSV for advisories. This project pins the bytes a server runs and
+  reports when they change; it checks neither.
 
 ## What follows from this
 

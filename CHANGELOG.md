@@ -10,7 +10,15 @@ telemetry). Renaming a change kind breaks every consumer that matched on it.
 
 ## [Unreleased]
 
-Nothing yet.
+### Fixed
+
+- **The README, `SECURITY.md` and the docs describe 0.6.0.** They still said the lock pins only
+  what a server declares, that a reading cannot be traced to the build that sent it, and that a
+  backdoor behind unchanged tool definitions is out of scope; since 0.6.0 the lock pins the
+  artifact behind each stdio server and `push` carries the CI provider's signed identity. The
+  comparison now credits both, and the steering scan it had marked absent. The README also named
+  five of the seven client config files `init` reads, and the change taxonomy in
+  `docs/lockfile.md` lacked `tool.capability.gained` and `server.capabilities.changed`.
 
 ## [0.6.0] - 2026-11-07
 
