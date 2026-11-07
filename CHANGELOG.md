@@ -10,6 +10,10 @@ telemetry). Renaming a change kind breaks every consumer that matched on it.
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.6.0] - 2026-11-07
+
 ### Added
 
 - **The lock pins what each stdio server runs, not just what it says.** Everything in a locked
@@ -39,7 +43,6 @@ telemetry). Renaming a change kind breaks every consumer that matched on it.
   and any other provider. The output says whether the control plane trusted it, and when a job
   could have sent one and did not, says the one line to add. Never a reason to fail: no token is
   an unverified reading, which is what every reading was before.
-
 ## [0.5.0] - 2026-11-07
 
 ### Fixed
