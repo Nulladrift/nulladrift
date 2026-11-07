@@ -10,6 +10,7 @@ import { captureAll } from "../audit";
 import { EXIT_CLEAN, EXIT_DRIFT, EXIT_INCOMPLETE, type ExitCode } from "../lib/exit";
 import { bold, dim, green, red, yellow } from "../lib/ui";
 import { describeRefusal } from "../report/push-error";
+import { acquireBuildToken, BUILD_TOKEN_HEADER } from "../lib/build-token";
 import { VERSION } from "../lib/version";
 import type { CommonOptions } from "./options";
 
@@ -38,6 +39,23 @@ interface IngestResponseBody {
   changes: Array<{ kind: string; severity: string; server: string; member?: string; summary: string }>;
   decision: { blocked: boolean; reasons: Array<{ code: string; message: string }> };
   url: string;
+  /** Absent from a control plane older than signed readings, which is read as nothing to say. */
+  identity?: {
+    trust: "trusted" | "verified" | "unverified";
+    repository?: string;
+    ref?: string;
+    rejected?: string;
+  };
+}
+
+/** One line about which build the control plane believes sent this, or nothing worth a line. */
+function describeIdentity(identity: IngestResponseBody["identity"], hint: string | undefined): string | undefined {
+  if (identity?.trust === "trusted") return `${green("signed")} ${dim(`${identity.repository ?? ""}${identity.ref ? ` @ ${identity.ref}` : ""} · a trusted build`)}`;
+  if (identity?.trust === "verified") {
+    return `${yellow("signed")} ${dim(`${identity.repository ?? ""}${identity.ref ? ` @ ${identity.ref}` : ""} · not a build this organization lists as trusted`)}`;
+  }
+  if (identity?.rejected) return `${red("build token refused")} ${dim(identity.rejected)}`;
+  return hint ? dim(`unsigned: ${hint}`) : undefined;
 }
 
 /** CI providers all expose these; reading them means a pipeline needs no extra configuration. */
@@ -80,6 +98,7 @@ export async function runPush(options: PushOptions): Promise<ExitCode> {
     projectRoot: options.projectRoot,
     configFiles: options.configFiles,
     timeoutMs: options.timeoutMs,
+    provenance: options.provenance,
   });
 
   /*
@@ -133,11 +152,23 @@ export async function runPush(options: PushOptions): Promise<ExitCode> {
     unreachable: result.unreachable.map((failure) => ({ server: failure.server, reason: failure.reason })),
   };
 
+  /*
+   * The collector token says which organization this is; the build token says which build. Asked
+   * for after the capture rather than before, because GitHub's tokens live for minutes and a slow
+   * server could otherwise outlast one.
+   */
+  const build = await acquireBuildToken();
+  const buildToken = build && "token" in build ? build.token : undefined;
+
   let response: Response;
   try {
     response = await fetch(`${apiUrl}/api/v1/ingest`, {
       method: "POST",
-      headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${token}`,
+        ...(buildToken ? { [BUILD_TOKEN_HEADER]: buildToken } : {}),
+      },
       body: JSON.stringify(body),
       signal: AbortSignal.timeout(options.timeoutMs),
     });
@@ -163,6 +194,8 @@ export async function runPush(options: PushOptions): Promise<ExitCode> {
   const lines: string[] = [""];
   const mark = verdict.verdict === "clean" ? green("✓") : verdict.verdict === "drift" ? yellow("!") : red("✗");
   lines.push(`${mark} ${bold(verdict.verdict)} ${dim(`· ${servers.length} server(s) · reading ${verdict.readingId.slice(0, 8)}`)}`);
+  const identity = describeIdentity(verdict.identity, build && "hint" in build ? build.hint : undefined);
+  if (identity) lines.push(`  ${identity}`);
 
   for (const change of verdict.changes) {
     lines.push(`  ${change.severity === "high" ? red("●") : change.severity === "medium" ? yellow("●") : dim("●")} ${bold(change.server)}${change.member ? dim(`/${change.member}`) : ""}  ${change.summary}`);

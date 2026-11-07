@@ -23,6 +23,8 @@ export async function buildReport(options: CommonOptions): Promise<{ report: Aud
     timeoutMs: options.timeoutMs,
     // The committed policy governs the check, so every consumer of the repo audits identically.
     policy: committed.policy,
+    previous: committed,
+    provenance: options.provenance,
   });
 
   const changes = diffLockfiles(committed, result.lock);
@@ -42,6 +44,8 @@ export async function buildReport(options: CommonOptions): Promise<{ report: Aud
      */
     violations: capabilityViolations(result.lock, committed.policy?.deniedCapabilities),
     unreachable: result.unreachable,
+    // Reported beside the verdict and never part of it; see `AuditReport.unverified`.
+    unverified: result.unverified,
     serversChecked: Object.keys(result.lock.subjects).length,
     lockPath: options.lockPath,
     projectRoot: options.projectRoot,

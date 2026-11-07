@@ -13,6 +13,17 @@ export const CHANGE_KINDS = [
   "server.renamed",
   "server.transport.changed",
   "server.identity.changed",
+  /*
+   * Two kinds rather than one, because they call for opposite defaults.
+   *
+   * A version moving is the ordinary life of a dependency: most of them are patch releases that
+   * nobody needs to read, and a policy blocking on them would fail every build in the week a
+   * popular package ships. A version *not* moving while its contents do has no innocent
+   * explanation -- a registry or mirror serving different bytes under a published version, or an
+   * image tag repointed -- and that one should stop a build on the default policy.
+   */
+  "server.artifact.changed",
+  "server.artifact.substituted",
   "server.protocol.changed",
   "server.instructions.changed",
   "server.capabilities.widened",
@@ -58,6 +69,8 @@ export const SEVERITY: Record<ChangeKind, Severity> = {
   "server.renamed": "low",
   "server.transport.changed": "high",
   "server.identity.changed": "medium",
+  "server.artifact.changed": "medium",
+  "server.artifact.substituted": "high",
   "server.protocol.changed": "medium",
   "server.instructions.changed": "high",
   "server.capabilities.widened": "medium",

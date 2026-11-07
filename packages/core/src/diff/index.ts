@@ -219,9 +219,79 @@ function compareMembers<T extends { digest: string }>(
   return changes;
 }
 
+/**
+ * Whether the code behind the server is the code that was pinned.
+ *
+ * Absence on either side says nothing. A lock written before provenance existed, or a run that
+ * could not reach a registry, has none, and reporting that would turn every upgrade of this tool
+ * and every offline run into drift against servers nobody touched. Neither does a change of
+ * package name: that only happens when the command or its arguments changed, which
+ * `server.transport.changed` already reports, and saying it twice is how a reviewer learns to
+ * skim.
+ */
+function compareProvenance(name: string, before: LockedMcpServer, after: LockedMcpServer): Change[] {
+  const was = before.provenance;
+  const now = after.provenance;
+  if (!was || !now) return [];
+  if (was.ecosystem !== now.ecosystem || was.name !== now.name) return [];
+
+  const surfaceHeld = before.digest === after.digest;
+
+  /*
+   * Said out loud when the surface held still, because that is the case nothing else in the
+   * report covers. A release that changed its tools is described by the tool changes; one that
+   * changed only its code is described by this line and nothing else.
+   */
+  const unexplained = surfaceHeld ? ", and the declared surface did not change: nothing else in this report describes what the new code does" : "";
+  const integrityMoved = was.integrity !== undefined && now.integrity !== undefined && was.integrity !== now.integrity;
+
+  if (was.version !== undefined && was.version === now.version) {
+    if (!integrityMoved) return [];
+    /*
+     * Substitution is claimed only where the registry guarantees one artifact per version. npm
+     * refuses to republish a version, so different bytes under the same one means something
+     * between here and the registry served them. PyPI lets a maintainer add files to a release
+     * after the fact, so the same version with a different recorded file has an ordinary
+     * explanation, and it is reported as the milder kind.
+     */
+    if (was.ecosystem === "npm") {
+      return [
+        change(
+          "server.artifact.substituted",
+          name,
+          `${was.name}@${was.version} now has different contents than when it was pinned: the same version, different bytes`,
+          { before: was, after: now },
+        ),
+      ];
+    }
+    return [change("server.artifact.changed", name, `the files published for ${was.name}@${was.version} are not the ones that were pinned${unexplained}`, { before: was, after: now })];
+  }
+
+  if (was.version !== now.version) {
+    const moved = `the package behind this server moved from ${was.version ?? "an unknown version"} to ${now.version ?? "an unknown version"}`;
+    return [change("server.artifact.changed", name, `${moved}${unexplained}`, { before: was, after: now })];
+  }
+
+  /*
+   * No version on either side: a file, or an image, whose tag is a pointer rather than a release.
+   * A moved tag and a rebuilt binary are both ordinary, so both are the medium kind.
+   */
+  if (!integrityMoved) return [];
+  const what =
+    was.ecosystem === "oci"
+      ? `the image ${was.name}:${was.requested ?? "latest"} now resolves to a different digest`
+      : "the file this server runs from has different contents than when it was pinned";
+  return [change("server.artifact.changed", name, `${what}${unexplained}`, { before: was, after: now })];
+}
+
 function compareServer(name: string, before: LockedMcpServer, after: LockedMcpServer): Change[] {
-  if (before.digest === after.digest) return [];
-  const changes: Change[] = [];
+  /*
+   * Provenance first, and outside the short-circuit: the attack it exists for is new code behind
+   * an unchanged surface, which is exactly the case where the digests match.
+   */
+  const provenance = compareProvenance(name, before, after);
+  if (before.digest === after.digest) return provenance;
+  const changes: Change[] = [...provenance];
 
   if (!same(before.transport, after.transport)) {
     changes.push(change("server.transport.changed", name, "the server is reached differently than when it was pinned", { before: before.transport, after: after.transport }));

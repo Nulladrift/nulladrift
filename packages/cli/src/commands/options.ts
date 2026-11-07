@@ -20,4 +20,11 @@ export interface CommonOptions {
    * would mean choosing which of the two readers to serve.
    */
   comment?: boolean;
+  /**
+   * Whether to establish what each stdio server runs -- a registry lookup, or a file hash.
+   *
+   * On by default. Off for an air-gapped run, where every lookup would fail slowly and say so;
+   * a pin the configuration names exactly is kept either way.
+   */
+  provenance?: boolean;
 }

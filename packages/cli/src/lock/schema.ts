@@ -100,6 +100,19 @@ const transport = z.union([
   }),
 ]);
 
+/*
+ * Listed here or lost. `z.object` strips keys it was not told about, so a lock read back without
+ * this would arrive with every artifact pin removed -- `check` would compare nothing against
+ * nothing and report that the code behind every server was unchanged.
+ */
+const provenance = z.object({
+  ecosystem: z.enum(["npm", "pypi", "oci", "file"]),
+  name: z.string(),
+  version: z.string().optional(),
+  integrity: z.string().optional(),
+  requested: z.string().optional(),
+});
+
 const server = z.object({
   kind: z.literal("mcp-server"),
   source: z.object({
@@ -108,6 +121,7 @@ const server = z.object({
     scope: z.enum(["project", "user", "local"]).optional(),
   }),
   transport,
+  provenance: provenance.optional(),
   protocol: z.object({
     era: z.enum(["modern", "legacy"]),
     version: z.string(),
