@@ -160,7 +160,7 @@ a pull request cannot widen what its own build is allowed to do.
 **Nothing in this repository depends on it.** `nulladrift check` needs no account, no token and
 no network beyond the servers it is auditing, and that does not change.
 
-See [nulladrift.io](https://nulladrift.io).
+See [nulladrift.com](https://nulladrift.com).
 
 ## Layout
 
