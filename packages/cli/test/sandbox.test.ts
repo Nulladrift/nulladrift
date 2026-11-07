@@ -41,7 +41,16 @@ describe("sandboxedStdio", () => {
 
   it("pins the version, because `latest` is not a thing you can re-measure", () => {
     expect(argsFor()).toContain("example-mcp@1.2.3");
-    expect(argsFor({ registryType: "npm", identifier: "example-mcp", version: "" })).toContain("example-mcp");
+  });
+
+  it("refuses a versionless entry rather than measuring whatever `latest` is today", () => {
+    // Two runs would execute different code under an identical argv, and the diff would book the
+    // maintainer's release as the server changing its own capability surface.
+    for (const version of [undefined, ""]) {
+      const result = sandboxedStdio({ registryType: "npm", identifier: "example-mcp", version });
+      expect(result.ok).toBe(false);
+      expect(result.ok === false && result.reason).toMatch(/no version/);
+    }
   });
 
   it("uses a stock image unless told otherwise", () => {

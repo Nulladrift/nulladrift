@@ -12,6 +12,66 @@ telemetry). Renaming a change kind breaks every consumer that matched on it.
 
 Nothing yet.
 
+## [0.5.0] - 2026-11-07
+
+### Fixed
+
+- **The README links to nulladrift.com, a domain the project holds, instead of nulladrift.io,
+  which nobody had registered.** The npm package page shows this README, so every visitor was
+  one click from an address anyone could have bought and filled with a sign-in page of their
+  own.
+
+- **The crawl refuses a registry package it cannot pin, rather than measuring whatever `latest`
+  resolved to that morning.** A versionless entry was launched as a bare `npx --yes <name>`, so
+  two passes could execute different code while the lockfile recorded an identical argv -- and the
+  diff then booked the maintainer's release as the server changing its own capability surface,
+  inflating the one number the crawl exists to produce. Those entries are counted as unsupported,
+  where they read as the coverage gap they are.
+
+- **`stdioUnsupported` counts the entries no sandbox could express, instead of sitting at zero.**
+  The classification ran below the `--include-stdio` gate, so every default run reported `0` -- a
+  figure that reads as "every stdio entry could have been measured" when it means "none were
+  looked at". It now runs unconditionally and only the launch is gated.
+
+- **A registry walk that stopped at the paging cap says so in the history.** `truncated` was
+  returned to the script, warned about on stderr and then dropped, so a short pass six months from
+  now would read as an ecosystem that shrank. It moved into `CorpusStats`, which the run record
+  keeps; the report marks such a run as not comparable, and nothing is pruned on the strength of
+  one.
+
+- **A server is dialled at every endpoint its registry entry advertises, Streamable HTTP first.**
+  Only `remotes[0]` was tried, which is publisher order, so a server listing a deprecated SSE
+  endpoint ahead of a working one counted as unreachable -- an outage invented by the reader,
+  which then depressed the published coverage figure. A credential wall still ends the attempt:
+  that is a definitive answer about the server, not a reason to knock on its other doors.
+
+### Added
+
+- **Failure streaks, so a server that retired in March is told apart from one that blinked this
+  morning.** `unreachable` was a single counter and an eighth of the last run was in it. The
+  coverage table splits servers failing three or more runs in a row from servers failing for
+  fewer, and the two call for opposite responses.
+
+- **Subjects the registry has stopped listing are dropped from the corpus lock** after a week of
+  consecutive absences, and never on a truncated walk, where absence means the paging stopped
+  rather than the server left. The observation in `history.json` survives the pruning, because
+  that is the record the all-time rate is computed from.
+
+- **A `user-agent` naming the project and where to read about it**, on the registry walk and on
+  every remote connection. The crawl dials a hundred-odd third-party hosts daily and indefinitely,
+  and an operator who noticed that traffic had nothing to go on. A config that sets its own
+  `user-agent` now keeps it.
+
+- **`--host-delay`: a minimum gap between requests aimed at the same host**, 1000ms by default.
+  The existing delay capped what left the process and said nothing about where it landed, so one
+  operator hosting twenty of the servers in the corpus could take twenty requests inside a second
+  while the aggregate rate looked polite.
+
+### Changed
+
+- **The drift report calls its rates lower bounds.** The crawl samples a surface rather than
+  watching it: two changes between consecutive readings count once, and a change reverted before
+  the next reading is not counted at all.
 ## [0.4.0] - 2026-11-06
 
 ### Added
