@@ -133,13 +133,14 @@ rule ids, and as the `kind` field in opt-in telemetry.
 | `server.artifact.substituted` | The same npm version now has different bytes. High: npm never republishes a version. See §9. |
 | `server.protocol.changed` | Era or revision changed between runs. |
 | `server.instructions.changed` | |
-| `server.capabilities.widened` / `.narrowed` | |
+| `server.capabilities.widened` / `.narrowed` / `.changed` | |
 | `tool.added` / `tool.removed` | |
 | `tool.description.changed` | |
 | `tool.input_schema.widened` / `.narrowed` / `.changed` | |
 | `tool.output_schema.changed` | |
 | `tool.behavior.escalated` / `.relaxed` | Computed from `behavior`, not `annotations`. |
 | `tool.header_params.changed` | |
+| `tool.capability.gained` | The tool can now do something it could not, such as execute a process. Carries the capability and the evidence it was derived from, and takes its severity from the capability rather than from the schema change. A new tool names its capabilities on `tool.added` instead. |
 | `tool.changed` | The catch-all. A tool's digest moved but none of the specific kinds fired, so the change is in `title`, `icons` or `_meta`. Reported rather than swallowed. |
 | `resource.*`, `resource_template.*`, `prompt.*` | `added`, `removed`, `changed`. Resources are keyed by `uri` and templates by `uriTemplate`, so a changed URI is reported as an add plus a remove, the URI *is* the capability, and pretending otherwise would hide a widened template. |
 

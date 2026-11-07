@@ -21,6 +21,12 @@ flagged the BCC. What `nulladrift` would have told you is narrower and still wor
 *the server you reviewed and approved as 1.0.15 is now answering as 1.0.16, and you never
 looked at it.* On a server that sends your mail, that is a reason to go look.
 
+Since 0.6.0 it says so without taking the server's word for it. The lock records the npm package
+behind the command by its integrity hash, so the day 1.0.16 became `latest`, `check` would have
+reported `server.artifact.changed` -- a different release running, with nothing in the declared
+surface to say what it does -- even had the server gone on reporting 1.0.15. It still reads no
+code, so it would not have found the BCC. It would have failed the build until somebody looked.
+
 The broader class this does catch is the **rug pull**: a server that changes what a tool
 *claims to do* after you approved it. A description that grows a paragraph of instructions
 aimed at your agent. A schema that quietly accepts a new `path` argument. A
@@ -66,8 +72,10 @@ not a smaller audit, the spec lets the tool list vary with who is asking, so `ch
 those servers as needing credentials rather than pinning whatever an anonymous client sees.
 
 `init` reads the config files your clients already use, `.mcp.json`, `.vscode/mcp.json`,
-`.cursor/mcp.json`, `~/.claude.json`, `claude_desktop_config.json`, so there is nothing
-to configure to try it.
+`.cursor/mcp.json` and `~/.cursor/mcp.json`, `~/.claude.json`, `claude_desktop_config.json`,
+Windsurf's `~/.codeium/windsurf/mcp_config.json` and Copilot's `~/.copilot/mcp-config.json`, so
+there is nothing to configure to try it. `nulladrift logout <server>` deletes what `login`
+stored.
 
 ## What lands in the lock
 
@@ -156,8 +164,10 @@ scanning, or any AppSec tool that reads SARIF, with no integration to write.
   The CLI alone needs no account and no network, and that stays true.
 - **Not a dependency scanner.** `npm audit` and OSV already cover the servers' own
   dependency trees. The capability layer is the part nothing else covers.
-- **Not a guarantee of behaviour.** It pins what a server *declares*. Postmark is the
-  standing reminder that declaration and behaviour are different things.
+- **Not a guarantee of behaviour.** It pins what a server *declares* and, for a stdio server,
+  which artifact runs. It does not read the code: a release that changes what a tool does shows
+  up as a different artifact, not as a description of the change. Postmark is the standing
+  reminder that declaration and behaviour are different things.
 
 ## The hosted control plane
 
@@ -238,8 +248,10 @@ the public registry is already there.
 
 Resources, resource templates, prompts and declared capabilities used to be on this list and are
 not any more: `mcplock` pins all of them and `mcpdrift` pins most. Running the other way, three
-of these tools can prove a reading came from somewhere, through signing or a transparency log,
-and this one cannot.
+of these tools can prove a reading came from somewhere, through signing or a transparency log.
+Since 0.6.0 this one can say which CI build sent a reading, on the provider's signature, but
+nothing signs the reading's contents and there is no log. 0.6.0 also pins the artifact behind
+each stdio server, which until then only MCPTrust did.
 
 [docs/comparison.md](docs/comparison.md) has the field-by-field matrix, how it was measured, and
 the cases where the alternatives are the better choice.
