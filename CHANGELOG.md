@@ -12,6 +12,11 @@ telemetry). Renaming a change kind breaks every consumer that matched on it.
 
 ### Fixed
 
+- **The README links to nulladrift.com, a domain the project holds, instead of nulladrift.io,
+  which nobody had registered.** The npm package page shows this README, so every visitor was
+  one click from an address anyone could have bought and filled with a sign-in page of their
+  own.
+
 - **The crawl refuses a registry package it cannot pin, rather than measuring whatever `latest`
   resolved to that morning.** A versionless entry was launched as a bare `npx --yes <name>`, so
   two passes could execute different code while the lockfile recorded an identical argv -- and the
