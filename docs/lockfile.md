@@ -55,8 +55,16 @@ check that cries wolf gets `|| true`'d into irrelevance within a week.
 - **`nextCursor`**, pagination state. `nulladrift` walks every page and pins the union.
 - **`resultType`**, transport-level framing (`"complete"` vs `"input_required"`), not capability.
 - **Credential values.** `env` values and header values are never written: only their key
-  names, sorted. The lock is committed. HTTP URLs have their query string stripped, because
-  query strings routinely carry tokens.
+  names, sorted. The lock is committed. HTTP URLs lose their query string, fragment and
+  userinfo, because that is where tokens routinely sit. A credential a config writes literally,
+  in `args` (`--api-key KEY`, `-e GITHUB_TOKEN=...`, a connection string's password) or as a
+  segment of a URL path, is replaced with `REDACTED`, and `init`, `check` and `push` say so; a
+  `${VAR}` placeholder is kept as written. The rules, and why they err toward leaving a value
+  alone, are in `packages/core/src/lock/credentials.ts`.
+- **Machine-specific paths.** `command`, `args` and `cwd` are recorded as the config writes
+  them, before `${VAR}` expansion and before a relative `cwd` is anchored to the project. The
+  expanded forms are what gets spawned; written down, they would put a local home directory in a
+  committed file and make the lock differ on every machine that runs `init`.
 - **Timestamps, anywhere.** No `generatedAt`, no `capturedAt`. A timestamp dirties the file
   on every `init` and `review`, producing merge conflicts and training reviewers to skim
   past the diff. Git already records when the lock changed and who changed it, more

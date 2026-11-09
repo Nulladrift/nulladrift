@@ -132,6 +132,14 @@ describes the new code. The same npm version arriving with different bytes is
 `server.artifact.substituted`, which has no innocent explanation. `--no-provenance` skips the
 registry lookups for an air-gapped run.
 
+**What it leaves out: credentials, wherever a config puts them.** `env` and header values are
+recorded by name only, and a URL loses its query string and `user:password`. A credential
+written literally (`--api-key sk-...`, `-e GITHUB_TOKEN=ghp_...`, a connection string's password,
+a key in a hosted server's URL path) is replaced with `REDACTED`, and `init`, `check` and `push`
+say which server it was. Write it as `${VAR}` instead; the lock keeps the placeholder. If an
+earlier `mcp.lock` was committed with the key in it, rotate the key: taking it out of the file
+does not take it out of git history.
+
 Format and rationale: [docs/lockfile.md](docs/lockfile.md). JSON Schema:
 [schema/mcp.lock.schema.json](schema/mcp.lock.schema.json). Worked example:
 [examples/mcp.lock](examples/mcp.lock).
@@ -349,3 +357,13 @@ Requires Node 22+.
 ## Licence
 
 MIT. See [LICENSE](LICENSE).
+
+**The licence covers the code, not the name.** "Nulladrift" and the pin mark identify this
+project, and the MIT licence grants no rights to either. You are welcome to say a fork or a
+product is based on Nulladrift, to write about it, and to link to it. Please do not name a fork, a
+package or a hosted service "Nulladrift", or use the mark in a way that suggests it is this
+project or that we endorse it. The mark, and how to use it when you write about the project, is
+at [nulladrift.com/brand](https://nulladrift.com/brand).
+
+Contributions come in under the same MIT licence, signed off under the Developer Certificate of
+Origin; [CONTRIBUTING.md](CONTRIBUTING.md#sign-off-every-commit) says how.

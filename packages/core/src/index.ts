@@ -18,6 +18,7 @@ export {
   sanitizeUrl,
   stripIgnoredMeta,
 } from "./lock/normalize";
+export { countRedacted, REDACTED, redactArgs, redactPath } from "./lock/credentials";
 export { diffLockfiles } from "./diff/index";
 export { classifySchemaChange } from "./diff/schema";
 export { CHANGE_KINDS, SEVERITY, SEVERITY_RANK, sortChanges, serversThatShippedNothing, type Change, type ChangeKind, type Severity } from "./diff/types";

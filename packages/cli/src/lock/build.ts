@@ -3,6 +3,7 @@ import type { Prompt, Resource, ResourceTemplateType as ResourceTemplate, Tool }
 import type { ConfiguredServer } from "../config/types";
 import type { CapturedSurface } from "../mcp/types";
 import { digest, toJson } from "./canonical";
+import { redactArgs } from "./credentials";
 import { extractHeaderParams, normalizeSchema, resolveBehavior, sanitizeUrl, stripIgnoredMeta } from "./normalize";
 import type {
   JsonObject,
@@ -53,13 +54,14 @@ export function lockTransport(server: ConfiguredServer): LockedTransport {
   const { transport } = server;
   if (transport.type === "stdio") {
     const command = transport.asWritten?.command ?? transport.command;
-    const args = transport.asWritten?.args ?? transport.args;
+    // A credential written literally in the config is left out too; see redactArgs.
+    const args = redactArgs(transport.asWritten?.args ?? transport.args);
     return {
       type: "stdio",
       command,
       args: args.length > 0 ? args : undefined,
       envKeys: Object.keys(transport.env).length > 0 ? Object.keys(transport.env).sort() : undefined,
-      cwd: transport.cwd,
+      cwd: transport.asWritten ? transport.asWritten.cwd : transport.cwd,
     };
   }
   const headerKeys = Object.keys(transport.headers);
