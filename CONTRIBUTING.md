@@ -113,6 +113,30 @@ It follows that this repository's own `minimumReleaseAge` policy and its practic
 tool whose subject is dependency drift should not be installing packages nobody has looked at,
 including its own.
 
+## Sign off every commit
+
+Contributions come in under the [Developer Certificate of Origin](https://developercertificate.org)
+(DCO) 1.1. Signing off a commit certifies that you wrote it, or otherwise have the right to
+submit it under this repository's MIT licence, and that you understand the contribution and your
+sign-off are kept in the public history.
+
+```sh
+git commit -s
+```
+
+That adds a line with the name and email from your git config:
+
+```
+Signed-off-by: Your Name <you@example.com>
+```
+
+Every commit you contribute needs one; a contributed pull request without them is not merged.
+To sign off the commits already on a branch, `git rebase --signoff develop` and push it again.
+
+**A DCO, not a CLA.** You keep the copyright in what you write and license it under MIT like the
+rest of the code; nobody is asked to assign anything. It also means the licence cannot be changed
+later without every contributor agreeing, which is the point: what you contribute stays MIT.
+
 ## Before you push
 
 ```sh
