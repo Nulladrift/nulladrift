@@ -10,6 +10,10 @@ telemetry). Renaming a change kind breaks every consumer that matched on it.
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.7.1] - 2026-11-09
+
 ### Security
 
 - **One server's schema could hold whatever compared it for minutes.** Telling whether an enum or
@@ -19,7 +23,6 @@ telemetry). Renaming a change kind breaks every consumer that matched on it.
   comparison on one thread for every tenant, a single reading stalled everyone. Both comparisons,
   and the walk of a schema's `required` list, are now linear: the same case takes a fraction of a
   second.
-
 ## [0.7.0] - 2026-11-09
 
 ### Added
