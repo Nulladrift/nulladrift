@@ -48,7 +48,8 @@ export function normalizeSchema(value: JsonValue): JsonValue {
   if (Array.isArray(value)) return value.map(normalizeSchema);
   if (value === null || typeof value !== "object") return value;
 
-  const out: JsonObject = {};
+  // No prototype, so a member named `__proto__` is kept (see toJson in canonical.ts).
+  const out = Object.create(null) as JsonObject;
   for (const [key, member] of Object.entries(value)) {
     if (key === "required" && Array.isArray(member) && member.every((entry) => typeof entry === "string")) {
       out[key] = [...(member as string[])].sort();
@@ -71,9 +72,20 @@ export function normalizeSchema(value: JsonValue): JsonValue {
  */
 export function extractHeaderParams(schema: JsonValue): string[] {
   const found: string[] = [];
+  /*
+   * Bounded twice. A `$ref` already on the way down is not followed again: a definition whose
+   * properties point back at it was walked once per property per level, P^12 calls, so a
+   * 200-byte schema held `check` for minutes on a blocked event loop that no timeout could
+   * interrupt. Headers inside a recursion are the ones its first pass already found. And a hard
+   * ceiling on visits, which leaves a marker in the lock rather than an incomplete list that
+   * looks complete.
+   */
+  let budget = MAX_HEADER_VISITS;
 
-  const walk = (node: JsonValue, path: string[], depth: number): void => {
+  const walk = (node: JsonValue, path: string[], depth: number, refsOnPath: ReadonlySet<string>): void => {
     if (depth > MAX_VISIT_DEPTH) return;
+    if (budget <= 0) return;
+    budget -= 1;
     const object = effectiveSchema(node, schema);
     if (!object) return;
 
@@ -84,22 +96,33 @@ export function extractHeaderParams(schema: JsonValue): string[] {
         if (!resolved) continue;
         const header = resolved["x-mcp-header"];
         if (typeof header === "string" && header.length > 0) found.push(`${[...path, name].join(".")} -> ${header}`);
-        walk(child, [...path, name], depth + 1);
+        const ref = asObject(child)?.["$ref"];
+        if (typeof ref === "string" && refsOnPath.has(ref)) continue;
+        walk(child, [...path, name], depth + 1, typeof ref === "string" ? new Set([...refsOnPath, ref]) : refsOnPath);
       }
     }
 
     // A parameter reachable only through one branch of an `anyOf` is still reachable.
-    for (const branch of alternatives(object)) walk(branch.schema, path, depth + 1);
+    for (const branch of alternatives(object)) {
+      const ref = asObject(branch.schema)?.["$ref"];
+      if (typeof ref === "string" && refsOnPath.has(ref)) continue;
+      walk(branch.schema, path, depth + 1, typeof ref === "string" ? new Set([...refsOnPath, ref]) : refsOnPath);
+    }
   };
 
-  walk(schema, [], 0);
+  const rootRef = asObject(schema)?.["$ref"];
+  walk(schema, [], 0, new Set(typeof rootRef === "string" ? [rootRef] : []));
+  if (budget <= 0) found.push(`(schema too large to scan for headers past ${MAX_HEADER_VISITS} nodes)`);
   return [...new Set(found)].sort();
 }
+
+/** How many schema nodes the header scan visits before it stops and says so. */
+export const MAX_HEADER_VISITS = 20_000;
 
 /** Drops `_meta` keys under any ignored prefix. Returns undefined when nothing is left to pin. */
 export function stripIgnoredMeta(meta: JsonValue | undefined, ignoredPrefixes: readonly string[]): JsonObject | undefined {
   if (meta === null || meta === undefined || typeof meta !== "object" || Array.isArray(meta)) return undefined;
-  const out: JsonObject = {};
+  const out = Object.create(null) as JsonObject;
   for (const [key, value] of Object.entries(meta)) {
     if (ignoredPrefixes.some((prefix) => key.startsWith(prefix))) continue;
     out[key] = value;
@@ -109,6 +132,12 @@ export function stripIgnoredMeta(meta: JsonValue | undefined, ignoredPrefixes: r
 
 /** Strips the query string: query strings routinely carry tokens, and the lock is committed. */
 export function sanitizeUrl(raw: string): string {
+  /*
+   * A placeholder (`${HOST}`, `${PORT}`) is kept exactly as written. Parsing first lowercased a
+   * placeholder in the host, so the lock named a variable the config never used, and failed on one
+   * in the port, which wrote the address raw, query string and all.
+   */
+  if (raw.includes("${")) return sanitizeText(raw);
   try {
     const url = new URL(raw);
     url.search = "";
@@ -124,7 +153,14 @@ export function sanitizeUrl(raw: string): string {
     url.pathname = redactPath(url.pathname);
     return url.toString();
   } catch {
-    // Not a parseable URL. Keep it as configured so the mismatch is visible rather than silent.
-    return raw;
+    return sanitizeText(raw);
   }
+}
+
+/** The same, as text, for an address a URL parser cannot or should not normalize. */
+function sanitizeText(raw: string): string {
+  const withoutUser = raw.replace(/^([a-z][a-z0-9+.-]*:\/\/)[^/@]*@/i, "$1");
+  const base = withoutUser.split(/[?#]/)[0] ?? withoutUser;
+  const parts = /^([a-z][a-z0-9+.-]*:\/\/[^/]*)(\/.*)?$/i.exec(base);
+  return parts ? `${parts[1]}${parts[2] ? redactPath(parts[2]) : ""}` : base;
 }

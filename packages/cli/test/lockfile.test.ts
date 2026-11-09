@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import Ajv2020 from "ajv/dist/2020";
 import addFormats from "ajv-formats";
 import { beforeAll, describe, expect, it } from "vitest";
-import { mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import { lstat, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { LockfileError, parseLockfile, readLockfile, serializeLockfile, writeLockfile } from "../src/lock/io";
@@ -247,6 +247,26 @@ describe("a lockfile path that is a symlink is refused, not followed", () => {
       await symlink(victim, lockPath);
       await expect(writeLockfile(lockPath, lockOfTools([makeTool({ name: "t" })]))).rejects.toThrow(/symbolic link/i);
       expect(await readFile(victim, "utf8")).toBe("ORIGINAL");
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  /*
+   * The check on the final path missed the temporary file next to it: `mcp.lock.<pid>.tmp` was
+   * written with a call that follows symlinks, so a repository shipping that link for a range of
+   * PIDs overwrote whatever it pointed at, and left mcp.lock itself a link.
+   */
+  it("does not follow a link planted where the temporary file used to go", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "mcp-link-"));
+    try {
+      const victim = join(dir, "victim.txt");
+      const lockPath = join(dir, "mcp.lock");
+      await writeFile(victim, "ORIGINAL", "utf8");
+      await symlink(victim, `${lockPath}.${process.pid}.tmp`);
+      await writeLockfile(lockPath, lockOfTools([makeTool({ name: "t" })]));
+      expect(await readFile(victim, "utf8")).toBe("ORIGINAL");
+      expect((await lstat(lockPath)).isSymbolicLink()).toBe(false);
     } finally {
       await rm(dir, { recursive: true, force: true });
     }

@@ -18,14 +18,55 @@ export interface Expanded {
   value: string;
   /** Placeholders we could not fill, named as they appeared. */
   unresolved: string[];
+  /** Placeholders naming this run's own credentials, which are never filled. See `isRunCredential`. */
+  refused: string[];
 }
 
 const PLACEHOLDER = /\$\{([^}]+)\}/g;
 
+/**
+ * Variables that hold the credentials of the run doing the audit, never a server's.
+ *
+ * The config is the thing under review, and in a pull request it is the author's. Expanding
+ * `${ACTIONS_ID_TOKEN_REQUEST_TOKEN}` into a URL, a header or a server's environment handed the
+ * job's identity to a host the author named, and `${NULLADRIFT_TOKEN}` handed over the collector
+ * token. No MCP server needs either, so they are refused rather than filled, and the server is
+ * reported as an audit that could not complete.
+ *
+ * What is refused is what nobody put there for a server: the credentials a CI provider injects
+ * into every job, and every `NULLADRIFT_` variable. `${GITHUB_TOKEN}` and `${API_KEY}` are filled.
+ * A workflow sets those on purpose, the GitHub MCP server is audited with the first, and keeping
+ * them from a pull request's author is the workflow's job: run `check` on `pull_request`, which
+ * gives a fork no secrets, and never on `pull_request_target`.
+ */
+const RUN_CREDENTIALS = new Set([
+  "CI_JOB_TOKEN", "CI_REGISTRY_PASSWORD", "CI_DEPLOY_PASSWORD", "CI_DEPENDENCY_PROXY_PASSWORD", "CI_REPOSITORY_URL",
+  "BUILDKITE_AGENT_ACCESS_TOKEN", "BITBUCKET_STEP_OIDC_TOKEN", "SYSTEM_ACCESSTOKEN",
+]);
+
+export function isRunCredential(name: string): boolean {
+  const upper = name.toUpperCase();
+  return (
+    RUN_CREDENTIALS.has(upper) ||
+    upper.startsWith("NULLADRIFT_") ||
+    upper.startsWith("ACTIONS_") ||
+    upper.startsWith("CI_JOB_JWT") ||
+    upper.startsWith("CIRCLE_OIDC_TOKEN")
+  );
+}
+
 export function expand(input: string, context: ExpandContext): Expanded {
   const unresolved: string[] = [];
+  const refused: string[] = [];
 
   const value = input.replace(PLACEHOLDER, (match, body: string) => {
+    // `${NAME}`, `${env:NAME}` and `${NAME:-default}` all read NAME, so all three are refused.
+    const named = body.startsWith("env:") ? body.slice(4) : body.includes(":-") ? body.slice(0, body.indexOf(":-")) : body;
+    if (isRunCredential(named)) {
+      refused.push(match);
+      return match;
+    }
+
     if (body === "workspaceFolder") return context.workspaceFolder;
     if (body === "userHome") return homedir();
     if (body === "pathSeparator" || body === "/") return "/";
@@ -59,7 +100,7 @@ export function expand(input: string, context: ExpandContext): Expanded {
     return match;
   });
 
-  return { value, unresolved };
+  return { value, unresolved, refused };
 }
 
 export function expandAll(inputs: string[], context: ExpandContext): Expanded {
@@ -67,5 +108,6 @@ export function expandAll(inputs: string[], context: ExpandContext): Expanded {
   return {
     value: results.map((result) => result.value).join("\u0000"),
     unresolved: results.flatMap((result) => result.unresolved),
+    refused: results.flatMap((result) => result.refused),
   };
 }

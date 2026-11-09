@@ -11,7 +11,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { ConfiguredServer } from "../src/config/types";
 import { parseServerMap } from "../src/config/parsers";
 import { authFailureKind, isAuthFailure, UnreachableServerError } from "../src/mcp/types";
-import { createAuthProvider, credentialPath, FileTokenProvider, hasStoredCredentials, InteractiveAuthRequiredError } from "../src/mcp/oauth";
+import { createAuthProvider, credentialPath, FileTokenProvider, hasStoredCredentials, InteractiveAuthRequiredError, openInBrowser } from "../src/mcp/oauth";
 
 let configHome: string;
 let previous: string | undefined;
@@ -152,24 +152,40 @@ describe("non-interactive runs", () => {
 describe("oauth in a client config", () => {
   it("reads clientId and clientSecret, expanding them from the environment", async () => {
     const parsed = await parseServerMap(
-      { mcpServers: { gated: { type: "http", url: "https://api.example.com/mcp", oauth: { clientId: "cid", clientSecret: "${GATED_SECRET}", scopes: ["a", "b"] } } } },
+      { mcpServers: { gated: { type: "http", url: "https://api.example.com/mcp", oauth: { clientId: "cid", clientSecret: "${GATED_SECRET}", issuer: "https://auth.example.com", scopes: ["a", "b"] } } } },
       "mcpServers",
       { client: "claude-code", file: ".mcp.json" },
       { workspaceFolder: "/tmp", env: { GATED_SECRET: "from-env" } },
     );
     const transport = parsed.servers[0]?.transport;
-    expect(transport?.type === "http" ? transport.oauth : undefined).toEqual({ clientId: "cid", clientSecret: "from-env", scope: "a b" });
+    expect(transport?.type === "http" ? transport.oauth : undefined).toEqual({ clientId: "cid", clientSecret: "from-env", issuer: "https://auth.example.com", scope: "a b" });
   });
 
   it("skips the server when the secret is not in the environment, rather than auditing half a surface", async () => {
     const parsed = await parseServerMap(
-      { mcpServers: { gated: { type: "http", url: "https://api.example.com/mcp", oauth: { clientId: "cid", clientSecret: "${MISSING_SECRET}" } } } },
+      { mcpServers: { gated: { type: "http", url: "https://api.example.com/mcp", oauth: { clientId: "cid", clientSecret: "${MISSING_SECRET}", issuer: "https://auth.example.com" } } } },
       "mcpServers",
       { client: "claude-code", file: ".mcp.json" },
       { workspaceFolder: "/tmp", env: {} },
     );
     expect(parsed.servers).toHaveLength(0);
     expect(parsed.skipped[0]?.message).toContain("${MISSING_SECRET}");
+  });
+
+  /*
+   * Without an issuer the secret goes to whichever authorization server the MCP server names in
+   * its metadata, so a compromised server could name its own and collect it on the next CI run.
+   */
+  it("refuses a client secret that does not say which authorization server it is for", async () => {
+    const parsed = await parseServerMap(
+      { mcpServers: { gated: { type: "http", url: "https://api.example.com/mcp", oauth: { clientId: "cid", clientSecret: "${GATED_SECRET}" } } } },
+      "mcpServers",
+      { client: "claude-code", file: ".mcp.json" },
+      { workspaceFolder: "/tmp", env: { GATED_SECRET: "from-env" } },
+    );
+    expect(parsed.servers).toHaveLength(0);
+    expect(parsed.skipped[0]?.message).toMatch(/oauth\.issuer/);
+    expect(parsed.skipped[0]?.message).not.toContain("from-env");
   });
 
   it("never lets a client secret reach the lockfile", async () => {
@@ -211,5 +227,24 @@ describe("authFailureKind separates a missing credential from a refused one", ()
   it("still reports both as auth failures, so neither is mistaken for an outage", () => {
     expect(isAuthFailure(new UnreachableServerError("s", "HTTP 403 Forbidden"))).toBe(true);
     expect(isAuthFailure(new UnreachableServerError("s", "HTTP 401 Unauthorized"))).toBe(true);
+  });
+});
+
+/*
+ * The authorization page's address comes from metadata the MCP server chose. It was handed to the
+ * platform opener as is: `cmd /c start` on Windows, where `&` in a URL runs a command, and
+ * `open`/`xdg-open` elsewhere, which follow any scheme.
+ */
+describe("opening an authorization page", () => {
+  it("refuses anything that is not an https page (or http on this machine), without launching anything", () => {
+    for (const address of ["file:///etc/passwd", "smb://evil.example/share", "http://evil.example/authorize", "vscode://evil/run", "https://"]) {
+      let url: URL | undefined;
+      try {
+        url = new URL(address);
+      } catch {
+        continue;
+      }
+      expect(openInBrowser(url), address).toBe(false);
+    }
   });
 });

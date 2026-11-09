@@ -26,6 +26,7 @@ export async function buildReport(options: CommonOptions): Promise<{ report: Aud
     policy: committed.policy,
     previous: committed,
     provenance: options.provenance,
+    userConfigs: options.userConfigs,
   });
   // On stderr, so it reaches a person without touching a --format json or sarif report on stdout.
   for (const note of redactedNotes(result.lock)) process.stderr.write(`${yellow("note:")} ${note}\n`);

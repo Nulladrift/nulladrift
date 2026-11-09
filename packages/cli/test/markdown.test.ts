@@ -79,10 +79,12 @@ describe("text from a server cannot author the comment", () => {
     expect(body).toContain("a \\| b \\| c");
   });
 
-  it("escapes a backtick, so it cannot end the code span and start its own Markdown", () => {
+  it("fences a backtick, so it cannot end the code span and start its own Markdown", () => {
     const body = renderMarkdownReport(report({ changes: [change({ server: "x`y" })] }));
 
-    expect(body).toContain("x\\`y");
+    // A backslash escapes nothing inside a code span, so `x\`y` ended the span at the backtick.
+    // A fence longer than any backtick run inside it is the only thing that holds.
+    expect(body).toContain("``x`y``");
   });
 
   it("flattens a newline, so a summary cannot add rows to the table", () => {

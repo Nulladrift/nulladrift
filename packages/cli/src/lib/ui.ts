@@ -50,7 +50,9 @@ export function truncate(text: string, limit = 160): string {
  * path that wrapped over two lines and pushed the quote off the screen entirely, which is a way
  * of hiding in the report rather than in the schema.
  */
-export function elideMiddle(path: string, limit: number): string {
+export function elideMiddle(raw: string, limit: number): string {
+  // Field paths name a server's tools and parameters, so they are escaped like any server text.
+  const path = visibleControls(raw);
   if (path.length <= limit) return path;
   const keep = Math.floor((limit - 1) / 2);
   return `${path.slice(0, keep)}\u2026${path.slice(-keep)}`;

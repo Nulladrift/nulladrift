@@ -116,9 +116,9 @@ export function splitImage(reference: string): { name: string; tag?: string; dig
  * switch. The lists are deliberately the documented ones: guessing in the other direction would
  * swallow the package name as a flag's value and pin whatever came after it.
  */
-const NPM_VALUE_FLAGS = new Set(["-p", "--package", "-c", "--call", "--registry", "--cache", "--userconfig", "--prefix", "-w", "--workspace", "--node-options"]);
-const UV_VALUE_FLAGS = new Set([
-  "--from", "--with", "--with-editable", "--with-requirements", "--python", "-p", "--index", "--index-url",
+export const NPM_VALUE_FLAGS = new Set(["-p", "--package", "-c", "--call", "--registry", "--cache", "--userconfig", "--prefix", "-w", "--workspace", "--node-options"]);
+export const UV_VALUE_FLAGS = new Set([
+  "--from", "--with", "--with-editable", "--with-requirements", "--python", "-p", "--index", "--index-url", "-i",
   "--extra-index-url", "--default-index", "--find-links", "-f", "--constraint", "-c", "--override",
   "--build-constraint", "--refresh-package", "--reinstall-package", "--upgrade-package", "-P", "--directory",
   "--project", "--config-file", "--cache-dir", "--color", "--resolution", "--prerelease", "--exclude-newer",
@@ -179,7 +179,7 @@ function firstPositional(args: string[], valueFlags: Set<string>, explicitFlags:
  * `path.basename` only understands on Windows, so a config written there and audited on a Linux
  * runner would otherwise never be recognised as a launcher at all.
  */
-function commandName(command: string): string {
+export function commandName(command: string): string {
   return (command.split(/[\\/]/).pop() ?? command).replace(/\.(cmd|exe|bat|ps1)$/i, "").toLowerCase();
 }
 
@@ -286,6 +286,20 @@ export function isExact(reference: ArtifactReference): boolean {
 
 // ----------------------------------------------------------------------------------- resolving
 
+export const NPM_PUBLIC = "https://registry.npmjs.org";
+
+/** An environment variable as npm reads it: `npm_config_registry` in any case. */
+export function npmEnv(env: Record<string, string | undefined>, name: string): string | undefined {
+  const wanted = name.toLowerCase();
+  for (const [key, value] of Object.entries(env)) if (key.toLowerCase() === wanted && value) return value;
+  return undefined;
+}
+
+/** The npm registry the resolver asks: the one the person running the audit configured, or the public one. */
+export function resolverNpmRegistry(env: Record<string, string | undefined> = process.env): string {
+  return (npmEnv(env, "npm_config_registry") ?? NPM_PUBLIC).replace(/\/+$/, "");
+}
+
 export interface ResolveOptions {
   timeoutMs?: number;
   /** Swappable for tests, which must not depend on a public registry being up. */
@@ -315,8 +329,11 @@ async function resolveNpm(reference: ArtifactReference, options: ResolveOptions)
   const asked = reference.requested ?? "latest";
   if (!NPM_EXACT.test(asked) && !NPM_TAG.test(asked)) return undefined;
 
-  // Honoured because a mirror serves the same tarballs, and an air-gapped site has nothing else.
-  const registry = (process.env["npm_config_registry"] ?? "https://registry.npmjs.org").replace(/\/+$/, "");
+  /*
+   * The registry the person running the audit configured, which a mirror or an air-gapped site
+   * needs. One the configuration under audit picks is not asked: see `fetchedElsewhere`.
+   */
+  const registry = resolverNpmRegistry();
   const body = (await getJson(`${registry}/${reference.name.replace("/", "%2F")}/${encodeURIComponent(asked)}`, options)) as
     | { version?: unknown; dist?: { integrity?: unknown; shasum?: unknown } }
     | undefined;

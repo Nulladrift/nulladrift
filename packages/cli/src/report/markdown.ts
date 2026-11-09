@@ -31,15 +31,38 @@ const MARK: Record<Severity, string> = { high: "🔴", medium: "🟠", low: "⚪
  * putting it unescaped into a comment would let a server write the comment. Backticks end the
  * code span, pipes break out of the table cell, and the rest of Markdown follows from there.
  */
-function cell(text: string): string {
-  // Same reasoning as the terminal reporter: this text is written by the server under audit, and
-  // a bidirectional override renders a pull request comment as something other than what it says.
-  return visibleControls(text).replace(/\|/g, "\\|").replace(/`/g, "\\`").replace(/\r?\n/g, " ").trim();
+/*
+ * Text written by the server under audit, placed in a pull request comment, which GitHub renders.
+ * A bidirectional override renders the comment as something other than what it says; and a tool
+ * named `![x](https://evil/b.png) [Approved](https://evil/) @octocat` rendered as a tracking
+ * image, a link and a mention, while a backtick closed the code span around it, because a
+ * backslash escapes nothing inside one. So server text is either plain (every Markdown and HTML
+ * character escaped, mentions and bare links broken) or code (a fence longer than any backtick it
+ * contains). `|` is escaped in both, which a table needs even inside a code span.
+ */
+function plain(text: string): string {
+  return visibleControls(text)
+    .replace(/\r?\n/g, " ")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/([\\`*_{}[\]()#+!|~])/g, "\\$1")
+    .replace(/@/g, "&#64;")
+    .replace(/:\/\//g, "&#58;//")
+    .trim();
+}
+
+function code(text: string): string {
+  const body = visibleControls(text).replace(/\r?\n/g, " ").replace(/\|/g, "\\|").trim();
+  const longest = Math.max(0, ...(body.match(/`+/g) ?? []).map((run) => run.length));
+  const fence = "`".repeat(longest + 1);
+  const pad = body.startsWith("`") || body.endsWith("`") ? " " : "";
+  return `${fence}${pad}${body}${pad}${fence}`;
 }
 
 function row(change: Change): string {
   const where = change.member ? `${change.server}/${change.member}` : change.server;
-  return `| ${MARK[change.severity]} ${change.severity} | \`${cell(where)}\` | ${cell(change.kind)} | ${cell(change.summary)} |`;
+  return `| ${MARK[change.severity]} ${change.severity} | ${code(where)} | ${plain(change.kind)} | ${plain(change.summary)} |`;
 }
 
 /**
@@ -72,7 +95,7 @@ export function renderMarkdownReport(report: AuditReport, options: { url?: strin
     if (quiet.length > 0) {
       lines.push(
         `> **${quiet.length === 1 ? "This server" : "These servers"} changed without shipping a new version:** ${quiet
-          .map((server) => `\`${cell(server)}\``)
+          .map((server) => code(server))
           .join(", ")}`,
         ">",
         "> Same package, same version, a different declaration. Nothing was published.",
@@ -98,7 +121,7 @@ export function renderMarkdownReport(report: AuditReport, options: { url?: strin
       "| Server | Field | Passage |",
       "| --- | --- | --- |",
       ...steering.flatMap(({ server, signals }) =>
-        signals.slice(0, 10).map((signal) => `| \`${cell(server)}\` | \`${cell(signal.field)}\` | ${cell(signal.quote)} |`),
+        signals.slice(0, 10).map((signal) => `| ${code(server)} | ${code(signal.field)} | ${plain(signal.quote)} |`),
       ),
       "",
       "</details>",
@@ -113,7 +136,7 @@ export function renderMarkdownReport(report: AuditReport, options: { url?: strin
       `<details><summary>${report.unreachable.length} server${report.unreachable.length === 1 ? "" : "s"} could not be read</summary>`,
       "",
       ...report.unreachable.map(
-        (failure) => `- \`${cell(failure.server)}\` · ${AUDIT_FAILURE_LABEL[failure.kind]}: ${cell(failure.reason)}`,
+        (failure) => `- ${code(failure.server)} · ${AUDIT_FAILURE_LABEL[failure.kind]}: ${plain(failure.reason)}`,
       ),
       "",
       "</details>",

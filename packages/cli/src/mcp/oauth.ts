@@ -173,19 +173,42 @@ export class FileTokenProvider implements OAuthClientProvider {
 
   async redirectToAuthorization(authorizationUrl: URL): Promise<void> {
     if (!this.options.interactive) throw new InteractiveAuthRequiredError(this.serverName);
-    openInBrowser(authorizationUrl);
-    process.stderr.write(`\nIf a browser did not open, visit:\n  ${authorizationUrl.toString()}\n\n`);
+    if (openInBrowser(authorizationUrl)) {
+      process.stderr.write(`\nIf a browser did not open, visit:\n  ${authorizationUrl.toString()}\n\n`);
+    } else {
+      process.stderr.write(`\nNot opening ${authorizationUrl.protocol} address the server named; an authorization page has to be https. Address:\n  ${authorizationUrl.toString()}\n\n`);
+    }
   }
 }
 
-export function openInBrowser(url: URL): void {
-  const command = platform() === "darwin" ? "open" : platform() === "win32" ? "cmd" : "xdg-open";
-  const args = platform() === "win32" ? ["/c", "start", "", url.toString()] : [url.toString()];
+/**
+ * Opens an authorization page, if it is one.
+ *
+ * The address comes from the authorization server's metadata, which the MCP server chose, so it
+ * is untrusted input. Only `https:` is opened (and `http:` on loopback, for a local server), so a
+ * server cannot hand the browser a `file:`, `smb:` or custom-scheme link. On Windows it is not
+ * passed through `cmd /c start`: cmd reads `&` and `|` in a URL as command separators, and a
+ * URL's query is full of `&`, so a server could run a command and every real login URL was cut
+ * at its first parameter. `rundll32 url.dll,FileProtocolHandler` takes the URL as one argument.
+ *
+ * Returns whether it tried to open it; the caller prints the address either way.
+ */
+export function openInBrowser(url: URL): boolean {
+  const loopback = ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname);
+  if (!(url.protocol === "https:" || (url.protocol === "http:" && loopback))) return false;
+  const target = url.toString();
+  const [command, args] =
+    platform() === "darwin"
+      ? ["open", [target]]
+      : platform() === "win32"
+        ? ["rundll32", ["url.dll,FileProtocolHandler", target]]
+        : ["xdg-open", [target]];
   try {
-    spawn(command, args, { detached: true, stdio: "ignore" }).unref();
+    spawn(command, args, { detached: true, stdio: "ignore", windowsHide: true }).unref();
   } catch {
     // The URL is printed either way; failing to launch a browser is not fatal.
   }
+  return true;
 }
 
 /**
@@ -223,6 +246,8 @@ export function createAuthProvider(server: ConfiguredServer, options: { interact
     return new ClientCredentialsProvider({
       clientId: oauth.clientId,
       clientSecret: oauth.clientSecret,
+      // The SDK then refuses to send the secret to any other authorization server (SEP-2352).
+      ...(oauth.issuer === undefined ? {} : { expectedIssuer: oauth.issuer }),
       clientName: `nulladrift ${VERSION}`,
       ...(oauth.scope === undefined ? {} : { scope: oauth.scope }),
     });
