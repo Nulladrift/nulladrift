@@ -10,6 +10,10 @@ telemetry). Renaming a change kind breaks every consumer that matched on it.
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.6.1] - 2026-11-09
+
 ### Security
 
 - **A credential a config writes literally no longer reaches `mcp.lock` or the reading `push`
@@ -47,7 +51,6 @@ telemetry). Renaming a change kind breaks every consumer that matched on it.
   comparison now credits both, and the steering scan it had marked absent. The README also named
   five of the seven client config files `init` reads, and the change taxonomy in
   `docs/lockfile.md` lacked `tool.capability.gained` and `server.capabilities.changed`.
-
 ## [0.6.0] - 2026-11-07
 
 ### Added
