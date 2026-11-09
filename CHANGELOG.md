@@ -10,6 +10,10 @@ telemetry). Renaming a change kind breaks every consumer that matched on it.
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.7.0] - 2026-11-09
+
 ### Added
 
 - **`push` signs each reading's contents on GitHub Actions, not only which build sent it.** The
@@ -22,7 +26,6 @@ telemetry). Renaming a change kind breaks every consumer that matched on it.
   `contents signed` when the control plane accepted it. GitLab, and any token passed in
   `NULLADRIFT_ID_TOKEN`, is minted before the job runs, for an audience fixed in the pipeline
   file, so those readings still prove only their build.
-
 ## [0.6.2] - 2026-11-09
 
 ### Security
