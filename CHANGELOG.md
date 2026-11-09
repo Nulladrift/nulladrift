@@ -12,6 +12,17 @@ telemetry). Renaming a change kind breaks every consumer that matched on it.
 
 Nothing yet.
 
+## [0.7.1] - 2026-11-09
+
+### Security
+
+- **One server's schema could hold whatever compared it for minutes.** Telling whether an enum or
+  a list of types widened or narrowed checked each member against the other list one by one, so
+  the time grew with the square of the list, and the server under audit decides how long that
+  list is. 200,000 members took 27 seconds in `check`, and on a control plane, which runs the same
+  comparison on one thread for every tenant, a single reading stalled everyone. Both comparisons,
+  and the walk of a schema's `required` list, are now linear: the same case takes a fraction of a
+  second.
 ## [0.7.0] - 2026-11-09
 
 ### Added
