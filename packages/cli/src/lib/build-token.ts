@@ -18,6 +18,32 @@ export const BUILD_TOKEN_HEADER = "nulladrift-build-token";
 /** What the token must be minted for. The control plane checks it, so a token for another service is refused. */
 export const DEFAULT_AUDIENCE = "nulladrift";
 
+/**
+ * Where a token minted for one reading's exact bytes goes. Kept in step with the server by hand.
+ *
+ * The build token says which build sent a reading, not what it said: anyone holding it for its
+ * few minutes, with the collector token, could send other contents as that build. This one is
+ * the same provider-signed token, minted for an audience that carries the sha256 of the request
+ * body, so the provider's signature covers the bytes too. Both are sent, because a control plane
+ * from before 0.7.0 knows only the build token.
+ */
+export const READING_TOKEN_HEADER = "nulladrift-reading-token";
+
+/** The audience a reading token is minted for. Must match the control plane's, byte for byte. */
+export function readingAudience(base: string, digest: string): string {
+  return `${base.replace(/\/+$/, "")}#sha256:${digest}`;
+}
+
+/**
+ * Whom a reading token is for: `NULLADRIFT_BUILD_AUDIENCE` when it is set, which the control
+ * plane accepts too, and otherwise the origin of the address being pushed to. Naming the control
+ * plane is what stops a token sent to one being replayed against another; the build token's fixed
+ * `nulladrift` could be.
+ */
+export function readingAudienceBase(apiUrl: string, env: NodeJS.ProcessEnv = process.env): string {
+  return env["NULLADRIFT_BUILD_AUDIENCE"] || new URL(apiUrl).origin;
+}
+
 export type BuildToken = { token: string; source: "github-actions" | "environment" };
 
 /** Said once, in the push output, when a token could have been sent and was not. */
@@ -44,7 +70,22 @@ export async function acquireBuildToken(options: AcquireOptions = {}): Promise<B
   if (explicit) return { token: explicit, source: "environment" };
 
   if (env["GITHUB_ACTIONS"] !== "true") return undefined;
+  return fromGithubActions(env["NULLADRIFT_BUILD_AUDIENCE"] ?? DEFAULT_AUDIENCE, env, options);
+}
 
+/**
+ * A token minted for this reading's bytes, on GitHub Actions, which mints one for any audience
+ * the job asks. Nothing elsewhere: GitLab's `id_tokens:`, and any token handed over in
+ * `NULLADRIFT_ID_TOKEN`, are minted before the job runs, for an audience fixed in the pipeline
+ * file, so they cannot carry a hash of what the job went on to find.
+ */
+export async function acquireReadingToken(audience: string, options: AcquireOptions = {}): Promise<BuildToken | BuildTokenHint | undefined> {
+  const env = options.env ?? process.env;
+  if (env["GITHUB_ACTIONS"] !== "true") return undefined;
+  return fromGithubActions(audience, env, options);
+}
+
+async function fromGithubActions(audience: string, env: NodeJS.ProcessEnv, options: AcquireOptions): Promise<BuildToken | BuildTokenHint> {
   const requestUrl = env["ACTIONS_ID_TOKEN_REQUEST_URL"];
   const requestToken = env["ACTIONS_ID_TOKEN_REQUEST_TOKEN"];
   if (!requestUrl || !requestToken) {
@@ -53,7 +94,7 @@ export async function acquireBuildToken(options: AcquireOptions = {}): Promise<B
 
   try {
     const url = new URL(requestUrl);
-    url.searchParams.set("audience", env["NULLADRIFT_BUILD_AUDIENCE"] ?? DEFAULT_AUDIENCE);
+    url.searchParams.set("audience", audience);
     const response = await (options.fetch ?? fetch)(url, {
       headers: { authorization: `bearer ${requestToken}`, accept: "application/json" },
       signal: AbortSignal.timeout(options.timeoutMs ?? 10_000),

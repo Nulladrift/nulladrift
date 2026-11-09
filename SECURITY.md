@@ -27,10 +27,11 @@ together, and you are credited unless you ask otherwise.
   formatting bug. So is one that lands it in the reading `push` sends, which is the same data.
 - **Weak handling of stored tokens.** `nulladrift login` writes to the user's config directory
   owner-only. Anything that widens that, or leaks a token into output or logs, is in scope.
-- **The CI identity token.** `push` sends the job's OpenID Connect token so the control plane can
-  verify which build sent a reading. For the life of the job it is a credential: anything that
-  writes it to output, logs or the lock, or sends it anywhere but the control plane it was asked
-  for, is in scope.
+- **The CI identity tokens.** `push` sends the job's OpenID Connect token so the control plane can
+  verify which build sent a reading and, on GitHub Actions, a second one minted for the sha256 of
+  the reading it sends. For the life of the job they are credentials: anything that writes them
+  to output, logs or the lock, or sends them anywhere but the control plane they were asked for,
+  is in scope, and so is any way to make a reading token vouch for bytes other than the ones sent.
 - **A server affecting the machine that audits it,** beyond being audited. The crawl runs
   registry packages in a container with no host mounts, no host environment, no privileges and
   a read-only root; an escape from that is in scope, as is any way a hostile server's responses
