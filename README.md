@@ -360,6 +360,36 @@ container with no host mounts, no host environment, no privileges and a read-onl
 egress is not blocked, because `npx` has to fetch the package. Without that flag those entries
 are skipped, and the report states which population it actually measured.
 
+## Environment variables
+
+Nothing needs to be set to run `init`, `check` or `review`. Every variable below is optional, and
+where a flag does the same job the flag wins.
+
+| Variable | Used by | What it does |
+| --- | --- | --- |
+| `NULLADRIFT_API_URL` | `push` | The control plane to push readings to. Same as `--api`. |
+| `NULLADRIFT_TOKEN` | `push` | The collector token issued in the dashboard. Same as `--token`. Keep it in a CI secret; `push` refuses an address with credentials in it. |
+| `NULLADRIFT_ID_TOKEN` | `push` | A CI identity token the pipeline minted for this job, which proves which build sent the reading. GitLab mints one into it with `id_tokens` (above); any CI that can mint an OpenID Connect token can set it. GitHub Actions needs nothing here: `push` asks for one itself when the job has `id-token: write`. |
+| `NULLADRIFT_BUILD_AUDIENCE` | `push` | The audience `push` asks GitHub to mint that token for. Defaults to `nulladrift`; change it only together with the control plane's setting of the same name. |
+| `GITHUB_TOKEN` | `check --comment` | Lets `check` post its findings on the pull request under review. In GitHub Actions pass `${{ secrets.GITHUB_TOKEN }}` to the step, with `pull-requests: write`. Without it, `--comment` posts nothing and says so. |
+| `NULLADRIFT_PYPI_URL` | `init`, `check` | The PyPI JSON API used to record what a Python server runs. Defaults to `https://pypi.org/pypi`; point it at a mirror or an internal proxy. |
+| `NULLADRIFT_DOCS_URL` | `check --sarif` | Where each finding's "learn more" link points. Unset in this build, so SARIF findings carry no link rather than one that 404s. |
+| `NULLADRIFT_TELEMETRY_ENDPOINT` | `telemetry` | Where opt-in drift counts are sent. No collector is configured in this build; see above. |
+| `NO_COLOR` | all | Set to anything to turn colour off. Colour is also off when the output is not a terminal, or `TERM=dumb`. |
+| `XDG_CONFIG_HOME` | `login`, `telemetry` | Where stored server credentials (`nulladrift/auth`) and the telemetry preference (`nulladrift/config.json`) live. Defaults to `~/.config`. |
+| `COPILOT_HOME`, `APPDATA` | `init`, `check` | Where the Copilot CLI's config (default `~/.copilot`) and, on Windows, Claude Desktop's config are looked for. |
+
+These are read, never required, and set by the CI provider rather than by you:
+
+| Variable | What it is used for |
+| --- | --- |
+| `CI` | Marks a reading as made in CI rather than locally, and keeps telemetry from asking a question nobody is there to answer. `CI=false` counts as unset. |
+| `GITHUB_REPOSITORY`, `CI_PROJECT_PATH`, `BUILD_REPOSITORY_NAME` | The project name `push` reports under (GitHub, GitLab, Azure Pipelines), unless `--project` names one. Outside CI it is the directory's name. |
+| `GITHUB_REF_NAME`, `CI_COMMIT_REF_NAME` | The branch or tag `push` reports. |
+| `GITHUB_SHA`, `CI_COMMIT_SHA` | The commit `push` reports. |
+| `GITHUB_ACTIONS`, `ACTIONS_ID_TOKEN_REQUEST_URL`, `ACTIONS_ID_TOKEN_REQUEST_TOKEN` | How `push` asks GitHub for the job's identity token. The last two exist only when the job has `id-token: write`. |
+| `GITHUB_REF`, `GITHUB_API_URL` | Which pull request `check --comment` writes on, and the API to write through (GitHub Enterprise Server sets its own). |
+
 ## Protocol support
 
 Written against MCP revision **`2026-07-28`**, the current specification. That revision

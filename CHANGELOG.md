@@ -10,7 +10,12 @@ telemetry). Renaming a change kind breaks every consumer that matched on it.
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+- The README lists every environment variable the collector reads: the ones you set
+  (`NULLADRIFT_API_URL`, `NULLADRIFT_TOKEN`, `NULLADRIFT_ID_TOKEN`, `NULLADRIFT_BUILD_AUDIENCE`,
+  `GITHUB_TOKEN` for `check --comment`, `NULLADRIFT_PYPI_URL` and the rest), what each does and
+  its default, and the ones a CI provider sets that `push` and `--comment` read.
 
 ## [0.7.1] - 2026-11-09
 
