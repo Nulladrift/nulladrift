@@ -130,10 +130,10 @@ That adds a line with the name and email from your git config:
 Signed-off-by: Your Name <you@example.com>
 ```
 
-Every commit you contribute needs one, and CI checks it: a pull request from outside the
-maintainers fails the `check` job until every commit carries a sign-off naming its own author.
-To sign off the commits already on a branch, `git rebase --signoff develop` and push it again.
-Maintainers' pull requests and the release app's are not checked.
+Every commit you contribute needs one, and CI checks it: a pull request from a fork fails the
+`check` job until every commit carries a sign-off naming its own author. To sign off the commits
+already on a branch, `git rebase --signoff develop` and push it again. Branches pushed to this
+repository itself, by the maintainers and the release app, are not checked.
 
 **A DCO, not a CLA.** You keep the copyright in what you write and license it under MIT like the
 rest of the code; nobody is asked to assign anything. It also means the licence cannot be changed
