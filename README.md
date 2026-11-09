@@ -210,6 +210,13 @@ any branch as clean. `push` can send your CI provider's signed identity token as
 control plane then records the repository, ref and commit as the provider stated them. An
 organization can list the builds it trusts and require every reading to come from one.
 
+On GitHub Actions the signature also covers what the reading says. `push` asks for a second
+token, minted for the sha256 of the exact bytes it sends and for the control plane it sends them
+to, so it vouches for one reading at one place and nothing else. An organization can require
+that too: a trusted build's reading whose contents nothing signed then fails. GitLab mints its
+token before the job runs, for an audience fixed in the pipeline file, so a GitLab reading proves
+its build and not its contents.
+
 GitHub Actions needs one permission, and `push` does the rest:
 
 ```yaml

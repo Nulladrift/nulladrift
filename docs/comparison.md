@@ -116,16 +116,19 @@ Beyond the per-change table:
 | Readable content, not only digests | ✅ | ✅ | ✅ | ✅ | ❌ | ❌ |
 | OAuth / credentialled servers | ✅ | ❌ | ❌ | ❌ | ❌ | ✅ |
 | Reads existing client configs | 7 formats | limited | limited | `.mcp.json` | ❌ | limited |
-| **Signed readings** | **◐¹** | ❌ | ❌ | ❌ | **✅** | **✅** |
+| **Signed readings** | **✅¹** | ❌ | ❌ | ❌ | **✅** | **✅** |
 | **Third-party attestation** | **❌** | ❌ | ❌ | ❌ | **✅** | ❌ |
 | **Artifact / provenance pinning** | **✅** | ❌ | ❌ | ❌ | ❌ | **✅** |
 | Tool-poisoning scanner | ✅² | ❌ | ✅ | ❌ | ❌ | ❌ |
 | Runtime enforcement | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ |
 
-◐ partly. ¹ Since 0.6.0, `push` sends the CI provider's signed OpenID Connect token and the
-control plane verifies it, so the repository, ref and commit are recorded as GitHub or GitLab
-stated them. That proves which build sent a reading, not that its contents are what the server
-declared: nothing signs the reading itself. See
+¹ On GitHub Actions, since 0.7.0: `push` sends a token GitHub signed for the sha256 of the
+exact reading and for the control plane receiving it, so the signature covers what the reading
+says as well as which build sent it, and an organization can require it. GitLab mints its token
+before the job runs, so a GitLab reading proves its build (since 0.6.0) and not its contents. The
+signature is checked by the control plane and kept there: there is no transparency log, so
+nobody outside it can check a reading later, which is where legion-lock and MCPTrust go further.
+A signature says which build produced a reading, not that the server declared what it says. See
 [the gap that runs the other way](#the-gap-that-runs-the-other-way).
 ² The steering scan flags text in a declared surface that addresses the model: directives,
 credential paths, exfiltration, hidden markup. It never fails a build and does not judge
@@ -251,11 +254,11 @@ anyone who reads this page.
 Three tools here answer a question this project cannot: **how do you know the reading is real?**
 
 legion-lock has transparency-log proofs. MCPTrust has Sigstore and keyless CI signing.
-`ftaakash/MCP-Lock` has npm and PyPI attestations. Since 0.6.0 nulladrift has half an answer: a
-reading can carry the CI provider's signed identity, so *which build sent this* is GitHub's or
-GitLab's statement rather than ours, and an organization can require every reading to come from a
-build it trusts. The other half is still missing: no signature over the reading itself, no
-attestation of the artifacts it pins, no external observer. What the server said is
+`ftaakash/MCP-Lock` has npm and PyPI attestations. Since 0.6.0 a reading can carry the CI
+provider's signed identity, so *which build sent this* is GitHub's or GitLab's statement rather
+than ours, and since 0.7.0 GitHub's signature covers the reading's contents too. What is still
+missing: no transparency log, so the signature is checked once, by us, and kept by us; no
+attestation of the artifacts it pins; no external observer. What the server said is
 self-observed and self-asserted: our collector reads it, our control plane re-digests it, our
 code enforces append-only, our database holds the row.
 

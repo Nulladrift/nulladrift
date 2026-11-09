@@ -12,6 +12,20 @@ telemetry). Renaming a change kind breaks every consumer that matched on it.
 
 Nothing yet.
 
+## [0.7.0] - 2026-11-09
+
+### Added
+
+- **`push` signs each reading's contents on GitHub Actions, not only which build sent it.** The
+  CI identity token proved which build sent a reading and nothing about what it said: anyone
+  holding it for its few minutes, with the collector token, could send other contents as that
+  build. `push` now also asks GitHub for a token minted for the sha256 of the exact bytes it
+  sends, and names the control plane it is sending to in that token's audience, so the token is
+  good for one reading at one control plane. It arrives as `nulladrift-reading-token`, beside the
+  build token, which is still sent for control planes from before this. The output says
+  `contents signed` when the control plane accepted it. GitLab, and any token passed in
+  `NULLADRIFT_ID_TOKEN`, is minted before the job runs, for an audience fixed in the pipeline
+  file, so those readings still prove only their build.
 ## [0.6.2] - 2026-11-09
 
 ### Security
