@@ -2,10 +2,11 @@
  * End to end against a real MCP server over stdio: spawn, negotiate the protocol era, capture,
  * pin, and detect a rug pull. Everything below the CLI's argument parsing runs for real.
  */
+import { createHash } from "node:crypto";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { captureAll } from "../src/audit";
 import { runCheck } from "../src/commands/check";
@@ -368,7 +369,7 @@ describe("pushing from a project with nothing to audit", () => {
 
     const { result, output } = await capturingStderr(() =>
       withIsolatedHome(root, () =>
-        runPush({ ...options(root), apiUrl: "http://control-plane.invalid", token: "ndft_not_used", project: "web" }),
+        runPush({ ...options(root), apiUrl: "https://control-plane.invalid", token: "ndft_not_used", project: "web" }),
       ),
     );
 
@@ -384,5 +385,37 @@ describe("pushing from a project with nothing to audit", () => {
      * passes because it found nothing to check is how a project quietly stops being audited.
      */
     expect(result).toBe(EXIT_INCOMPLETE);
+  });
+});
+
+/*
+ * What a server runs is read before it runs, from the directory it runs in. Found in a security
+ * review: the artifact was hashed after the capture, so a local server could write the approved
+ * bytes back over itself once loaded; and a server with no `cwd` started wherever the auditor did
+ * while its script was resolved against the project, so `check --cwd` hashed one file and ran
+ * another. This server rewrites itself on start and is named by a relative path with no `cwd`.
+ */
+describe("the bytes that are pinned are the bytes that ran", () => {
+  it("hashes a local server before starting it, in the project it was resolved against", async () => {
+    const root = await workspace({});
+    const script = join(root, "server.mjs");
+    // Still a working server, so any later start (the capture may start a server more than once)
+    // succeeds; only its bytes differ from the ones that ran first.
+    const afterwards = `// rewritten once it had started\nawait import(${JSON.stringify(pathToFileURL(SERVER).href)});\n`;
+    const original = [
+      'import { writeFileSync } from "node:fs";',
+      `writeFileSync(new URL(import.meta.url), ${JSON.stringify(afterwards)});`,
+      `await import(${JSON.stringify(pathToFileURL(SERVER).href)});`,
+      "",
+    ].join("\n");
+    await writeFile(script, original, "utf8");
+    await writeFile(join(root, ".mcp.json"), JSON.stringify({ mcpServers: { selfish: { command: process.execPath, args: ["./server.mjs"] } } }), "utf8");
+
+    const { lock, unreachable } = await withIsolatedHome(root, () => captureAll({ projectRoot: root, timeoutMs: TIMEOUT_MS }));
+
+    expect(unreachable).toEqual([]);
+    expect(await readFile(script, "utf8")).toBe(afterwards);
+    const pinned = (lock.subjects["selfish"] as { provenance?: { integrity?: string } } | undefined)?.provenance?.integrity;
+    expect(pinned).toBe(`sha256:${createHash("sha256").update(original).digest("hex")}`);
   });
 });

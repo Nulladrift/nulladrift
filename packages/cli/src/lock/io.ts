@@ -9,6 +9,7 @@
  * everything. See docs/lockfile.md §2.
  */
 import { reseal } from "@nulladrift/core";
+import { randomUUID } from "node:crypto";
 import { lstat, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { lockfileSchema } from "./schema";
 import type { Lockfile } from "./types";
@@ -60,8 +61,15 @@ function printScalar(value: unknown): string {
   return JSON.stringify(value);
 }
 
+/*
+ * Own properties only. These tables are looked up by keys a server chose: `CHILD_KIND["constructor"]`
+ * on a plain object is the inherited Object constructor, so a schema property named `constructor`
+ * (or `toString`, or `__proto__`) crashed writing the lock.
+ */
+const childKind = (key: string): NodeKind | undefined => (Object.hasOwn(CHILD_KIND, key) ? CHILD_KIND[key] : undefined);
+
 function printObject(value: Record<string, unknown>, kind: NodeKind | undefined, depth: number): string {
-  const declared: readonly string[] = kind ? KEY_ORDER[kind] : [];
+  const declared: readonly string[] = kind && Object.hasOwn(KEY_ORDER, kind) ? KEY_ORDER[kind] : [];
   const present = Object.keys(value).filter((key) => value[key] !== undefined);
   const ordered = kind
     ? [...declared.filter((key) => present.includes(key)), ...present.filter((key) => !declared.includes(key)).sort()]
@@ -71,7 +79,7 @@ function printObject(value: Record<string, unknown>, kind: NodeKind | undefined,
 
   const pad = INDENT.repeat(depth + 1);
   const body = ordered
-    .map((key) => `${pad}${JSON.stringify(key)}: ${printNode(value[key], CHILD_KIND[key], depth + 1)}`)
+    .map((key) => `${pad}${JSON.stringify(key)}: ${printNode(value[key], childKind(key), depth + 1)}`)
     .join(",\n");
   return `{\n${body}\n${INDENT.repeat(depth)}}`;
 }
@@ -123,7 +131,7 @@ export function serializeLockfile(lock: Lockfile): string {
       parts.push(`${pad}${JSON.stringify(key)}: ${body}`);
       continue;
     }
-    parts.push(`${pad}${JSON.stringify(key)}: ${printNode(value, CHILD_KIND[key], 1)}`);
+    parts.push(`${pad}${JSON.stringify(key)}: ${printNode(value, childKind(key), 1)}`);
   }
   return `{\n${parts.join(",\n")}\n}\n`;
 }
@@ -236,8 +244,14 @@ export async function writeLockfile(path: string, lock: Lockfile): Promise<void>
      * failed loudly rather than passing, which is the right failure, but the reviewed lock was
      * gone. rename within a directory is atomic on every filesystem this runs on.
      */
-    const temporary = `${path}.${process.pid}.tmp`;
-    await writeFile(temporary, serializeLockfile(lock), "utf8");
+    /*
+     * A name nobody can guess, created exclusively. It was `${path}.${pid}.tmp` written with
+     * writeFile, which follows a symlink: a repository could ship `mcp.lock.<pid>.tmp` links to
+     * `~/.bashrc` for a range of PIDs, and the check above (on the final path only) never saw
+     * them. `wx` refuses any existing path, a link included.
+     */
+    const temporary = `${path}.${randomUUID()}.tmp`;
+    await writeFile(temporary, serializeLockfile(lock), { encoding: "utf8", flag: "wx" });
     try {
       await rename(temporary, path);
     } catch (error) {

@@ -1,7 +1,7 @@
 /** The default output: what moved, worst first, in language a reviewer can act on. */
 import { serversThatShippedNothing } from "../diff/types";
 import type { Change, Severity } from "../diff/types";
-import { bold, dim, elideMiddle, green, red, truncate, yellow } from "../lib/ui";
+import { bold, dim, elideMiddle, green, red, truncate, yellow, visibleControls } from "../lib/ui";
 import type { AuditReport } from "./types";
 
 const MARK: Record<Severity, (text: string) => string> = {
@@ -18,8 +18,10 @@ function renderTextChange(before: unknown, after: unknown): string[] {
 }
 
 function renderChange(change: Change): string[] {
-  const where = change.member ? `${change.server} › ${change.member}` : change.server;
-  const lines = [`  ${MARK[change.severity](change.severity.padEnd(6))} ${bold(where)}  ${dim(change.kind)}`, `      ${change.summary}`];
+  // Every string here can come from a server, and a terminal executes escape sequences: a version
+  // string could repaint the screen to read "match" or write to the clipboard. Shown, not obeyed.
+  const where = visibleControls(change.member ? `${change.server} › ${change.member}` : change.server);
+  const lines = [`  ${MARK[change.severity](change.severity.padEnd(6))} ${bold(where)}  ${dim(change.kind)}`, `      ${visibleControls(change.summary)}`];
 
   // Text that reaches the model is the finding a reviewer most needs to actually read.
   if (change.kind === "tool.description.changed" || change.kind === "server.instructions.changed") {
@@ -46,7 +48,7 @@ function renderSteering(report: AuditReport): string[] {
     "",
   ];
   for (const { server, signals } of found) {
-    lines.push(`  ${bold(server)}`);
+    lines.push(`  ${bold(visibleControls(server))}`);
     const byField = new Map<string, string[]>();
     for (const signal of signals) byField.set(signal.field, [...(byField.get(signal.field) ?? []), signal.quote]);
     const fields = [...byField];
@@ -74,7 +76,7 @@ function renderViolations(report: AuditReport): string[] {
   const lines = ["", bold(red(`${found.length} capability(ies) this project does not permit:`)), ""];
   for (const violation of found) {
     lines.push(
-      `  ${red("denied")} ${bold(`${violation.server} \u203a ${violation.tool}`)}  ${dim(violation.kind)}`,
+      `  ${red("denied")} ${bold(visibleControls(`${violation.server} \u203a ${violation.tool}`))}  ${dim(violation.kind)}`,
       `      ${violation.severity} \u00b7 ${violation.evidence}`,
     );
   }
@@ -122,7 +124,7 @@ export function renderHumanReport(report: AuditReport): string {
     if (quiet.length > 0) {
       lines.push(
         yellow(`${quiet.length === 1 ? "This server" : "These servers"} changed without shipping a new version:`),
-        ...quiet.map((server) => `  ${bold(server)}`),
+        ...quiet.map((server) => `  ${bold(visibleControls(server))}`),
         "",
       );
     }
@@ -133,7 +135,7 @@ export function renderHumanReport(report: AuditReport): string {
     for (const failure of report.unreachable) {
       const label =
         failure.kind === "auth" ? yellow("needs creds") : failure.kind === "forbidden" ? yellow("not permitted") : red("unreachable");
-      lines.push(`  ${label} ${bold(failure.server)}`, `      ${failure.reason}`, "");
+      lines.push(`  ${label} ${bold(visibleControls(failure.server))}`, `      ${visibleControls(failure.reason)}`, "");
     }
   }
 
@@ -141,7 +143,7 @@ export function renderHumanReport(report: AuditReport): string {
   if (unverified.length > 0) {
     lines.push(
       yellow(`Could not establish what ${unverified.length} server(s) run:`),
-      ...unverified.map((server) => `  ${bold(server)}`),
+      ...unverified.map((server) => `  ${bold(visibleControls(server))}`),
       dim("  Their surfaces were checked; the package or file behind them was not. A pin the config names exactly is kept."),
       "",
     );

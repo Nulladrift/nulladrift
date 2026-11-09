@@ -50,6 +50,13 @@ Then in CI:
 npx nulladrift check     # exit 0 clean · 1 drift · 2 could not complete the audit
 ```
 
+`check` starts every stdio server in the config, so it runs the commands a pull request writes
+there. Run it on `pull_request`, which gives a fork no secrets, and never on
+`pull_request_target`. A config cannot reach the job's own credentials through `${VAR}`: the
+token and identity the CI provider puts in every job, and every `NULLADRIFT_` variable, are
+refused. A secret your workflow sets for a server is filled as written, and a server that runs
+does so as the job's user.
+
 When it fails, see what moved and decide:
 
 ```bash
@@ -67,14 +74,18 @@ nulladrift login <server>     # opens a browser, stores tokens owner-only; check
 ```
 
 In CI, set `oauth.clientId` / `oauth.clientSecret` on the server in your config (the secret can
-be `${ENV_VAR}`) and no browser is involved. Auditing a gated server *without* credentials is
+be `${ENV_VAR}`), with `oauth.issuer` naming the authorization server the secret is for, and no
+browser is involved. The issuer is required: without it the secret goes to whichever
+authorization server the MCP server names, and a compromised server can name its own. Auditing a gated server *without* credentials is
 not a smaller audit, the spec lets the tool list vary with who is asking, so `check` reports
 those servers as needing credentials rather than pinning whatever an anonymous client sees.
 
-`init` reads the config files your clients already use, `.mcp.json`, `.vscode/mcp.json`,
-`.cursor/mcp.json` and `~/.cursor/mcp.json`, `~/.claude.json`, `claude_desktop_config.json`,
-Windsurf's `~/.codeium/windsurf/mcp_config.json` and Copilot's `~/.copilot/mcp-config.json`, so
-there is nothing to configure to try it. `nulladrift logout <server>` deletes what `login`
+`init` reads the config files your clients already use in the project, `.mcp.json`,
+`.vscode/mcp.json` and `.cursor/mcp.json`, so there is nothing to configure to try it. Your own
+configs (`~/.claude.json`, `~/.cursor/mcp.json`, `claude_desktop_config.json`, Windsurf's
+`~/.codeium/windsurf/mcp_config.json`, Copilot's `~/.copilot/mcp-config.json`) are read with
+`--user-configs`: they are one person's servers, often with their keys and home paths, and the lock
+is the project's and is committed. `init` says when it left them out. `nulladrift logout <server>` deletes what `login`
 stored.
 
 ## What lands in the lock
@@ -135,8 +146,9 @@ registry lookups for an air-gapped run.
 **What it leaves out: credentials, wherever a config puts them.** `env` and header values are
 recorded by name only, and a URL loses its query string and `user:password`. A credential
 written literally (`--api-key sk-...`, `-e GITHUB_TOKEN=ghp_...`, a connection string's password,
-a key in a hosted server's URL path) is replaced with `REDACTED`, and `init`, `check` and `push`
-say which server it was. Write it as `${VAR}` instead; the lock keeps the placeholder. If an
+`--header "Authorization: Bearer ..."`, a key in JSON passed as an argument, a key in a hosted
+server's URL path or query) is replaced with `REDACTED`, and `init`, `check` and `push` say which
+server it was. Write it as `${VAR}` instead; the lock keeps the placeholder. If an
 earlier `mcp.lock` was committed with the key in it, rotate the key: taking it out of the file
 does not take it out of git history.
 
@@ -217,6 +229,10 @@ nulladrift:
 ```
 
 Any other CI that can mint an OpenID Connect token for a job can put it in `NULLADRIFT_ID_TOKEN`.
+
+`push` sends its tokens only over `https` (plain `http` only to `localhost`), refuses an API address
+with credentials in it, and does not follow redirects, so the reading and the identity token reach
+the control plane you named and nowhere else.
 Without one, the reading is recorded as unverified, exactly as before -- `push` never fails for
 want of a token.
 

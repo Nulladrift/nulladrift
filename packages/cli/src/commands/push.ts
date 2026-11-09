@@ -74,6 +74,20 @@ function inferCommit(): string | undefined {
   return process.env["GITHUB_SHA"] ?? process.env["CI_COMMIT_SHA"] ?? undefined;
 }
 
+/** Why an API address cannot be trusted with a token, or nothing if it can. Never echoes the address. */
+export function refuseApiUrl(apiUrl: string): string | undefined {
+  let url: URL;
+  try {
+    url = new URL(apiUrl);
+  } catch {
+    return "the control plane's address is not a URL.";
+  }
+  if (url.username || url.password) return "the control plane's address carries credentials. Pass the token with --token or NULLADRIFT_TOKEN instead.";
+  const loopback = ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname);
+  if (url.protocol === "https:" || (url.protocol === "http:" && loopback)) return undefined;
+  return `the control plane has to be reached over https (http only on this machine), not ${url.protocol}`;
+}
+
 export async function runPush(options: PushOptions): Promise<ExitCode> {
   const apiUrl = (options.apiUrl ?? process.env["NULLADRIFT_API_URL"] ?? "").replace(/\/+$/, "");
   const token = options.token ?? process.env["NULLADRIFT_TOKEN"] ?? "";
@@ -95,11 +109,25 @@ export async function runPush(options: PushOptions): Promise<ExitCode> {
     return EXIT_INCOMPLETE;
   }
 
+  /*
+   * Where the token goes. Plain http sent the collector token and the CI's identity token in
+   * clear; credentials in the URL were echoed back in an error; and a redirect to another host
+   * carried the reading and the identity token with it (fetch drops `authorization` on a
+   * cross-origin redirect but keeps every other header). So: https, or http to this machine for
+   * a local control plane, no userinfo, and never a redirect.
+   */
+  const refusal = refuseApiUrl(apiUrl);
+  if (refusal) {
+    process.stderr.write(`${red("push refused:")} ${refusal}\n`);
+    return EXIT_INCOMPLETE;
+  }
+
   const result = await captureAll({
     projectRoot: options.projectRoot,
     configFiles: options.configFiles,
     timeoutMs: options.timeoutMs,
     provenance: options.provenance,
+    userConfigs: options.userConfigs,
   });
   // What is sent is the locked transport, so a credential left out of the lock is left out of the reading too.
   for (const note of redactedNotes(result.lock)) process.stderr.write(`${yellow("note:")} ${note}\n`);
@@ -152,7 +180,9 @@ export async function runPush(options: PushOptions): Promise<ExitCode> {
         : "local",
     collectorVersion: VERSION,
     servers,
-    unreachable: result.unreachable.map((failure) => ({ server: failure.server, reason: failure.reason })),
+    // The error, not the server's stderr: stderr is where a server prints its tokens and paths, and
+    // this leaves the machine. The full reason is still printed locally.
+    unreachable: result.unreachable.map((failure) => ({ server: failure.server, reason: failure.reason.split("\n  server stderr:")[0] ?? failure.reason })),
   };
 
   /*
@@ -173,6 +203,8 @@ export async function runPush(options: PushOptions): Promise<ExitCode> {
         ...(buildToken ? { [BUILD_TOKEN_HEADER]: buildToken } : {}),
       },
       body: JSON.stringify(body),
+      // A redirect would carry the reading and the identity token to wherever it points.
+      redirect: "error",
       signal: AbortSignal.timeout(options.timeoutMs),
     });
   } catch (error) {

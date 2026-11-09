@@ -27,4 +27,6 @@ export interface CommonOptions {
    * a pin the configuration names exactly is kept either way.
    */
   provenance?: boolean;
+  /** Read user-level client configs too (`--user-configs`). Their servers then go into the lock. */
+  userConfigs?: boolean;
 }

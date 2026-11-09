@@ -48,6 +48,11 @@ together, and you are credited unless you ask otherwise.
   in scope. One in a remote server, or behind an artifact whose provenance could not be
   established (listed as unverified), going undetected while the tool definitions were unchanged
   is working as described.
+- **A pull request's stdio server running in CI.** `check` starts the servers a config names,
+  which is how it reads them; a workflow that runs it on untrusted pull requests with secrets in
+  the job (`pull_request_target`, or a self-hosted runner holding credentials) has given those
+  secrets to the pull request's author. A config reaching the job's own credentials through
+  `${VAR}`, which `check` refuses, is in scope.
 - **Drift that `check` reports and a human then accepts.** Accepting a change you did not read
   is a process problem; the tool can refuse to make it silent, which is what `review` and
   `init --force` are for, but it cannot refuse to be overridden.

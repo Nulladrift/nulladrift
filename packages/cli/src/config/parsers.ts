@@ -29,6 +29,7 @@ const serverEntrySchema = z.looseObject({
     .looseObject({
       clientId: z.string().optional(),
       clientSecret: z.string().optional(),
+      issuer: z.string().optional(),
       scope: z.string().optional(),
       scopes: z.array(z.string()).optional(),
     })
@@ -57,11 +58,22 @@ function scalarsToStrings(record: Record<string, string | number | boolean | nul
   return out;
 }
 
+function refusedCredentials(name: string, refused: string[]): UnsupportedServerError {
+  const names = [...new Set(refused)];
+  return new UnsupportedServerError(
+    name,
+    `configuration uses ${names.join(", ")}, which ${names.length === 1 ? "holds" : "hold"} this run's own credentials (the CI job's ` +
+      `token or identity, or Nulladrift's). They are never given to a server under audit. Give the server a credential of its own.`,
+  );
+}
+
 function resolveTransport(name: string, entry: ServerEntry, context: ExpandContext): ConfiguredTransport {
   const unresolved: string[] = [];
+  const refused: string[] = [];
   const take = (input: string): string => {
     const result = expand(input, context);
     unresolved.push(...result.unresolved);
+    refused.push(...result.refused);
     return result.value;
   };
 
@@ -89,6 +101,7 @@ function resolveTransport(name: string, entry: ServerEntry, context: ExpandConte
               // Expanded here so a secret can live in the environment rather than the config file.
               clientId: oauth.clientId === undefined ? undefined : take(oauth.clientId),
               clientSecret: oauth.clientSecret === undefined ? undefined : take(oauth.clientSecret),
+              issuer: oauth.issuer === undefined ? undefined : take(oauth.issuer),
               scope: oauth.scope ?? oauth.scopes?.join(" "),
             },
           }),
@@ -108,6 +121,23 @@ function resolveTransport(name: string, entry: ServerEntry, context: ExpandConte
       cwd: entry.cwd ? take(entry.cwd) : undefined,
     };
   }
+
+  /*
+   * A client secret goes to the authorization server the MCP server names in its metadata, unless
+   * the client says which one it is for. A compromised server names its own and receives the
+   * secret on the next run, in CI, where nobody is watching. So a secret without an issuer is
+   * refused here, before anything connects, rather than sent and regretted.
+   */
+  if (transport.type !== "stdio" && transport.oauth?.clientSecret !== undefined && !transport.oauth.issuer) {
+    throw new UnsupportedServerError(
+      name,
+      "oauth.clientSecret is set without oauth.issuer. Set oauth.issuer to the authorization server's issuer URL, " +
+        "so the secret can only be sent there and not to an authorization server the MCP server chooses.",
+    );
+  }
+
+  // Before anything connects: the server is never started with the run's credentials in reach.
+  if (refused.length > 0) throw refusedCredentials(name, refused);
 
   if (unresolved.length > 0) {
     const names = [...new Set(unresolved)].join(", ");
@@ -142,17 +172,32 @@ export function detectMapKey(raw: unknown): "mcpServers" | "servers" | undefined
  */
 export async function readEnvFile(path: string): Promise<Record<string, string>> {
   const out: Record<string, string> = {};
-  const text = await readFile(path, "utf8");
-  for (const line of text.split(/\r?\n/)) {
-    const trimmed = line.trim();
+  const lines = (await readFile(path, "utf8")).split(/\r?\n/);
+  for (let index = 0; index < lines.length; index += 1) {
+    const trimmed = (lines[index] ?? "").trim();
     if (trimmed === "" || trimmed.startsWith("#")) continue;
-    const at = trimmed.indexOf("=");
+    const body = trimmed.replace(/^export\s+/, "");
+    const at = body.indexOf("=");
     if (at <= 0) continue;
-    const key = trimmed.slice(0, at).trim().replace(/^export\s+/, "");
-    let value = trimmed.slice(at + 1).trim();
-    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
-      value = value.slice(1, -1);
+    const key = body.slice(0, at).trim();
+    let value = body.slice(at + 1).trim();
+    const quote = value[0];
+    if (quote === '"' || quote === "'") {
+      // A quoted value can run over several lines: a private key, a service account's JSON.
+      let rest = value.slice(1);
+      const closed = (text: string) => text.endsWith(quote) && !text.endsWith(`\\${quote}`);
+      while (!closed(rest) && index + 1 < lines.length) {
+        index += 1;
+        rest += `\n${lines[index] ?? ""}`;
+      }
+      value = closed(rest) ? rest.slice(0, -1) : rest;
     }
+    /*
+     * Only a variable name is a name. The names are what reach the lock (`envKeys`), and a line
+     * split on its first `=` inside a multi-line value made a fragment of the value a "name": a
+     * service account's private key went into a committed file that way.
+     */
+    if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) continue;
     out[key] = value;
   }
   return out;
@@ -178,6 +223,14 @@ export async function parseServerMap(
   if (typeof map !== "object" || map === null) return { servers, skipped };
 
   for (const [name, value] of Object.entries(map as Record<string, unknown>)) {
+    /*
+     * The lock keys servers by name, and a name of `__proto__` does not survive being a key: the
+     * server would run and be missing from the lock, so adding one was a change nothing reported.
+     */
+    if (name === "__proto__") {
+      skipped.push(new UnsupportedServerError(name, "a server cannot be named __proto__; rename it"));
+      continue;
+    }
     const entry = serverEntrySchema.safeParse(value);
     if (!entry.success) {
       skipped.push(new UnsupportedServerError(name, `entry is not a server definition: ${entry.error.issues[0]?.message ?? "unknown"}`));
@@ -192,6 +245,7 @@ export async function parseServerMap(
       const transport = resolveTransport(name, entry.data, context);
       if (transport.type === "stdio" && entry.data.envFile !== undefined) {
         const expanded = expand(entry.data.envFile, context);
+        if (expanded.refused.length > 0) throw refusedCredentials(name, expanded.refused);
         if (expanded.unresolved.length > 0) {
           throw new UnsupportedServerError(name, `envFile path contains unresolved placeholders: ${expanded.unresolved.join(", ")}`);
         }

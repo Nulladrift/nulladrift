@@ -61,22 +61,27 @@ export function effectiveSchema(node: JsonValue | undefined, root: JsonValue, se
   if (object === undefined) return undefined;
   if (depth > MAX_REF_DEPTH) return object;
 
-  const out: JsonObject = {};
+  /*
+   * No prototype, and own-property checks rather than `in`. `name in merged` on a plain object is
+   * true for `constructor`, `toString` and `__proto__`, so a property with one of those names was
+   * skipped as already merged, and `merged["__proto__"] = ...` set the prototype instead.
+   */
+  const out = Object.create(null) as JsonObject;
   const merge = (source: JsonObject): void => {
     for (const [key, value] of Object.entries(source)) {
       if (key === "$ref" || key === "allOf") continue;
       if (key === "properties") {
         // First contributor wins on a conflict, and keeps its position: the merged object reads
         // in the order a person wrote it, not inside-out from the inheritance chain.
-        const merged: JsonObject = { ...(asObject(out["properties"]) ?? {}) };
+        const merged = Object.assign(Object.create(null) as JsonObject, asObject(out["properties"]) ?? {});
         for (const [name, schema] of Object.entries(asObject(value) ?? {})) {
-          if (!(name in merged)) merged[name] = schema;
+          if (!Object.hasOwn(merged, name)) Object.defineProperty(merged, name, { value: schema, enumerable: true, writable: true, configurable: true });
         }
         out["properties"] = merged;
       } else if (key === "required" && Array.isArray(value)) {
         const already = Array.isArray(out["required"]) ? (out["required"] as JsonValue[]) : [];
         out["required"] = [...new Set([...already, ...value].filter((entry): entry is string => typeof entry === "string"))];
-      } else if (!(key in out)) {
+      } else if (!Object.hasOwn(out, key)) {
         out[key] = value;
       }
     }

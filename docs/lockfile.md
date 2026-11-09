@@ -180,7 +180,8 @@ collapsing it would hide the capability change inside a cosmetic one.
   to vary with the authorization presented. A server may legitimately show your laptop more
   tools than it shows CI. When tools go missing, `check` names this as a likely cause before it
   names an attack. Pin from the same credential context CI will use, `nulladrift login` for an
-  interactive grant, or `oauth.clientId` / `oauth.clientSecret` for an unattended one. A server
+  interactive grant, or `oauth.clientId` / `oauth.clientSecret` with `oauth.issuer` for an
+  unattended one. A server
   that refuses the client is reported as needing credentials, not as drift and not as an
   outage, because an anonymous capture of a gated server pins a surface nobody uses.
 - **Declaration is not behaviour.** The surface records what a server says about itself, and
@@ -235,6 +236,17 @@ exact npm or PyPI version, or an image by digest, the previous pin is kept when 
 could not re-establish it -- the registry's own rule guarantees it still means the same bytes.
 A floating request (`latest`, a range, an image tag) is not carried forward, because that
 would claim yesterday's version for code that may have moved since.
+
+**A package fetched from elsewhere is unverified, not pinned.** The pin is the public
+registry's answer (or that of a registry you set in your own environment, `npm_config_registry`,
+which is asked instead). When the launcher is pointed somewhere else, the package that runs is
+not the one that answer describes: `npx --registry`, a registry in the server's `env`, a project
+or user `.npmrc`, `.yarnrc.yml` or `bunfig.toml` naming another one, a copy in `node_modules`
+(which `npx` and `bunx` run before asking a registry), and for PyPI `--index-url`, `-i`,
+`--extra-index-url`, `--find-links`, an index in `UV_*` or `PIP_*` variables, `uv.toml`,
+`[tool.uv]` in `pyproject.toml`, or `pip.conf` for `pipx`. Such a server is listed as unverified
+and no pin is carried forward for it. npm's global config and global installs, and tools
+installed with `uv tool install`, are not read.
 
 **Substitution is claimed only where it cannot be innocent.** npm refuses to republish a
 version, so the same version with different bytes means something between here and the

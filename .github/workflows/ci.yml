@@ -37,8 +37,9 @@ jobs:
       # request from a fork; a branch in this repository can only be pushed by someone with write
       # access, which is the maintainers and the release app, whose commits are not signed off.
       # Not `author_association`: an organization member whose membership is private arrives in
-      # the event as CONTRIBUTOR. Merge commits are skipped. Hashes only in the output: commit
-      # metadata comes from whoever opened the pull request.
+      # the event as CONTRIBUTOR. Hashes only in the output: commit metadata comes from whoever
+      # opened the pull request. A fork's pull request runs its own copy of this file, so one
+      # that deletes this step passes; a maintainer reads .github/ changes before merging one.
       - name: Contributed commits are signed off (DCO)
         if: >-
           github.event_name == 'pull_request' &&
@@ -47,10 +48,15 @@ jobs:
           BASE: ${{ github.event.pull_request.base.sha }}
           HEAD: ${{ github.event.pull_request.head.sha }}
         run: |
+          # Fail closed: an error listing the commits is a failed check, not an empty list.
+          revs=$(git rev-list "$BASE..$HEAD") || { echo "::error::could not list the pull request's commits"; exit 1; }
           missing=0
-          for sha in $(git rev-list --no-merges "$BASE..$HEAD"); do
+          # Merge commits too: one can carry changes of its own that no other commit shows.
+          for sha in $revs; do
             email=$(git log -1 --format=%ae "$sha")
-            if ! git log -1 --format=%B "$sha" | grep -i '^Signed-off-by:' | grep -qiF "<$email>"; then
+            # A trailer is one name and one address, and the address has to be the author's.
+            signed=$(git log -1 --format=%B "$sha" | grep -iE '^Signed-off-by: [^<>]+ <[^<>]+>[[:space:]]*$' | sed -E 's/.*<([^<>]+)>[[:space:]]*$/\1/')
+            if ! printf '%s\n' "$signed" | grep -qixF -- "$email"; then
               echo "::error::commit $sha is not signed off by its author. Sign off with git commit -s; see CONTRIBUTING.md."
               missing=1
             fi

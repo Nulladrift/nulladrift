@@ -27,6 +27,12 @@ export interface ConfiguredStdio {
 export interface ConfiguredOAuth {
   clientId?: string;
   clientSecret?: string;
+  /**
+   * The authorization server a client secret is for. Required with `clientSecret`: without it the
+   * secret goes to whichever authorization server the MCP server names, and a compromised server
+   * can name its own.
+   */
+  issuer?: string;
   scope?: string;
 }
 

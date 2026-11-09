@@ -3,6 +3,7 @@ import type { Discovery } from "./config/discover";
 import { discoverServers } from "./config/discover";
 import { buildLockedServer } from "./lock/build";
 import { carriedForward, referenceOf, resolveReference } from "./lock/provenance";
+import { fetchedElsewhere } from "./lock/source";
 import type { Lockfile, LockedMcpServer, LockedProvenance, LockPolicy } from "./lock/types";
 import type { ConfiguredServer } from "./config/types";
 import { LOCKFILE_VERSION } from "./lock/types";
@@ -28,6 +29,8 @@ export interface CaptureOptions {
   previous?: Lockfile;
   /** False skips resolving what each server runs. An air-gapped run, or somebody who opted out. */
   provenance?: boolean;
+  /** Also read user-level client configs. Off: the lock is the project's, and it is committed. */
+  userConfigs?: boolean;
   onServerDone?: (name: string, outcome: "captured" | "failed") => void;
 }
 
@@ -60,6 +63,13 @@ async function provenanceOf(
   const reference = referenceOf(server.transport, options.projectRoot);
   if (!reference) return { unverified: false };
 
+  /*
+   * A launcher that fetches from another registry, another index or a local install runs code the
+   * registry's answer does not describe. Neither pinned nor carried forward: the previous pin was
+   * the registry's too, and keeping it would say the same thing about the same code.
+   */
+  if (fetchedElsewhere(server.transport, reference, { projectRoot: options.projectRoot })) return { unverified: true };
+
   const previous = options.previous?.subjects[server.name]?.provenance;
   if (options.provenance === false) {
     const kept = carriedForward(previous, reference);
@@ -87,44 +97,18 @@ async function mapWithLimit<T, R>(items: T[], limit: number, worker: (item: T) =
   return results;
 }
 
-/**
- * One deadline for the whole of a server, not one per request to it.
- *
- * `--timeout` says "per-server timeout" and was applied to each request. Capturing a surface
- * takes several -- version negotiation, the legacy fallback, then the listings -- so a server
- * that accepts a connection and never answers held the audit for two and a half to three times
- * the configured value. Measured: `--timeout 2000` took 6.1s, `--timeout 4000` took 10.1s. At
- * the 30s default that is a minute and a half per server, which a server nobody controls gets
- * to decide.
- *
- * The per-request timeout stays, because it is what makes an individual call give up. This is
- * the ceiling on all of them together, so the flag means what it says.
- */
-async function withDeadline<T>(ms: number, name: string, run: () => Promise<T>): Promise<T> {
-  let timer: NodeJS.Timeout | undefined;
-  try {
-    return await Promise.race([
-      run(),
-      new Promise<never>((_resolve, reject) => {
-        timer = setTimeout(() => reject(new UnreachableServerError(name, `did not finish within ${ms}ms`)), ms);
-        timer.unref?.();
-      }),
-    ]);
-  } finally {
-    if (timer) clearTimeout(timer);
-  }
-}
-
 export async function captureAll(options: CaptureOptions): Promise<CaptureResult> {
-  const discovery = await discoverServers(options.projectRoot, options.configFiles);
+  const discovery = await discoverServers(options.projectRoot, options.configFiles, { userConfigs: options.userConfigs === true });
 
   const captured = await mapWithLimit(discovery.servers, options.concurrency ?? 4, async (server) => {
     try {
-      const surface = await withDeadline(options.timeoutMs ?? DEFAULT_TIMEOUT_MS, server.name, () =>
-        captureSurface(server, options.timeoutMs ?? DEFAULT_TIMEOUT_MS),
-      );
-      const entry = buildLockedServer(server, surface, options.policy);
+      /*
+       * What the server runs is read before it runs. Hashed after, a local file could put the
+       * approved bytes back over itself once loaded, and the lock pinned the file it no longer was.
+       */
       const { provenance, unverified } = await provenanceOf(server, options);
+      const surface = await captureSurface(server, options.timeoutMs ?? DEFAULT_TIMEOUT_MS);
+      const entry = buildLockedServer(server, surface, options.policy);
       options.onServerDone?.(server.name, "captured");
       return { name: server.name, entry: provenance ? { ...entry, provenance } : entry, unverified };
     } catch (error) {
