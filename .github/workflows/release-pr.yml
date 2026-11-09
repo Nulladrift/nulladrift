@@ -33,36 +33,31 @@ on:
   workflow_dispatch:
 
 # Read only. The two writes, pushing the release branch and opening the pull request, are made
-# with the App's token, minted in the first step.
+# with the App's token, minted in the `open` job, which runs no code from this repository.
 permissions:
   contents: read
 
 jobs:
-  propose:
+  # Runs this repository's code and its dependencies, so it holds no token that can write. It used
+  # to share a job with the App's token, which sat in .git/config while every dependency ran: a
+  # compromised package could take it, push a branch, merge it (develop needs only a green check),
+  # and push the tag that publishes. Code that runs in a step can also change the environment of
+  # the steps after it, so a later step in the same job is not a boundary; a separate job is.
+  prepare:
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      skip: ${{ steps.plan.outputs.skip }}
+      version: ${{ steps.plan.outputs.version }}
     steps:
-      # First, so that a week with nothing to release still proves the App's key and installation
-      # work: a bad key or a missing installation fails here on a quiet Thursday rather than on
-      # the one that matters. The client ID is a public identifier, so it lives here in review
-      # rather than in a secret that cannot be read back; the private key is the secret.
-      - name: Token from the Nulladrift Release App
-        id: app
-        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
-        with:
-          client-id: Iv23liczXhrN2ZxP3GMJ
-          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
-          # Owner and repositories left unset: the token reaches this repository and no other.
-          permission-contents: write
-          permission-pull-requests: write
-
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
-          # The App's token, so the push below is the App's and starts CI on the release branch.
-          token: ${{ steps.app.outputs.token }}
           ref: develop
           # The whole history, because the last tag is what says whether a version was already
           # prepared and never shipped.
           fetch-depth: 0
+          persist-credentials: false
       - uses: pnpm/action-setup@41ff72655975bd51cab0327fa583b6e92b6d3061 # v4.2.0
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
@@ -103,22 +98,71 @@ jobs:
         if: steps.plan.outputs.skip != 'true'
         run: pnpm -r typecheck && pnpm -r lint && pnpm -r test && pnpm -r build
 
-      - name: Open the release pull request
+      # The release commit, handed to the next job as a patch: the only thing that crosses over.
+      - name: Record the release commit
         if: steps.plan.outputs.skip != 'true'
         env:
-          GH_TOKEN: ${{ steps.app.outputs.token }}
           VERSION: ${{ steps.plan.outputs.version }}
         run: |
+          git config user.name "nulladrift-release[bot]"
+          git config user.email "353838605+nulladrift-release[bot]@users.noreply.github.com"
+          git commit -aqm "Release ${VERSION}"
+          mkdir -p /tmp/release
+          git format-patch -1 --stdout > /tmp/release/release.patch
+      - if: steps.plan.outputs.skip != 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-patch
+          path: /tmp/release/release.patch
+          if-no-files-found: error
+          retention-days: 7
+
+  # Opens the pull request. Holds the App's token and runs no code from this repository or its
+  # dependencies: git and gh, on the patch the job above made. The App cannot push a change to
+  # .github/workflows, so a patch cannot carry one either.
+  open:
+    needs: prepare
+    if: needs.prepare.outputs.skip != 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    steps:
+      # The client ID is a public identifier, so it lives here in review rather than in a secret
+      # that cannot be read back; the private key is the secret. Only minted when there is a
+      # release to open: a quiet week no longer exercises the key, which the first real release
+      # after one does instead.
+      - name: Token from the Nulladrift Release App
+        id: app
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: Iv23liczXhrN2ZxP3GMJ
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          # Owner and repositories left unset: the token reaches this repository and no other.
+          permission-contents: write
+          permission-pull-requests: write
+
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          # The App's token, so the push below is the App's and starts CI on the release branch.
+          token: ${{ steps.app.outputs.token }}
+          ref: develop
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-patch
+          path: /tmp/release
+
+      - name: Open the release pull request
+        env:
+          GH_TOKEN: ${{ steps.app.outputs.token }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
           branch="release/${VERSION}"
-          # The App's bot account, so the commit is attributed to what actually made it.
           git config user.name "nulladrift-release[bot]"
           git config user.email "353838605+nulladrift-release[bot]@users.noreply.github.com"
           git checkout -b "$branch"
-          git commit -aqm "Release ${VERSION}"
+          git am --3way /tmp/release/release.patch
           git push -q origin "$branch"
 
-          # Against develop, not main: the bump has to land on develop too, or the next release
-          # would compute its version from a number that was never written down.
           gh pr create --base develop --head "$branch" \
             --title "Release ${VERSION}" \
             --body "$(printf '%s\n' \
