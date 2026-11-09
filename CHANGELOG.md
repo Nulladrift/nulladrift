@@ -55,8 +55,8 @@ telemetry). Renaming a change kind breaks every consumer that matched on it.
 
 ### Fixed
 
-- **The README links to nulladrift.com, a domain the project holds, instead of nulladrift.io,
-  which nobody had registered.** The npm package page shows this README, so every visitor was
+- **The README links to nulladrift.com, a domain the project holds, instead of a domain
+  nobody had registered.** The npm package page shows this README, so every visitor was
   one click from an address anyone could have bought and filled with a sign-in page of their
   own.
 
