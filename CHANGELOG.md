@@ -30,6 +30,16 @@ telemetry). Renaming a change kind breaks every consumer that matched on it.
 
 ### Fixed
 
+- **The README said what the licence covers, but not what it leaves out: the name and the mark.**
+  MIT grants rights to the code, not to "Nulladrift" or the pin, and nothing said so, so a fork
+  could have called itself Nulladrift in good faith. It now says what is welcome (saying a fork is
+  based on Nulladrift, writing about it) and what is not (naming a fork, package or hosted service
+  "Nulladrift"), and points at nulladrift.com/brand.
+
+- **`CONTRIBUTING.md` did not say on what terms a contribution comes in.** It now asks for each
+  commit to be signed off under the Developer Certificate of Origin (`git commit -s`), and says it
+  is a DCO rather than a CLA: contributors keep their copyright and what they contribute stays MIT.
+
 - **The README, `SECURITY.md` and the docs describe 0.6.0.** They still said the lock pins only
   what a server declares, that a reading cannot be traced to the build that sent it, and that a
   backdoor behind unchanged tool definitions is out of scope; since 0.6.0 the lock pins the

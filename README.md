@@ -357,3 +357,13 @@ Requires Node 22+.
 ## Licence
 
 MIT. See [LICENSE](LICENSE).
+
+**The licence covers the code, not the name.** "Nulladrift" and the pin mark identify this
+project, and the MIT licence grants no rights to either. You are welcome to say a fork or a
+product is based on Nulladrift, to write about it, and to link to it. Please do not name a fork, a
+package or a hosted service "Nulladrift", or use the mark in a way that suggests it is this
+project or that we endorse it. The mark, and how to use it when you write about the project, is
+at [nulladrift.com/brand](https://nulladrift.com/brand).
+
+Contributions come in under the same MIT licence, signed off under the Developer Certificate of
+Origin; [CONTRIBUTING.md](CONTRIBUTING.md#sign-off-every-commit) says how.
