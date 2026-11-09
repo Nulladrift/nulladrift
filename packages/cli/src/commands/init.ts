@@ -3,6 +3,8 @@ import { steeringSignals, surfaceCapabilities, surfaceText } from "@nulladrift/c
 import { describeSearch } from "../config/discover";
 import { lstat } from "node:fs/promises";
 import { captureAll } from "../audit";
+import { countRedacted } from "../lock/credentials";
+import { redactedLine } from "../report/redacted";
 import { writeLockfile } from "../lock/io";
 import { EXIT_CLEAN, EXIT_INCOMPLETE, type ExitCode } from "../lib/exit";
 import { bold, dim, elideMiddle, green, red, truncate, yellow } from "../lib/ui";
@@ -98,6 +100,8 @@ export async function runInit(options: InitOptions): Promise<ExitCode> {
     lines.push(`  ${green("✓")} ${bold(name)}  ${dim(counts)}`);
     const deprecated = entry?.transport.type === "sse" ? " · HTTP+SSE transport is deprecated in the spec" : "";
     lines.push(`      ${dim(`${entry?.protocol.era}/${entry?.protocol.version} · from ${entry?.source.file}${deprecated}`)}`);
+    const redacted = entry ? countRedacted(entry.transport as { args?: string[]; url?: string }) : 0;
+    if (redacted > 0) lines.push(`      ${yellow(redactedLine(redacted))}`);
 
     /*
      * What is being approved, at the moment of approving it. The counts say how much surface

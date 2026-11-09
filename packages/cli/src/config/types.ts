@@ -14,8 +14,13 @@ export interface ConfiguredStdio {
    * credential out of the repository by writing `--token=${API_KEY}`, and the lockfile is a file
    * you are told to commit, so storing the expanded value there puts the secret back into git --
    * past the exact protection the placeholder exists to provide.
+   *
+   * `cwd` for the same reason, and one more: it is expanded (`${userHome}/...`) and then anchored
+   * to the project, so the expanded form is an absolute path on this machine. Written down, that
+   * put a local username in a committed file and made the lock differ on every machine, which a
+   * CI checkout at another path reported as `server.transport.changed`.
    */
-  asWritten?: { command: string; args: string[] };
+  asWritten?: { command: string; args: string[]; cwd?: string };
 }
 
 /** OAuth settings as a client config states them. Secrets arrive expanded from the environment. */

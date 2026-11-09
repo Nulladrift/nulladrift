@@ -99,7 +99,11 @@ function resolveTransport(name: string, entry: ServerEntry, context: ExpandConte
       type: "stdio",
       command: take(entry.command),
       args: (entry.args ?? []).map((argument) => take(String(argument))),
-      asWritten: { command: String(entry.command), args: (entry.args ?? []).map((argument) => String(argument)) },
+      asWritten: {
+        command: String(entry.command),
+        args: (entry.args ?? []).map((argument) => String(argument)),
+        ...(entry.cwd ? { cwd: String(entry.cwd) } : {}),
+      },
       env: Object.fromEntries(Object.entries(scalarsToStrings(entry.env)).map(([key, value]) => [key, take(value)])),
       cwd: entry.cwd ? take(entry.cwd) : undefined,
     };

@@ -6,6 +6,7 @@ import { diffLockfiles } from "../diff";
 import { readLockfile } from "../lock/io";
 import { resolveExitCode, type ExitCode } from "../lib/exit";
 import { renderHumanReport } from "../report/human";
+import { redactedNotes } from "../report/redacted";
 import { renderJsonReport } from "../report/json";
 import { renderSarifReport } from "../report/sarif";
 import { renderMarkdownReport } from "../report/markdown";
@@ -26,6 +27,8 @@ export async function buildReport(options: CommonOptions): Promise<{ report: Aud
     previous: committed,
     provenance: options.provenance,
   });
+  // On stderr, so it reaches a person without touching a --format json or sarif report on stdout.
+  for (const note of redactedNotes(result.lock)) process.stderr.write(`${yellow("note:")} ${note}\n`);
 
   const changes = diffLockfiles(committed, result.lock);
   const allowUnreachable = options.allowUnreachable || committed.policy?.allowUnreachable === true;
