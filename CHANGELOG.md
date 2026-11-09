@@ -10,6 +10,10 @@ telemetry). Renaming a change kind breaks every consumer that matched on it.
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.6.2] - 2026-11-09
+
 ### Security
 
 - **Credentials in common shapes were still written to `mcp.lock` and sent by `push`.** 0.6.1
@@ -80,7 +84,6 @@ telemetry). Renaming a change kind breaks every consumer that matched on it.
   the pull request comment, a backtick ended the code span and the rest rendered as Markdown and
   HTML: images, links and mentions. Server text is now either fully escaped or fenced by more
   backticks than it contains.
-
 ## [0.6.1] - 2026-11-09
 
 ### Security
