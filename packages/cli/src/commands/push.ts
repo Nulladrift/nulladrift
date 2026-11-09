@@ -6,12 +6,13 @@
  * checking: policy lives where the repository being audited cannot edit it, so a pull request
  * cannot widen what its own build is allowed to do.
  */
+import { createHash } from "node:crypto";
 import { captureAll } from "../audit";
 import { EXIT_CLEAN, EXIT_DRIFT, EXIT_INCOMPLETE, type ExitCode } from "../lib/exit";
 import { bold, dim, green, red, yellow } from "../lib/ui";
 import { describeRefusal } from "../report/push-error";
 import { redactedNotes } from "../report/redacted";
-import { acquireBuildToken, BUILD_TOKEN_HEADER } from "../lib/build-token";
+import { acquireBuildToken, acquireReadingToken, BUILD_TOKEN_HEADER, READING_TOKEN_HEADER, readingAudience, readingAudienceBase } from "../lib/build-token";
 import { VERSION } from "../lib/version";
 import type { CommonOptions } from "./options";
 
@@ -46,14 +47,25 @@ interface IngestResponseBody {
     repository?: string;
     ref?: string;
     rejected?: string;
+    /** The provider signed this reading's contents too. Absent from a control plane before 0.7.0's. */
+    boundToReading?: boolean;
+    /** Why the token for this reading's contents was refused while the build's was accepted. */
+    bindingRefused?: string;
   };
 }
 
 /** One line about which build the control plane believes sent this, or nothing worth a line. */
 function describeIdentity(identity: IngestResponseBody["identity"], hint: string | undefined): string | undefined {
-  if (identity?.trust === "trusted") return `${green("signed")} ${dim(`${identity.repository ?? ""}${identity.ref ? ` @ ${identity.ref}` : ""} · a trusted build`)}`;
+  const where = `${identity?.repository ?? ""}${identity?.ref ? ` @ ${identity.ref}` : ""}`;
+  // Whether the signature covers what was sent, or only who sent it. Said only when the control plane said.
+  const contents = identity?.boundToReading
+    ? " · contents signed"
+    : identity?.bindingRefused
+      ? ` · contents not signed: ${identity.bindingRefused}`
+      : "";
+  if (identity?.trust === "trusted") return `${green("signed")} ${dim(`${where} · a trusted build${contents}`)}`;
   if (identity?.trust === "verified") {
-    return `${yellow("signed")} ${dim(`${identity.repository ?? ""}${identity.ref ? ` @ ${identity.ref}` : ""} · not a build this organization lists as trusted`)}`;
+    return `${yellow("signed")} ${dim(`${where} · not a build this organization lists as trusted${contents}`)}`;
   }
   if (identity?.rejected) return `${red("build token refused")} ${dim(identity.rejected)}`;
   return hint ? dim(`unsigned: ${hint}`) : undefined;
@@ -190,8 +202,19 @@ export async function runPush(options: PushOptions): Promise<ExitCode> {
    * for after the capture rather than before, because GitHub's tokens live for minutes and a slow
    * server could otherwise outlast one.
    */
-  const build = await acquireBuildToken();
+  /*
+   * The body is serialised once, and those exact bytes are both hashed and sent: the control
+   * plane hashes what arrives before it parses anything, so a second serialisation that happened
+   * to order or space things differently would be a different reading.
+   */
+  const payload = JSON.stringify(body);
+  const digest = createHash("sha256").update(payload).digest("hex");
+  const [build, reading] = await Promise.all([
+    acquireBuildToken(),
+    acquireReadingToken(readingAudience(readingAudienceBase(apiUrl), digest)),
+  ]);
   const buildToken = build && "token" in build ? build.token : undefined;
+  const readingToken = reading && "token" in reading ? reading.token : undefined;
 
   let response: Response;
   try {
@@ -201,8 +224,9 @@ export async function runPush(options: PushOptions): Promise<ExitCode> {
         "content-type": "application/json",
         authorization: `Bearer ${token}`,
         ...(buildToken ? { [BUILD_TOKEN_HEADER]: buildToken } : {}),
+        ...(readingToken ? { [READING_TOKEN_HEADER]: readingToken } : {}),
       },
-      body: JSON.stringify(body),
+      body: payload,
       // A redirect would carry the reading and the identity token to wherever it points.
       redirect: "error",
       signal: AbortSignal.timeout(options.timeoutMs),

@@ -5,7 +5,7 @@
  * before this existed. So the property worth testing hardest is that nothing here can fail a push.
  */
 import { describe, expect, it } from "vitest";
-import { acquireBuildToken, DEFAULT_AUDIENCE } from "../src/lib/build-token";
+import { acquireBuildToken, acquireReadingToken, DEFAULT_AUDIENCE, readingAudience, readingAudienceBase } from "../src/lib/build-token";
 
 const ACTIONS = {
   GITHUB_ACTIONS: "true",
@@ -64,5 +64,31 @@ describe("getting a build token", () => {
     expect(await acquireBuildToken({ env: ACTIONS, fetch: provider(new TypeError("fetch failed")).fetch })).toEqual({
       hint: expect.stringContaining("fetch failed"),
     });
+  });
+});
+
+describe("getting a token for one reading's bytes", () => {
+  const DIGEST = "a".repeat(64);
+
+  it("names the control plane and the reading's sha256 in the audience", () => {
+    expect(readingAudience("https://api.nulladrift.example/", DIGEST)).toBe(`https://api.nulladrift.example#sha256:${DIGEST}`);
+  });
+
+  it("names the control plane by the origin pushed to, unless an audience was configured", () => {
+    expect(readingAudienceBase("https://api.nulladrift.example/v1/", {})).toBe("https://api.nulladrift.example");
+    expect(readingAudienceBase("https://api.nulladrift.example", { NULLADRIFT_BUILD_AUDIENCE: "nulladrift-acme" })).toBe("nulladrift-acme");
+  });
+
+  it("asks GitHub Actions for one minted for that audience", async () => {
+    const { fetch, asked } = provider({ body: { value: "eyJ.reading.token" } });
+    const audience = readingAudience("https://api.nulladrift.example", DIGEST);
+    expect(await acquireReadingToken(audience, { env: ACTIONS, fetch })).toEqual({ token: "eyJ.reading.token", source: "github-actions" });
+    expect(new URL(asked[0]!.url).searchParams.get("audience")).toBe(audience);
+  });
+
+  it("asks for nothing outside GitHub Actions, where a token's audience is fixed before the job runs", async () => {
+    const { fetch, asked } = provider({ body: { value: "t" } });
+    expect(await acquireReadingToken("x", { env: { NULLADRIFT_ID_TOKEN: "from-gitlab" }, fetch })).toBeUndefined();
+    expect(asked).toEqual([]);
   });
 });
