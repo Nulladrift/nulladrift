@@ -69,6 +69,12 @@ export interface Discovery {
    * the tool does not look locally.
    */
   searched: string[];
+  /**
+   * User-level config files that exist and were left out, because `--user-configs` was not given.
+   * They hold one person's servers, often with their keys and home paths, and the lock is a file
+   * the whole team commits; so they are read only when asked for, and said to be there when not.
+   */
+  userConfigsSkipped: string[];
   /** Names defined more than once; the first definition won. */
   shadowed: Array<{ name: string; keptFrom: string; alsoIn: string }>;
   /** Files named explicitly that could not be understood. Never silently ignored. */
@@ -111,7 +117,15 @@ async function readJsonIfPresent(path: string): Promise<ReadResult> {
  */
 function anchorCwd(server: ConfiguredServer, projectRoot: string): ConfiguredServer {
   const { transport } = server;
-  if (transport.type !== "stdio" || transport.cwd === undefined || isAbsolute(transport.cwd)) return server;
+  if (transport.type !== "stdio") return server;
+  /*
+   * No `cwd` at all means the project too. It meant wherever the auditor was started, while what
+   * the server runs was resolved against the project: `check --cwd proj` from the repository
+   * root ran `<root>/server.mjs` and hashed `proj/server.mjs`, so the pinned file was not the one
+   * that ran. The lock still records `cwd` only as the config writes it.
+   */
+  if (transport.cwd === undefined) return { ...server, transport: { ...transport, cwd: projectRoot } };
+  if (isAbsolute(transport.cwd)) return server;
   return { ...server, transport: { ...transport, cwd: resolve(projectRoot, transport.cwd) } };
 }
 
@@ -126,12 +140,24 @@ export function describeSearch(searched: string[], filesRead: string[]): string 
   return lines.join("\n");
 }
 
-export async function discoverServers(projectRoot: string, extraFiles: string[] = []): Promise<Discovery> {
+export async function discoverServers(
+  projectRoot: string,
+  extraFiles: string[] = [],
+  options: { userConfigs?: boolean } = {},
+): Promise<Discovery> {
   const context: ExpandContext = { workspaceFolder: projectRoot, env: process.env };
 
+  /*
+   * Project configs only, unless asked. User-level files (`~/.claude.json`, Claude Desktop,
+   * Cursor, Windsurf, Copilot) describe one person's servers: pinning them wrote their arguments,
+   * home paths and key names into the project's committed lock and into every reading pushed,
+   * and a teammate or a CI runner without those files saw them as removed.
+   */
+  const candidates = candidateConfigFiles(projectRoot);
+  const userFiles = candidates.filter((file) => file.scope === "user");
   const files: ConfigFile[] = [
     ...extraFiles.map((path): ConfigFile => ({ client: "generic", path: resolve(projectRoot, path) })),
-    ...candidateConfigFiles(projectRoot),
+    ...candidates.filter((file) => options.userConfigs === true || file.scope !== "user"),
   ];
 
   const byName = new Map<string, { server: ConfiguredServer; from: string }>();
@@ -197,6 +223,12 @@ export async function discoverServers(projectRoot: string, extraFiles: string[] 
     skipped,
     filesRead,
     searched: files.map((file) => file.path),
+    userConfigsSkipped:
+      options.userConfigs === true
+        ? []
+        : (await Promise.all(userFiles.map(async (file) => ((await readJsonIfPresent(file.path)).present ? portablePath(file.path, projectRoot) : undefined)))).filter(
+            (path): path is string => path !== undefined,
+          ),
     shadowed,
     problems,
   };

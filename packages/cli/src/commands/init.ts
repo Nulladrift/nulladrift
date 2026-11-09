@@ -7,7 +7,7 @@ import { countRedacted } from "../lock/credentials";
 import { redactedLine } from "../report/redacted";
 import { writeLockfile } from "../lock/io";
 import { EXIT_CLEAN, EXIT_INCOMPLETE, type ExitCode } from "../lib/exit";
-import { bold, dim, elideMiddle, green, red, truncate, yellow } from "../lib/ui";
+import { bold, dim, elideMiddle, green, red, truncate, yellow, visibleControls } from "../lib/ui";
 import { maybeOfferTelemetry } from "./telemetry";
 import type { CommonOptions } from "./options";
 
@@ -59,6 +59,7 @@ export async function runInit(options: InitOptions): Promise<ExitCode> {
     configFiles: options.configFiles,
     timeoutMs: options.timeoutMs,
     provenance: options.provenance,
+    userConfigs: options.userConfigs,
   });
 
   const names = Object.keys(result.lock.subjects);
@@ -97,9 +98,9 @@ export async function runInit(options: InitOptions): Promise<ExitCode> {
       `${entry?.resourceTemplates?.length ?? 0} templates`,
       `${entry?.prompts?.length ?? 0} prompts`,
     ].join(", ");
-    lines.push(`  ${green("✓")} ${bold(name)}  ${dim(counts)}`);
+    lines.push(`  ${green("✓")} ${bold(visibleControls(name))}  ${dim(counts)}`);
     const deprecated = entry?.transport.type === "sse" ? " · HTTP+SSE transport is deprecated in the spec" : "";
-    lines.push(`      ${dim(`${entry?.protocol.era}/${entry?.protocol.version} · from ${entry?.source.file}${deprecated}`)}`);
+    lines.push(`      ${dim(visibleControls(`${entry?.protocol.era}/${entry?.protocol.version} · from ${entry?.source.file}${deprecated}`))}`);
     const redacted = entry ? countRedacted(entry.transport as { args?: string[]; url?: string }) : 0;
     if (redacted > 0) lines.push(`      ${yellow(redactedLine(redacted))}`);
 
@@ -116,7 +117,7 @@ export async function runInit(options: InitOptions): Promise<ExitCode> {
       const paint = worst.length > 0 ? yellow : dim;
       lines.push(`      ${paint(`can: ${capabilities.map((capability) => capability.kind).join(", ")}`)}`);
       for (const capability of worst) {
-        lines.push(`        ${dim(`${capability.kind} · ${capability.tools.slice(0, 3).join(", ")}${capability.tools.length > 3 ? ` +${capability.tools.length - 3}` : ""}`)}`);
+        lines.push(`        ${dim(visibleControls(`${capability.kind} · ${capability.tools.slice(0, 3).join(", ")}${capability.tools.length > 3 ? ` +${capability.tools.length - 3}` : ""}`))}`);
       }
     }
 
@@ -153,6 +154,14 @@ export async function runInit(options: InitOptions): Promise<ExitCode> {
 
   for (const failure of result.unreachable) {
     lines.push(`  ${red("✗")} ${bold(failure.server)}  ${dim("not pinned")}`, `      ${failure.reason}`);
+  }
+
+  // Said, so nobody thinks their own servers were audited when they were left out on purpose.
+  if (result.discovery.userConfigsSkipped.length > 0) {
+    lines.push(
+      dim(`  note: your own configs were not pinned (${result.discovery.userConfigsSkipped.join(", ")}). mcp.lock is the project's and is committed;`),
+      dim("        pass --user-configs to include their servers anyway."),
+    );
   }
 
   for (const shadow of result.discovery.shadowed) {

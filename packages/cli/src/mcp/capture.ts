@@ -1,5 +1,5 @@
 /** Asking a connected server for everything it exposes. */
-import type { Client } from "@modelcontextprotocol/client";
+import type { Client, Tool } from "@modelcontextprotocol/client";
 import type { ConfiguredServer } from "../config/types";
 import type { JsonObject, LockedProtocol, LockedServerInfo } from "../lock/types";
 import { toJson } from "../lock/canonical";
@@ -82,6 +82,37 @@ export function describeListFailure(error: unknown): string {
   return message;
 }
 
+/** The same ceiling the SDK applies to its own paging (DEFAULT_LIST_MAX_PAGES). */
+const MAX_LIST_PAGES = 64;
+
+/**
+ * Every tool the server declares, exactly as declared.
+ *
+ * The SDK's `listTools` drops any tool whose `x-mcp-header` declarations break SEP-2243's rules,
+ * because the spec tells a Streamable HTTP client to. That is right for a client about to call
+ * tools and wrong for an auditor: older-protocol and stdio clients still offer such a tool, so a
+ * server could add one (`exec_shell`) that this never saw and `check` passed. `client.request`
+ * returns the page as sent; paged by hand, with the SDK's own limit and a stop on a repeated
+ * cursor so a server cannot keep it listing forever.
+ */
+async function listAllTools(client: Client, timeoutMs: number): Promise<Tool[]> {
+  const tools: Tool[] = [];
+  const cursors = new Set<string>();
+  let cursor: string | undefined;
+  for (let page = 0; page < MAX_LIST_PAGES; page += 1) {
+    const result = (await client.request({ method: "tools/list", params: cursor === undefined ? {} : { cursor } }, { timeout: timeoutMs })) as {
+      tools: Tool[];
+      nextCursor?: string;
+    };
+    tools.push(...result.tools);
+    cursor = result.nextCursor;
+    if (cursor === undefined) return tools;
+    if (cursors.has(cursor)) throw new Error("tools/list: the server repeated a page cursor, so the listing would never end");
+    cursors.add(cursor);
+  }
+  throw new Error(`tools/list: more than ${MAX_LIST_PAGES} pages; the server's pagination did not end`);
+}
+
 async function listOrEmpty<T>(label: string, serverName: string, fetchList: () => Promise<T[]>): Promise<T[]> {
   try {
     return await fetchList();
@@ -118,40 +149,89 @@ function readServerInfo(client: Client): LockedServerInfo | undefined {
   };
 }
 
+/**
+ * One deadline for the whole of a server, not one per request to it.
+ *
+ * `--timeout` says "per-server timeout" and was applied to each request. Capturing a surface
+ * takes several -- version negotiation, the legacy fallback, then the listings -- so a server
+ * that accepts a connection and never answers held the audit for two and a half to three times
+ * the configured value. Measured: `--timeout 2000` took 6.1s, `--timeout 4000` took 10.1s. At
+ * the 30s default that is a minute and a half per server, which a server nobody controls gets
+ * to decide. The crawl had no ceiling at all: a server answering each of 64 pages just inside
+ * the request timeout held it for twenty minutes.
+ *
+ * The per-request timeout stays, because it is what makes an individual call give up. This is
+ * the ceiling on all of them together, and it closes the connection when it passes: stopping
+ * only the wait left the listing running, and a stdio server running, behind it.
+ */
 export async function captureSurface(server: ConfiguredServer, timeoutMs = DEFAULT_TIMEOUT_MS): Promise<CapturedSurface> {
-  const connection = await connect(server, timeoutMs);
-  const { client } = connection;
+  let connection: Awaited<ReturnType<typeof connect>> | undefined;
+  let expired = false;
+  let timer: NodeJS.Timeout | undefined;
+  const late = (): UnreachableServerError => new UnreachableServerError(server.name, `did not finish within ${timeoutMs}ms`);
+
+  const deadline = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => {
+      expired = true;
+      void connection?.close();
+      reject(late());
+    }, timeoutMs);
+    timer.unref?.();
+  });
+
+  const work = (async () => {
+    const opened = await connect(server, timeoutMs);
+    if (expired) {
+      await opened.close();
+      throw late();
+    }
+    connection = opened;
+    try {
+      return await readSurface(opened.client, server, timeoutMs);
+    } finally {
+      await opened.close();
+    }
+  })();
+  // Whichever loses the race still settles; its outcome is no longer anybody's.
+  work.catch(() => undefined);
 
   try {
-    const capabilities = client.getServerCapabilities();
-
-    /*
-     * Only ask for what the server declares. A server MUST declare a capability it serves, the
-     * SDK returns an empty list for anything undeclared, and asking anyway costs a round trip
-     * per server and emits a warning per call -- which, across a few hundred servers, buries
-     * everything else.
-     */
-    const [tools, resources, resourceTemplates, prompts] = await Promise.all([
-      capabilities?.tools ? listOrEmpty("tools/list", server.name, async () => (await client.listTools(undefined, FRESH)).tools) : [],
-      capabilities?.resources ? listOrEmpty("resources/list", server.name, async () => (await client.listResources(undefined, FRESH)).resources) : [],
-      capabilities?.resources
-        ? listOrEmpty("resources/templates/list", server.name, async () => (await client.listResourceTemplates(undefined, FRESH)).resourceTemplates)
-        : [],
-      capabilities?.prompts ? listOrEmpty("prompts/list", server.name, async () => (await client.listPrompts(undefined, FRESH)).prompts) : [],
-    ]);
-
-    return {
-      protocol: readProtocol(client),
-      serverInfo: readServerInfo(client),
-      capabilities: capabilities ? (toJson(capabilities) as JsonObject) : undefined,
-      // Clients place this in the model's system prompt, so it is part of the capability surface.
-      instructions: client.getInstructions(),
-      tools,
-      resources,
-      resourceTemplates,
-      prompts,
-    };
+    return await Promise.race([work, deadline]);
   } finally {
-    await connection.close();
+    clearTimeout(timer);
   }
+}
+
+/** What the server declares, read over a connection already made. */
+async function readSurface(client: Client, server: ConfiguredServer, timeoutMs: number): Promise<CapturedSurface> {
+  const capabilities = client.getServerCapabilities();
+
+  /*
+   * Only ask for what the server declares. A server MUST declare a capability it serves, the
+   * SDK returns an empty list for anything undeclared, and asking anyway costs a round trip
+   * per server and emits a warning per call -- which, across a few hundred servers, buries
+   * everything else.
+   */
+  const [tools, resources, resourceTemplates, prompts] = await Promise.all([
+    capabilities?.tools ? listOrEmpty("tools/list", server.name, async () => listAllTools(client, timeoutMs)) : [],
+    // Each list call is bounded by the server's timeout too. With none, the SDK's default
+    // applied per page (60s, up to 64 pages), so one slow server could hold a run for an hour.
+    capabilities?.resources ? listOrEmpty("resources/list", server.name, async () => (await client.listResources(undefined, { ...FRESH, timeout: timeoutMs })).resources) : [],
+    capabilities?.resources
+      ? listOrEmpty("resources/templates/list", server.name, async () => (await client.listResourceTemplates(undefined, { ...FRESH, timeout: timeoutMs })).resourceTemplates)
+      : [],
+    capabilities?.prompts ? listOrEmpty("prompts/list", server.name, async () => (await client.listPrompts(undefined, { ...FRESH, timeout: timeoutMs })).prompts) : [],
+  ]);
+
+  return {
+    protocol: readProtocol(client),
+    serverInfo: readServerInfo(client),
+    capabilities: capabilities ? (toJson(capabilities) as JsonObject) : undefined,
+    // Clients place this in the model's system prompt, so it is part of the capability surface.
+    instructions: client.getInstructions(),
+    tools,
+    resources,
+    resourceTemplates,
+    prompts,
+  };
 }

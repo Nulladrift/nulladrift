@@ -7,6 +7,7 @@
  * A message they cannot act on sends them looking for a bug that is not there.
  */
 import { describe, expect, it } from "vitest";
+import { refuseApiUrl } from "../src/commands/push";
 import { describeRefusal } from "../src/report/push-error";
 
 const planLimit = JSON.stringify({
@@ -73,5 +74,25 @@ describe("every other refusal", () => {
     const body = JSON.stringify({ error: { code: "payment_required", message: "Card declined" } });
 
     expect(describeRefusal(402, body).planLimit).toBe(false);
+  });
+});
+
+/*
+ * Where the collector token and the CI's identity token are sent. Plain http sent both in clear,
+ * and credentials in the address were printed back in an error.
+ */
+describe("the control plane's address", () => {
+  it("is https, or http only on this machine", () => {
+    expect(refuseApiUrl("https://api.nulladrift.com")).toBeUndefined();
+    expect(refuseApiUrl("http://localhost:8787")).toBeUndefined();
+    expect(refuseApiUrl("http://127.0.0.1:8787")).toBeUndefined();
+    expect(refuseApiUrl("http://api.nulladrift.com")).toMatch(/https/);
+    expect(refuseApiUrl("ftp://api.nulladrift.com")).toMatch(/https/);
+  });
+
+  it("refuses credentials in the address without repeating them", () => {
+    const refusal = refuseApiUrl("https://user:s3cret@api.nulladrift.com");
+    expect(refusal).toMatch(/credentials/);
+    expect(refusal).not.toContain("s3cret");
   });
 });

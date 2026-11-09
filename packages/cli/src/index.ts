@@ -33,6 +33,7 @@ ${bold("Options")}
   --timeout <ms>         per-server timeout (default: ${DEFAULT_TIMEOUT_MS})
   --allow-unreachable    a server that cannot be reached warns instead of failing
   --no-provenance        do not look up what each stdio server runs (air-gapped runs)
+  --user-configs         also pin servers from your own configs (~/.claude.json, Claude Desktop, ...)
   --json                 machine-readable output (check)
   --sarif                SARIF 2.1.0 output (check)
   --sarif-steering       also emit steering passages as SARIF notes (off: an alert is a gate)
@@ -64,6 +65,7 @@ async function main(): Promise<ExitCode> {
       timeout: { type: "string" },
       "allow-unreachable": { type: "boolean", default: false },
       "no-provenance": { type: "boolean", default: false },
+      "user-configs": { type: "boolean", default: false },
       json: { type: "boolean", default: false },
       sarif: { type: "boolean", default: false },
       "sarif-steering": { type: "boolean", default: false },
@@ -111,6 +113,7 @@ async function main(): Promise<ExitCode> {
     sarifSteering: values["sarif-steering"] === true,
     comment: values.comment,
     provenance: values["no-provenance"] !== true,
+    userConfigs: values["user-configs"] === true,
   };
 
   switch (command) {

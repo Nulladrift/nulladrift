@@ -13,6 +13,7 @@ import { discoverServers } from "../config/discover";
 import type { ConfiguredServer } from "../config/types";
 import { EXIT_CLEAN, EXIT_INCOMPLETE, type ExitCode } from "../lib/exit";
 import { bold, dim, green, red } from "../lib/ui";
+import { sanitizeUrl } from "../lock/normalize";
 import { credentialPath, DEFAULT_CALLBACK_PATH, FileTokenProvider } from "../mcp/oauth";
 import { rm } from "node:fs/promises";
 
@@ -84,7 +85,8 @@ async function awaitCallback(expectedState: string): Promise<{ redirectUrl: stri
 }
 
 async function findServer(projectRoot: string, configFiles: string[], name: string): Promise<ConfiguredServer | { error: string }> {
-  const discovery = await discoverServers(projectRoot, configFiles);
+  // Every config, the user's own included: login stores a token for this person and writes no lock.
+  const discovery = await discoverServers(projectRoot, configFiles, { userConfigs: true });
   const server = discovery.servers.find((candidate) => candidate.name === name);
   if (!server) {
     const known = discovery.servers.map((candidate) => candidate.name);
@@ -113,7 +115,8 @@ export async function runLogin(options: { projectRoot: string; configFiles: stri
   Object.assign(authenticating, { stateValue: provider.stateValue });
 
   try {
-    process.stdout.write(`${bold(`Authorizing ${found.name}`)}\n${dim(serverUrl)}\n`);
+    // Without its query or userinfo: a URL that carries a key would otherwise print it.
+    process.stdout.write(`${bold(`Authorizing ${found.name}`)}\n${dim(sanitizeUrl(serverUrl))}\n`);
 
     const started = await auth(authenticating, { serverUrl });
     if (started === "AUTHORIZED") {

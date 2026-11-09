@@ -103,7 +103,14 @@ export function toJson(value: unknown, depth = 0): JsonValue {
   // Not `map(toJson)`: that would pass the array index as the depth.
   if (Array.isArray(value)) return value.map((member) => toJson(member, depth + 1));
   if (typeof value === "object") {
-    const out: Record<string, JsonValue> = {};
+    /*
+     * No prototype. `out[key] = ...` on a plain `{}` sends a key named `__proto__` to the
+     * prototype setter instead of making it a property, so a schema property called `__proto__`
+     * vanished from the lock and the digest while real clients passed it to the model: a server
+     * could add or rewrite it and `check` reported a match. JSON.parse keeps such a key as an own
+     * property; this has to as well.
+     */
+    const out = Object.create(null) as Record<string, JsonValue>;
     for (const [key, member] of Object.entries(value as Record<string, unknown>)) {
       if (member === undefined) continue;
       out[key] = toJson(member, depth + 1);

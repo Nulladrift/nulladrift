@@ -10,10 +10,28 @@ import { z } from "zod";
 import type { JsonValue } from "./types";
 import { LOCKFILE_VERSION } from "./types";
 
-const jsonValue: z.ZodType<JsonValue> = z.lazy(() =>
-  z.union([z.string(), z.number(), z.boolean(), z.null(), z.array(jsonValue), z.record(z.string(), jsonValue)]),
+/**
+ * JSON exactly as JSON.parse produced it, checked without being rebuilt.
+ *
+ * Zod builds a new object for a record and drops a key named `__proto__` doing it, so a schema
+ * property of that name vanished when the lock was read back: the committed side never matched a
+ * capture that kept it, or, before the engine kept it either, both sides lost it and a server
+ * could rewrite it unseen. Validating in place returns the parsed value itself.
+ */
+function isJsonValue(value: unknown, depth = 0): boolean {
+  if (depth > 256) return false;
+  if (value === null || typeof value === "string" || typeof value === "boolean") return true;
+  if (typeof value === "number") return Number.isFinite(value);
+  if (Array.isArray(value)) return value.every((member) => isJsonValue(member, depth + 1));
+  if (typeof value !== "object") return false;
+  const prototype = Object.getPrototypeOf(value) as unknown;
+  if (prototype !== Object.prototype && prototype !== null) return false;
+  return Object.values(value).every((member) => isJsonValue(member, depth + 1));
+}
+const jsonObject = z.custom<Record<string, JsonValue>>(
+  (value) => value !== null && typeof value === "object" && !Array.isArray(value) && isJsonValue(value),
+  "expected a JSON object",
 );
-const jsonObject = z.record(z.string(), jsonValue);
 const digestString = z.string().regex(/^sha256:[0-9a-f]{64}$/, "expected a sha256 digest");
 
 const icon = z.object({

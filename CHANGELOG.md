@@ -12,6 +12,78 @@ telemetry). Renaming a change kind breaks every consumer that matched on it.
 
 Nothing yet.
 
+## [0.6.2] - 2026-11-09
+
+### Security
+
+- **Credentials in common shapes were still written to `mcp.lock` and sent by `push`.** 0.6.1
+  replaced a key after a flag named for one, but not `--header "Authorization: Bearer ..."` (the
+  usual mcp-remote setup), `--key <uuid>`, `GITHUB_PAT=` or any name with the credential word
+  before another word, a key in JSON passed as an argument, a connection string's password, a
+  query or fragment parameter in a URL argument, a UUID or hex key in a hosted server's URL path,
+  or a URL with a `${VAR}` in it, which was written raw, query string included. Names are now read
+  as words, headers keep their name and lose their value, JSON, connection strings and URL
+  parameters are checked by name, and a URL keeps a placeholder exactly as written. **If an
+  earlier `mcp.lock` was committed with a key in it, rotate the key.**
+- **An OAuth client secret is only sent to the authorization server you name.** With
+  `oauth.clientSecret` set, the secret went to whichever authorization server the MCP server
+  named, so a compromised server could collect it on the next CI run. `oauth.issuer` is now
+  required alongside it, and the SDK refuses to send the secret anywhere else. A config with a
+  secret and no issuer is refused before anything connects.
+- **`login` opens only an `https` page, and never through a shell.** On Windows the authorization
+  address went through `cmd /c start`, where `&` in a URL runs a command, and every real login URL
+  was cut at its first parameter. Elsewhere any scheme the server named was opened.
+- **Your own configs are no longer pinned unless you ask.** `init`, `check`, `review` and `push`
+  read the project's configs only; `~/.claude.json`, Claude Desktop, Cursor, Windsurf and Copilot
+  configs need `--user-configs`. They put one person's arguments, home paths and key names into a
+  lock the team commits. `init` says when it left them out. A lock pinned with them shows those
+  servers as removed; run `init` again, with `--user-configs` if you want them.
+- **A repository could make `init` overwrite a file outside it.** The lock was written through a
+  temporary file named `mcp.lock.<pid>.tmp`, with a call that follows symbolic links, so a
+  repository shipping that name as a link (for a range of PIDs) overwrote its target. The
+  temporary file now has an unguessable name and is created exclusively.
+- **An `envFile` could put a private key into the lock.** A line split on its first `=` inside a
+  multi-line quoted value made a piece of the value a variable name, and names go into `envKeys`.
+  Quoted values may now span lines, and only a valid variable name is a name.
+- **`push` sends its tokens only over https, and follows no redirect.** Plain `http` sent the
+  collector token and the CI identity token in clear, an API address with credentials in it was
+  printed back in an error, and a redirect carried the reading and the identity token to another
+  host. A server's stderr is no longer sent with an unreachable server's reason, and `login` no
+  longer prints a server address's query string.
+- **A pull request's config could hand a server the job's own credentials.** `${VAR}` was filled
+  from the whole environment, so a URL, header, argument or `env` entry naming
+  `ACTIONS_ID_TOKEN_REQUEST_TOKEN`, `CI_JOB_TOKEN`, `NULLADRIFT_TOKEN` or another credential the CI
+  provider puts in every job sent it to whatever the config pointed at. Those are now refused, in
+  every placeholder form, and the server is reported as an audit that could not complete. A
+  secret a workflow sets on purpose (`${GITHUB_TOKEN}`, `${API_KEY}`) is still filled: `check`
+  runs the configured servers, so run it on `pull_request`, never `pull_request_target`.
+- **A server could hide a tool from the audit by giving it an invalid `x-mcp-header`.** The SDK's
+  `listTools` drops such tools before returning them, so a server published a tool the lock never
+  saw while its other tools still matched. Tool lists are now read raw.
+- **A file could put the approved bytes back over itself once it had started.** A local server
+  was hashed after it was started, so the lock pinned what the file became and not what ran.
+  It is now hashed first, and a stdio server without a `cwd` starts in the project it was read
+  from, so the file hashed and the file run are the same one.
+- **A package pinned from npm or PyPI may have come from somewhere else.** The pin is the public
+  registry's, while `npx --registry`, `uvx --index-url`, a project or user `.npmrc`, `uv.toml`, an
+  index in the environment or a copy in `node_modules` ran another one. Those servers are now
+  reported as unverified, with no pin carried forward. A registry you set in your own environment
+  is asked as before.
+- **A tool named `__proto__`, or a schema key of that name, vanished from the lock.** It was
+  dropped when the surface was written, so adding one reported nothing. Such keys are now kept,
+  and a server named `__proto__` is refused.
+- **A recursive schema could hang `check`.** A `$ref` that referred back into itself through
+  `properties` or `anyOf` was followed while looking for header parameters, without end. Each
+  reference is followed once per path, and the walk has a budget.
+- **The audit's deadline covers each server's every request.** A server answering the first
+  request and stalling a later one, or listing pages without end, held `check` for as long as it
+  liked. Listings now stop at 64 pages, and each request has the run's deadline.
+- **Server text could rewrite the terminal and the pull request comment.** Tool names, summaries
+  and failure reasons were printed with their control characters, so a server could clear lines,
+  move the cursor or retitle the window in `check`, `review` and `init`. They are shown escaped. In
+  the pull request comment, a backtick ended the code span and the rest rendered as Markdown and
+  HTML: images, links and mentions. Server text is now either fully escaped or fenced by more
+  backticks than it contains.
 ## [0.6.1] - 2026-11-09
 
 ### Security

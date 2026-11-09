@@ -6,8 +6,9 @@ name: crawl
 
 # State has to survive for months for the rate to mean anything, so it lives on its own branch
 # rather than in the Actions cache, which is evicted after a week of disuse.
+# Read only by default; only the commit job, which runs no code from this repository, can write.
 permissions:
-  contents: write
+  contents: read
 
 on:
   schedule:
@@ -26,21 +27,27 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Parses what public registry servers send, so it holds no token that can write. The write token
+  # used to sit in .git/config for the whole crawl (actions/checkout persists it), where code
+  # execution through a parser bug could push to any unprotected ref or move a tag. It also skips
+  # the shared pnpm cache, which it would otherwise write for jobs that run on develop.
   crawl:
     # Pinned rather than latest: the ubuntu-latest label began moving to Ubuntu 26 on 19 October
     # 2026, and a runner that changes underneath you is a variable nobody chose. Raise this
     # deliberately, with the rest of the matrix green.
     runs-on: ubuntu-24.04
     timeout-minutes: 60
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
       - uses: pnpm/action-setup@41ff72655975bd51cab0327fa583b6e92b6d3061 # v4.2.0
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 22
-          cache: pnpm
       - run: pnpm install --frozen-lockfile
-
       # The state branch holds corpus.lock and history.json. It is created on the first run.
       - name: Restore crawl state
         run: |
@@ -68,6 +75,47 @@ jobs:
           CRAWL_LIMIT: ${{ inputs.limit }}
         run: pnpm crawl --state "$GITHUB_WORKSPACE/crawl-state" --timeout 20000 --concurrency 8 ${CRAWL_LIMIT:+--limit "$CRAWL_LIMIT"}
 
+      # The new state, handed to the commit job: the only thing that crosses over. Hidden files
+      # (the worktree's .git) are left out by default.
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: crawl-state
+          path: crawl-state/
+          if-no-files-found: error
+          retention-days: 7
+      # The readable report, attached to the run so it can be read without checking out a branch.
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: drift-report
+          path: |
+            crawl-state/drift-report.md
+            crawl-state/drift-report.json
+
+  # Commits the state the crawl job produced. Holds the write token and runs no code from this
+  # repository or its dependencies: git, on files.
+  commit:
+    needs: crawl
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      # The same state branch, so the commit below is on top of it.
+      - name: Restore crawl state
+        run: |
+          if git ls-remote --exit-code --heads origin crawl-state >/dev/null 2>&1; then
+            git fetch --depth 1 origin crawl-state
+            git worktree add crawl-state origin/crawl-state
+          else
+            git worktree add --detach crawl-state
+            git -C crawl-state checkout --orphan crawl-state
+            git -C crawl-state rm -rf . >/dev/null 2>&1 || true
+          fi
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: crawl-state
+          path: crawl-state
       - name: Commit the new reading
         working-directory: crawl-state
         run: |
@@ -82,11 +130,3 @@ jobs:
           fi
           git commit -m "crawl: $(date -u +%Y-%m-%d)"
           git push origin HEAD:crawl-state
-
-      # The readable report, attached to the run so it can be read without checking out a branch.
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: drift-report
-          path: |
-            crawl-state/drift-report.md
-            crawl-state/drift-report.json

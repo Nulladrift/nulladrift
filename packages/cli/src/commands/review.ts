@@ -13,7 +13,7 @@ import type { Change } from "../diff/types";
 import { readLockfile, writeLockfile } from "../lock/io";
 import type { Lockfile } from "../lock/types";
 import { EXIT_CLEAN, EXIT_DRIFT, EXIT_INCOMPLETE, type ExitCode } from "../lib/exit";
-import { bold, dim, elideMiddle, green, red, truncate, yellow } from "../lib/ui";
+import { bold, dim, elideMiddle, green, red, truncate, yellow, visibleControls } from "../lib/ui";
 import type { CommonOptions } from "./options";
 
 
@@ -65,7 +65,8 @@ interface ReviewOptions extends CommonOptions {
 }
 
 function describe(change: Change): string {
-  const head = `  ${change.severity === "high" ? red("●") : change.severity === "medium" ? yellow("●") : dim("●")} ${change.member ? `${bold(change.member)}: ` : ""}${change.summary}  ${dim(change.kind)}`;
+  // Server text, so escaped: this is the screen a person accepts changes from.
+  const head = `  ${change.severity === "high" ? red("●") : change.severity === "medium" ? yellow("●") : dim("●")} ${change.member ? `${bold(visibleControls(change.member))}: ` : ""}${visibleControls(change.summary)}  ${dim(change.kind)}`;
   if (change.kind !== "tool.description.changed" && change.kind !== "server.instructions.changed") return head;
   const before = typeof change.before === "string" ? `\n      ${red(`- ${truncate(change.before, 220)}`)}` : "";
   const after = typeof change.after === "string" ? `\n      ${green(`+ ${truncate(change.after, 220)}`)}` : "";
@@ -86,6 +87,7 @@ export async function runReview(options: ReviewOptions): Promise<ExitCode> {
      */
     previous: committed,
     provenance: options.provenance,
+    userConfigs: options.userConfigs,
   });
 
   const changes = diffLockfiles(committed, result.lock);
@@ -118,7 +120,7 @@ export async function runReview(options: ReviewOptions): Promise<ExitCode> {
     for (const [serverName, serverChanges] of grouped) {
       const context = describeSurface(result.lock.subjects[serverName], committed.subjects[serverName]);
       process.stdout.write(
-        `\n${bold(serverName)}\n${serverChanges.map(describe).join("\n")}\n${context.length > 0 ? `${context.join("\n")}\n` : ""}`,
+        `\n${bold(visibleControls(serverName))}\n${serverChanges.map(describe).join("\n")}\n${context.length > 0 ? `${context.join("\n")}\n` : ""}`,
       );
 
       let take = options.acceptAll;

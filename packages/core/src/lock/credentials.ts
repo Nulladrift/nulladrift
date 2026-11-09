@@ -22,12 +22,43 @@
 export const REDACTED = "REDACTED";
 
 /**
- * Names that mean the value is a credential: as a flag (`--github-token`), or as an environment
- * assignment inside an argument (`GITHUB_PERSONAL_ACCESS_TOKEN=...`). Matched as the last word of
- * the name, so `--max-tokens`, `--tokenizer` and `--password-file` are left alone.
+ * Whether a name says its value is a credential: a flag (`--github-token`, `--key`), an
+ * environment assignment (`GITHUB_PAT=`, `DD_API_KEY_SECONDARY=`), a JSON key (`braveApiKey`), a
+ * query or connection-string parameter (`api_key=`, `Password=`).
+ *
+ * Read as words, camelCase split, so the credential word can sit anywhere in the name. It was a
+ * suffix match, which missed `--key`, `GITHUB_PAT`, `braveApiKey` and every name with a word after
+ * the credential one. A name whose last word says it holds something *about* a credential (where
+ * it is, what kind it is) is left alone: `--token-file`, `--key-id`, `--auth-type`, `--max-tokens`.
  */
-const CREDENTIAL_NAME =
-  /(?:^|[-_.])(?:api[-_]?key|apikey|access[-_]?key|secret(?:[-_]?key)?|client[-_]?secret|token|access[-_]?token|auth[-_]?token|refresh[-_]?token|bearer|password|passwd|pass|pwd|private[-_]?key|credentials?)$/i;
+const CREDENTIAL_WORDS = new Set([
+  "key", "apikey", "token", "secret", "password", "passwd", "pwd", "pass", "pat", "auth", "bearer",
+  "credential", "credentials", "privatekey", "accesskey", "clientsecret", "sig", "signature", "jwt", "cookie",
+]);
+const DESCRIBES_IT = new Set([
+  "file", "path", "dir", "directory", "url", "uri", "endpoint", "host", "type", "mode", "method", "header",
+  "name", "id", "env", "var", "length", "limit", "count", "max", "min", "size", "timeout", "ttl", "format",
+  "prefix", "location", "store", "provider", "region", "scope", "scopes", "version", "algorithm", "kind", "expiry",
+]);
+
+function nameWords(name: string): string[] {
+  return name
+    .replace(/^-+/, "")
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter(Boolean);
+}
+
+export function isCredentialName(name: string): boolean {
+  const words = nameWords(name);
+  const last = words[words.length - 1];
+  if (last === undefined || DESCRIBES_IT.has(last) || words[0] === "no") return false;
+  return words.some((word) => CREDENTIAL_WORDS.has(word));
+}
+
+/** Headers that carry a credential whatever their value looks like. */
+const CREDENTIAL_HEADERS = new Set(["authorization", "proxy-authorization", "cookie", "set-cookie"]);
 
 /**
  * Formats a credential has wherever it appears, because its issuer made it recognisable on
@@ -94,14 +125,14 @@ function redactFormats(value: string): string {
   return out;
 }
 
-/** In a URL inside an argument: the password, and the value of any query parameter named as a credential. */
+/** In a URL inside an argument: the password, credential parameters in the query or fragment, key path segments. */
 function redactUrl(value: string): string {
   if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(value)) return value;
   let url: URL;
   try {
     url = new URL(value);
   } catch {
-    return value;
+    return redactPairs(value);
   }
   let changed = false;
   if (url.password && !PLACEHOLDER.test(decoded(url.password))) {
@@ -109,12 +140,87 @@ function redactUrl(value: string): string {
     changed = true;
   }
   for (const [key, parameter] of [...url.searchParams]) {
-    if (CREDENTIAL_NAME.test(key) && isSecretValue(parameter)) {
+    if (isCredentialName(key) && isSecretValue(parameter)) {
       url.searchParams.set(key, REDACTED);
       changed = true;
     }
   }
+  const path = redactPath(url.pathname);
+  if (path !== url.pathname) {
+    url.pathname = path;
+    changed = true;
+  }
+  const hash = url.hash ? redactPairs(url.hash) : url.hash;
+  if (hash !== url.hash) {
+    url.hash = hash;
+    changed = true;
+  }
   return changed ? url.toString() : value;
+}
+
+/**
+ * `name=value` pairs inside a larger string whose name is a credential: a query string a URL
+ * parser would not take (`jdbc:postgresql://...&password=`), a fragment (`#access_token=`), a
+ * connection string (`Server=db;Password=...`).
+ */
+function redactPairs(text: string): string {
+  return text.replace(/(^|[?&;#\s,])([A-Za-z_][A-Za-z0-9_.-]*)=([^&;#\s,]*)/g, (whole, lead: string, name: string, value: string) =>
+    isCredentialName(name) && isSecretValue(value) ? `${lead}${name}=${REDACTED}` : whole,
+  );
+}
+
+/** A header written as `Name: value`, for a header that is a credential. */
+function redactHeader(text: string): string | undefined {
+  const header = /^([A-Za-z][A-Za-z0-9-]*)\s*:\s*(\S.*)$/s.exec(text);
+  if (!header) return undefined;
+  const [, name = "", value = ""] = header;
+  if (!(CREDENTIAL_HEADERS.has(name.toLowerCase()) || isCredentialName(name)) || PLACEHOLDER.test(value)) return undefined;
+  return `${name}: ${REDACTED}`;
+}
+
+/** JSON in an argument (`--config {"braveApiKey":"..."}`), its credential-named values replaced. */
+function redactJson(text: string): string | undefined {
+  if (!/^\s*[[{]/.test(text)) return undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return undefined;
+  }
+  let changed = false;
+  const walk = (node: unknown): unknown => {
+    if (Array.isArray(node)) return node.map(walk);
+    if (node !== null && typeof node === "object") {
+      const out: Record<string, unknown> = Object.create(null) as Record<string, unknown>;
+      for (const [key, child] of Object.entries(node)) {
+        if (typeof child === "string" && isCredentialName(key) && isSecretValue(child)) {
+          out[key] = REDACTED;
+          changed = true;
+        } else if (typeof child === "string") {
+          const next = redactText(child);
+          if (next !== child) changed = true;
+          out[key] = next;
+        } else {
+          out[key] = walk(child);
+        }
+      }
+      return out;
+    }
+    return node;
+  };
+  const result = walk(parsed);
+  return changed ? JSON.stringify(result) : undefined;
+}
+
+/** Everything that can hide a credential inside one string, in the order that keeps the rest readable. */
+function redactText(text: string): string {
+  if (PLACEHOLDER.test(text) && !/[?&;#]/.test(text)) return text;
+  if (looksRandom(text)) return REDACTED;
+  const json = redactJson(text);
+  if (json !== undefined) return json;
+  const header = redactHeader(text);
+  if (header !== undefined) return header;
+  return redactFormats(redactPairs(redactUrl(text)));
 }
 
 /**
@@ -135,32 +241,44 @@ export function redactArgs(args: readonly string[]): string[] {
     const assignment = /^(-{0,2}[A-Za-z][A-Za-z0-9_.-]*)=(.*)$/s.exec(argument);
     if (assignment) {
       const [, name = "", value = ""] = assignment;
-      if (CREDENTIAL_NAME.test(name.replace(/^-+/, "")) && isSecretValue(value)) {
+      if (isCredentialName(name) && isSecretValue(value)) {
         out[index] = `${name}=${REDACTED}`;
         continue;
       }
-      // Any other assignment: its value can still hold a URL with a password, or a token.
-      if (!PLACEHOLDER.test(value)) out[index] = `${name}=${looksRandom(value) ? REDACTED : redactFormats(redactUrl(value))}`;
+      // Any other assignment: its value can still hold a header, a URL with a password, JSON, a token.
+      if (!PLACEHOLDER.test(value) || /[?&;#]/.test(value)) out[index] = `${name}=${redactText(value)}`;
       continue;
     }
 
     // `--name value`: the flag names a credential, so the next argument is one.
     const flag = /^-{1,2}([A-Za-z][A-Za-z0-9_.-]*)$/.exec(argument);
     const next = out[index + 1];
-    if (flag && next !== undefined && !next.startsWith("-") && CREDENTIAL_NAME.test(flag[1] ?? "") && isSecretValue(next)) {
-      out[index + 1] = REDACTED;
-      index += 1;
-      continue;
+    if (flag && next !== undefined && !next.startsWith("-")) {
+      const name = flag[1] ?? "";
+      if (isCredentialName(name) && isSecretValue(next) && !looksLikeAnOperand(next)) {
+        out[index + 1] = REDACTED;
+        index += 1;
+        continue;
+      }
+      // `-u user:password`, `--user user:password`: curl's form, and every tool that copied it.
+      if (["u", "user", "basic-auth"].includes(name.toLowerCase()) && /^[^:\s]+:[^\s]+$/.test(next) && !PLACEHOLDER.test(next)) {
+        out[index + 1] = `${next.slice(0, next.indexOf(":"))}:${REDACTED}`;
+        index += 1;
+        continue;
+      }
     }
 
-    if (PLACEHOLDER.test(argument)) continue;
-    if (looksRandom(argument)) {
-      out[index] = REDACTED;
-      continue;
-    }
-    out[index] = redactFormats(redactUrl(argument));
+    out[index] = redactText(argument);
   }
   return out;
+}
+
+/**
+ * Whether the word after a flag is more likely the next operand than the flag's value: a script, a
+ * package, a path. A boolean credential flag (`--auth`) followed by `server.js` is not a key.
+ */
+function looksLikeAnOperand(value: string): boolean {
+  return value.startsWith("@") || value.includes("/") || /\.(m?[jt]s|cjs|py|json|ya?ml|toml|sh|exe)$/i.test(value);
 }
 
 /**
@@ -174,6 +292,9 @@ export function redactPath(pathname: string): string {
     .map((segment) => {
       if (segment === "" || PLACEHOLDER.test(decoded(segment))) return segment;
       if (looksRandom(segment)) return REDACTED;
+      // A UUID or a long hex string in a hosted server's address is its key far more often than
+      // not (Pipedream, Composio and the like put the account's key there).
+      if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(segment) || /^[0-9a-f]{32,}$/i.test(segment)) return REDACTED;
       return redactFormats(segment);
     })
     .join("/");
