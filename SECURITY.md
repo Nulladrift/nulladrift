@@ -22,7 +22,9 @@ together, and you are credited unless you ask otherwise.
   Treat a false clean as the highest-severity class in this project.
 - **Credential material reaching the lock.** `mcp.lock` is committed. Environment values,
   headers, query strings and OAuth tokens are supposed to be reduced to names before they are
-  written; a path that lands a value in the file is a vulnerability, not a formatting bug.
+  written, and a credential a config writes literally, in `args` or in a URL's path or userinfo,
+  is supposed to be replaced; a path that lands a value in the file is a vulnerability, not a
+  formatting bug. So is one that lands it in the reading `push` sends, which is the same data.
 - **Weak handling of stored tokens.** `nulladrift login` writes to the user's config directory
   owner-only. Anything that widens that, or leaks a token into output or logs, is in scope.
 - **The CI identity token.** `push` sends the job's OpenID Connect token so the control plane can

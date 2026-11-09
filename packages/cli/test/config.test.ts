@@ -1,6 +1,6 @@
 /** Reading the config formats that actually ship. One fixture per client. */
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
@@ -409,6 +409,96 @@ describe("a committed lockfile does not carry the credentials used to reach a se
   it("leaves a URL with no credentials alone apart from query and fragment", () => {
     expect(sanitizeUrl("https://mcp.example.com/mcp?token=abc#frag")).toBe("https://mcp.example.com/mcp");
     expect(sanitizeUrl("not-a-url-at-all")).toBe("not-a-url-at-all");
+  });
+
+  /*
+   * The placeholder is how a config is meant to keep a key out of git. Plenty do not use it: the
+   * server's own README says `--api-key YOUR_KEY`, and that is what gets pasted. Those values went
+   * into the lock as written, so the canaries below are literal, not in the environment.
+   */
+  it("leaves out a credential the config writes literally, wherever in args it sits", async () => {
+    const locked = await pin(
+      {
+        mcpServers: {
+          s: {
+            command: "docker",
+            args: [
+              "run", "-i", "--rm",
+              "-e", "GITHUB_PERSONAL_ACCESS_TOKEN=ghp_CANARYCANARYCANARYCANARYCANARYCANARY",
+              "ghcr.io/github/github-mcp-server",
+              "--api-key", "CANARY_FLAG_VALUE",
+              "--client-secret=CANARY_ASSIGNED",
+              "--db=postgresql://app:CANARY_PASSWORD@db.internal:5432/app",
+              "sk-ant-api03-CANARYcanaryCANARYcanary",
+            ],
+          },
+        },
+      },
+      {},
+    );
+    expect(JSON.stringify(locked)).not.toContain("CANARY");
+    expect(locked).toMatchObject({
+      args: [
+        "run", "-i", "--rm",
+        "-e", "GITHUB_PERSONAL_ACCESS_TOKEN=REDACTED",
+        "ghcr.io/github/github-mcp-server",
+        "--api-key", "REDACTED",
+        "--client-secret=REDACTED",
+        "--db=postgresql://app:REDACTED@db.internal:5432/app",
+        "REDACTED",
+      ],
+    });
+  });
+
+  it("does not mistake an ordinary argument, or a placeholder, for a credential", async () => {
+    const args = [
+      "-y", "@modelcontextprotocol/server-filesystem", "/srv/data",
+      "--max-tokens", "4096",
+      "--token=${API_TOKEN}",
+      "--password-file", "./secrets/db",
+      "--name", "AnthropicClaudeDesktopExtension2025",
+      "--id", "0f8fad5b-d9cb-469f-a165-70867728950e",
+    ];
+    // The placeholder has to resolve for the server to be read at all; what is locked is still the placeholder.
+    const locked = await pin({ mcpServers: { s: { command: "npx", args } } }, { API_TOKEN: "sk_live_CANARY" });
+    expect(locked).toMatchObject({ args });
+    expect(JSON.stringify(locked)).not.toContain("CANARY");
+  });
+
+  it("leaves out a key a hosted server's URL carries in its path", async () => {
+    const locked = await pin({ mcpServers: { s: { url: "https://mcp.example.com/api/mcp/s/Zq8xT3vNw7Kd2Lp9Rf4Hc6Jm1Sb5Ya0G/mcp" } } }, {});
+    expect(locked).toMatchObject({ url: "https://mcp.example.com/api/mcp/s/REDACTED/mcp" });
+  });
+});
+
+/*
+ * `cwd` was written after `${userHome}` expansion and after a relative path was anchored to the
+ * project, so the lock held an absolute path on the machine that ran `init`: a local username in
+ * a committed file, and a lock that differed on every machine. A CI checkout at another path
+ * then reported `server.transport.changed` for a server nobody had touched.
+ */
+describe("a locked cwd is the one the config writes", () => {
+  const lockedCwd = async (cwd: string) => {
+    const project = await mkdtemp(join(tmpdir(), "mcp-cwd-lock-"));
+    try {
+      await writeFile(join(project, ".mcp.json"), JSON.stringify({ mcpServers: { s: { command: "node", args: ["index.js"], cwd } } }), "utf8");
+      const found = await discoverServers(project);
+      return { spawned: found.servers[0]?.transport, locked: lockTransport(found.servers[0]!) };
+    } finally {
+      await rm(project, { recursive: true, force: true });
+    }
+  };
+
+  it("keeps a relative cwd relative in the lock, while still spawning from the project", async () => {
+    const { spawned, locked } = await lockedCwd(".");
+    expect(locked).toMatchObject({ cwd: "." });
+    expect(spawned).toMatchObject({ cwd: expect.stringContaining("mcp-cwd-lock-") });
+  });
+
+  it("keeps a placeholder a placeholder, rather than the home directory it expands to", async () => {
+    const { locked } = await lockedCwd("${userHome}/mcp");
+    expect(locked).toMatchObject({ cwd: "${userHome}/mcp" });
+    expect(JSON.stringify(locked)).not.toContain(homedir());
   });
 });
 

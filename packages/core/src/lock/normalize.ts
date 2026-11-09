@@ -1,4 +1,5 @@
 /** Turning what a server sent into the stable, reviewable form the lock stores. */
+import { redactPath } from "./credentials";
 import { alternatives, asObject, effectiveSchema, MAX_VISIT_DEPTH } from "./jsonschema";
 import type { JsonObject, JsonValue, LockedAnnotations, LockedBehavior } from "./types";
 
@@ -119,6 +120,8 @@ export function sanitizeUrl(raw: string): string {
      */
     url.username = "";
     url.password = "";
+    // A hosted server whose address embeds the key keeps it in the path, past both of the above.
+    url.pathname = redactPath(url.pathname);
     return url.toString();
   } catch {
     // Not a parseable URL. Keep it as configured so the mismatch is visible rather than silent.

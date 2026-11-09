@@ -132,6 +132,14 @@ describes the new code. The same npm version arriving with different bytes is
 `server.artifact.substituted`, which has no innocent explanation. `--no-provenance` skips the
 registry lookups for an air-gapped run.
 
+**What it leaves out: credentials, wherever a config puts them.** `env` and header values are
+recorded by name only, and a URL loses its query string and `user:password`. A credential
+written literally (`--api-key sk-...`, `-e GITHUB_TOKEN=ghp_...`, a connection string's password,
+a key in a hosted server's URL path) is replaced with `REDACTED`, and `init`, `check` and `push`
+say which server it was. Write it as `${VAR}` instead; the lock keeps the placeholder. If an
+earlier `mcp.lock` was committed with the key in it, rotate the key: taking it out of the file
+does not take it out of git history.
+
 Format and rationale: [docs/lockfile.md](docs/lockfile.md). JSON Schema:
 [schema/mcp.lock.schema.json](schema/mcp.lock.schema.json). Worked example:
 [examples/mcp.lock](examples/mcp.lock).

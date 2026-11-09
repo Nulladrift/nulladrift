@@ -10,6 +10,24 @@ telemetry). Renaming a change kind breaks every consumer that matched on it.
 
 ## [Unreleased]
 
+### Security
+
+- **A credential a config writes literally no longer reaches `mcp.lock` or the reading `push`
+  sends.** Environment and header values were only ever recorded by name, and a URL lost its
+  query string and userinfo, but `args` were written as the config wrote them, so `--api-key
+  sk-...`, `-e GITHUB_TOKEN=ghp_...` in a `docker run`, or a connection string's password went
+  into a file the README tells you to commit, and over the wire to the control plane. So did a
+  key in a hosted server's URL path. Each is now replaced with `REDACTED`, and `init`, `check` and
+  `push` say which server it was. A `${VAR}` placeholder is kept as written. Detection errs toward
+  leaving a value alone: a value is replaced only when its name, its issuer's format or its
+  randomness says it is a credential. **If an earlier `mcp.lock` was committed with a key in it,
+  rotate the key**; the next `init` or `check` shows that server's transport as changed, once.
+- **`cwd` is recorded as the config writes it.** It was written after `${userHome}` expansion and
+  after a relative path was anchored to the project, so the lock held an absolute path on the
+  machine that ran `init`: a local username in a committed file, and a lock that differed on
+  every machine. A CI checkout at another path reported `server.transport.changed` for a server
+  nobody had touched. A lock pinned with an expanded `cwd` shows that change once.
+
 ### Fixed
 
 - **The README, `SECURITY.md` and the docs describe 0.6.0.** They still said the lock pins only
