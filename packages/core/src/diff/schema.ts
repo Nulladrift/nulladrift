@@ -69,8 +69,9 @@ function collectFacts(schema: JsonValue): Map<string, Facts> {
       const requiredList = Array.isArray(object["required"])
         ? (object["required"] as JsonValue[]).filter((entry): entry is string => typeof entry === "string")
         : [];
+      const requiredSet = new Set(requiredList);
       for (const [name, child] of Object.entries(properties)) {
-        visit(child, path === "" ? name : `${path}.${name}`, requiredList.includes(name), depth + 1);
+        visit(child, path === "" ? name : `${path}.${name}`, requiredSet.has(name), depth + 1);
       }
     }
 
@@ -87,8 +88,15 @@ function collectFacts(schema: JsonValue): Map<string, Facts> {
   return facts;
 }
 
+/**
+ * Whether every member of `previous` is in `next`. A set, not `includes` in a loop: that was
+ * quadratic, and a server's own schema decides the length, so one enum of a few hundred thousand
+ * members held whatever compared it -- the CLI, or a control plane serving every tenant from one
+ * thread -- for minutes.
+ */
 function isSuperset(next: readonly string[], previous: readonly string[]): boolean {
-  return previous.every((entry) => next.includes(entry));
+  const members = new Set(next);
+  return previous.every((entry) => members.has(entry));
 }
 
 export function classifySchemaChange(before: JsonValue, after: JsonValue): SchemaVerdict {
