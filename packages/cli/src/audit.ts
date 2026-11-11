@@ -63,6 +63,11 @@ export interface CaptureResult {
   unaudited: Record<string, LockedUnaudited>;
   /** Names defined two ways; reported as unreachable, never acknowledged. */
   conflicted: string[];
+  /**
+   * Servers read, but not in full: the listing did not end, or would not hold still to be read.
+   * Pinned as far as they were read, and an unfinished audit unless `--allow-partial`.
+   */
+  partial: Array<{ server: string; reasons: string[] }>;
 }
 
 /**
@@ -193,6 +198,10 @@ export async function captureAll(options: CaptureOptions): Promise<CaptureResult
     displaced,
     unaudited,
     conflicted: discovery.conflicts.map((conflict) => conflict.name),
+    partial: Object.entries(subjects)
+      .filter(([, entry]) => entry.coverage !== undefined)
+      .map(([server, entry]) => ({ server, reasons: entry.coverage!.reasons }))
+      .sort((a, b) => a.server.localeCompare(b.server)),
   };
 }
 

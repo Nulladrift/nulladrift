@@ -4,7 +4,7 @@ import type { ConfiguredServer } from "../config/types";
 import type { JsonObject, LockedProtocol, LockedServerInfo } from "../lock/types";
 import { toJson } from "../lock/canonical";
 import { lockIcons } from "../lock/build";
-import { connect, DEFAULT_TIMEOUT_MS } from "./connect";
+import { connect, DEFAULT_TIMEOUT_MS, type Connection } from "./connect";
 import type { CapturedSurface } from "./types";
 import { UnreachableServerError } from "./types";
 
@@ -96,7 +96,7 @@ const MAX_LIST_PAGES = 64;
  * returns the page as sent; paged by hand, with the SDK's own limit and a stop on a repeated
  * cursor so a server cannot keep it listing forever.
  */
-async function listAllTools(client: Client, timeoutMs: number): Promise<Tool[]> {
+async function listAllTools(client: Client, timeoutMs: number): Promise<{ tools: Tool[]; partial?: string }> {
   const tools: Tool[] = [];
   const cursors = new Set<string>();
   let cursor: string | undefined;
@@ -108,11 +108,17 @@ async function listAllTools(client: Client, timeoutMs: number): Promise<Tool[]> 
     // One at a time: spreading a page of 150,000 tools into `push` overflowed the call stack.
     for (const tool of result.tools) tools.push(tool);
     cursor = result.nextCursor;
-    if (cursor === undefined) return tools;
-    if (cursors.has(cursor)) throw new Error("tools/list: the server repeated a page cursor, so the listing would never end");
+    if (cursor === undefined) return { tools };
+    /*
+     * A listing that does not end is a partial surface, not a missing one. These used to fail the
+     * server outright; now the pages that were read are pinned and the reading says it is
+     * incomplete, which `check` treats as an unfinished audit unless told otherwise. Pinning them
+     * silently as the whole would be the false clean this product exists to refuse.
+     */
+    if (cursors.has(cursor)) return { tools, partial: `tools/list repeated a page cursor after ${page + 1} page(s), so its listing never ends; the pages before the repeat were read` };
     cursors.add(cursor);
   }
-  throw new Error(`tools/list: more than ${MAX_LIST_PAGES} pages; the server's pagination did not end`);
+  return { tools, partial: `tools/list did not end within ${MAX_LIST_PAGES} pages; the first ${MAX_LIST_PAGES} were read` };
 }
 
 async function listOrEmpty<T>(label: string, serverName: string, fetchList: () => Promise<T[]>): Promise<T[]> {
@@ -190,7 +196,7 @@ export async function captureSurface(server: ConfiguredServer, timeoutMs = DEFAU
     }
     connection = opened;
     try {
-      return await readSurface(opened.client, server, timeoutMs);
+      return await readSurface(opened, server, timeoutMs);
     } catch (error) {
       // The guard stopped reading, and the request it was serving failed for that reason.
       const refused = opened.refused();
@@ -210,8 +216,34 @@ export async function captureSurface(server: ConfiguredServer, timeoutMs = DEFAU
   }
 }
 
-/** What the server declares, read over a connection already made. */
-async function readSurface(client: Client, server: ConfiguredServer, timeoutMs: number): Promise<CapturedSurface> {
+/** How many times the lists are read when the server says one changed while they were being read. */
+const LIST_PASSES = 2;
+
+/**
+ * What the server declares, read over a connection already made.
+ *
+ * A `list_changed` notification arriving mid-read means the lists just read may not be the ones
+ * the server now has, so they are read again. A server announcing a change once -- at start-up,
+ * say, after it loads its plugins -- is read cleanly the second time. One that says so on every
+ * pass is a surface that would not hold still to be read, and the reading says so.
+ */
+async function readSurface(connection: Connection, server: ConfiguredServer, timeoutMs: number): Promise<CapturedSurface> {
+  for (let pass = 1; ; pass += 1) {
+    connection.watchChanges();
+    const surface = await readLists(connection.client, server, timeoutMs);
+    const moved = connection.changed();
+    if (moved.length === 0) return surface;
+    if (pass >= LIST_PASSES) {
+      const reasons = [
+        ...(surface.coverage?.reasons ?? []),
+        `the server said its ${moved.join(" and ")} changed while being read, on ${LIST_PASSES} passes running, so no read is known to be current`,
+      ];
+      return { ...surface, coverage: { complete: false, reasons } };
+    }
+  }
+}
+
+async function readLists(client: Client, server: ConfiguredServer, timeoutMs: number): Promise<CapturedSurface> {
   const capabilities = client.getServerCapabilities();
 
   /*
@@ -220,8 +252,15 @@ async function readSurface(client: Client, server: ConfiguredServer, timeoutMs: 
    * per server and emits a warning per call -- which, across a few hundred servers, buries
    * everything else.
    */
+  let toolsPartial: string | undefined;
   const [tools, resources, resourceTemplates, prompts] = await Promise.all([
-    capabilities?.tools ? listOrEmpty("tools/list", server.name, async () => listAllTools(client, timeoutMs)) : [],
+    capabilities?.tools
+      ? listOrEmpty("tools/list", server.name, async () => {
+          const listed = await listAllTools(client, timeoutMs);
+          toolsPartial = listed.partial;
+          return listed.tools;
+        })
+      : [],
     // Each list call is bounded by the server's timeout too. With none, the SDK's default
     // applied per page (60s, up to 64 pages), so one slow server could hold a run for an hour.
     capabilities?.resources ? listOrEmpty("resources/list", server.name, async () => (await client.listResources(undefined, { ...FRESH, timeout: timeoutMs })).resources) : [],
@@ -241,5 +280,6 @@ async function readSurface(client: Client, server: ConfiguredServer, timeoutMs: 
     resources,
     resourceTemplates,
     prompts,
+    ...(toolsPartial ? { coverage: { complete: false as const, reasons: [toolsPartial] } } : {}),
   };
 }

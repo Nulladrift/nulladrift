@@ -306,6 +306,29 @@ A name defined differently in two config files is never audited and never agreed
 reads its own file (`.vscode/mcp.json`, `.cursor/mcp.json`), so auditing one definition vouched
 for the others; `check` fails until the names differ or the definitions match.
 
+## 11. A surface read in part
+
+`coverage` is present on a server only when its listing is known not to be the whole surface:
+
+```json
+"coverage": { "complete": false, "reasons": ["tools/list did not end within 64 pages; the first 64 were read"] }
+```
+
+It is set for two reasons, both things the protocol states rather than inferences: a listing that
+does not end (more than 64 pages, or a page cursor handed back twice), and a server that sends a
+`list_changed` notification while its lists are being read on two passes running. One such
+notification is not enough: the lists are read again, so a server that announces a change at
+start-up is read in full.
+
+A partial reading is neither drift nor clean. It is an unfinished audit, exit `2`, unless
+`--allow-partial` or `policy.allowPartial` is set, the same choice `--allow-unreachable` makes about
+a server that could not be read at all. Like `provenance`, `coverage` is outside the digest: it
+says how much of the surface was seen, not what the surface is.
+
+This is the answer decided on 6 November 2026 to clients learning a server's tools as they need
+them. If a protocol revision lets a server attest that a listing is exhaustive, or that it is not,
+that becomes a third reason.
+
 ## Version 2: the root stopped naming a protocol
 
 Version 1 keyed everything under `servers`. That made the format MCP's rather than the

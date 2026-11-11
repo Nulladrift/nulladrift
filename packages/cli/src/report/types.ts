@@ -39,6 +39,11 @@ export interface AuditReport {
    * statements, and the report should not let one pass for the other.
    */
   unverified?: string[];
+  /**
+   * Servers read, but not in full, and why. Fails the audit (exit 2) unless `--allow-partial`,
+   * since a clean comparison against part of a surface says nothing about the rest of it.
+   */
+  partial?: Array<{ server: string; reasons: string[] }>;
   serversChecked: number;
   lockPath: string;
   /**

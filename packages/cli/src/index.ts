@@ -32,6 +32,7 @@ ${bold("Options")}
   --config <path>        audit this config file too; repeatable
   --timeout <ms>         per-server timeout (default: ${DEFAULT_TIMEOUT_MS})
   --allow-unreachable    a server that cannot be reached warns instead of failing
+  --allow-partial        a server whose tool list could not be read in full warns instead of failing
   --no-provenance        do not look up what each stdio server runs (air-gapped runs)
   --user-configs         also pin servers from your own configs (~/.claude.json, Claude Desktop, ...)
   --json                 machine-readable output (check)
@@ -64,6 +65,7 @@ async function main(): Promise<ExitCode> {
       config: { type: "string", multiple: true },
       timeout: { type: "string" },
       "allow-unreachable": { type: "boolean", default: false },
+      "allow-partial": { type: "boolean", default: false },
       "no-provenance": { type: "boolean", default: false },
       "user-configs": { type: "boolean", default: false },
       json: { type: "boolean", default: false },
@@ -109,6 +111,7 @@ async function main(): Promise<ExitCode> {
     configFiles: values.config ?? [],
     timeoutMs,
     allowUnreachable: values["allow-unreachable"],
+    allowPartial: values["allow-partial"],
     format: values.sarif ? "sarif" : values.json ? "json" : "human",
     sarifSteering: values["sarif-steering"] === true,
     comment: values.comment,

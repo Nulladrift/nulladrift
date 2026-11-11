@@ -81,7 +81,8 @@ function row(change: Change): string {
 export function renderMarkdownReport(report: AuditReport, options: { url?: string } = {}): string | null {
   const violations = report.violations ?? [];
   // A build that fails on policy alone says why where the pull request is read, too.
-  if (report.changes.length === 0 && report.unreachable.length === 0 && violations.length === 0) return null;
+  const partial = report.partial ?? [];
+  if (report.changes.length === 0 && report.unreachable.length === 0 && violations.length === 0 && partial.length === 0) return null;
 
   const lines: string[] = [];
   const high = report.changes.filter((change) => change.severity === "high").length;
@@ -162,6 +163,19 @@ export function renderMarkdownReport(report: AuditReport, options: { url?: strin
       ...report.unreachable.map(
         (failure) => `- ${code(failure.server)} · ${AUDIT_FAILURE_LABEL[failure.kind]}: ${plain(failure.reason)}`,
       ),
+      "",
+      "</details>",
+      "",
+    );
+  }
+
+  if (partial.length > 0) {
+    lines.push(
+      `<details><summary>${partial.length} server${partial.length === 1 ? "" : "s"} could not be read in full</summary>`,
+      "",
+      "Compared as far as they were read. A clean comparison against part of a surface says nothing about the rest, so this fails the audit unless `--allow-partial` is set.",
+      "",
+      ...partial.map((entry) => `- ${code(entry.server)}: ${plain(entry.reasons.join("; "))}`),
       "",
       "</details>",
       "",
