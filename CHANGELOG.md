@@ -10,6 +10,80 @@ telemetry). Renaming a change kind breaks every consumer that matched on it.
 
 ## [Unreleased]
 
+### Security
+
+Fixes from a security review of the collector. The first five made `check` pass on a change it
+should have failed on, which `SECURITY.md` ranks as the worst class of bug here.
+
+- **A second copy of a tool hid a poisoned one.** Members were compared by name, keeping the last
+  of each, so a server that listed a rewritten `read_file` ahead of the approved one compared
+  clean. Every copy is now compared, a new copy is described by how it differs from the pinned
+  one, and the same holds for resources, templates and prompts. A server whose digest moves with
+  no other finding now reports a change rather than passing.
+- **A name defined differently in two config files was audited once.** VS Code reads
+  `.vscode/mcp.json` and Cursor `.cursor/mcp.json`, but the first definition of a name won and
+  the others were never looked at, so a pull request could add `.vscode/mcp.json` with a pinned
+  name pointing at anything. A name defined two ways now fails the audit; identical definitions
+  are still one server. `login` refuses such a name too, rather than sending a person's
+  credentials to whichever definition a repository put first.
+- **A PyPI pin covered a file the installer did not run.** It recorded the sdist, and uv installs
+  a wheel; a wheel added to the pinned release, or the sdist removed, changed what ran unnoticed.
+  Every file in the release is now pinned (`provenance.files`) and compared as a set.
+- **A file in a pull request could switch substitution checks off.** An `.npmrc` pointing a pinned
+  package's scope at another registry turned `server.artifact.substituted` into "could not
+  establish" and an exit 0. Where the lock had a pin, that is now `server.artifact.changed`.
+  `review` keeps a pin it could not re-establish when a registry was down, instead of dropping it
+  when an unrelated change was accepted.
+- **A tool parameter named `__proto__` never reached the lock.** The client library drops the key
+  while validating a reply, so the text under it could change and compare clean. A reply with
+  such a key is now refused, by name.
+- **A git commit in a launcher argument was redacted as a credential**, so swapping one commit for
+  another compared clean. Commit and gist ids on code hosts (GitHub, GitLab, Bitbucket, jsDelivr,
+  esm.sh, deno.land) are kept; credentials on those hosts are still redacted.
+- **`--allow-unreachable` hid a new server that refused the auditor.** It now passes only servers
+  the lock agrees to leave unaudited (the new `unaudited` list, written by
+  `init --allow-unreachable` or by accepting the server in `review`), reached the way they were
+  when agreed to. Anything else is `server.added`.
+- **An image was pinned by what the registry told this tool,** and run by whatever the daemon
+  pulled or had cached. The audit now runs the image by the pinned digest.
+- **A credential in a header could be printed, posted and pushed.** Node refuses a header value
+  with a line break in a message that quotes the whole value, and that message became the
+  reason in the report, the pull request comment and the reading. Header and environment values
+  are checked first and refused by name, failure reasons have the server's configured secrets
+  taken out, and `push` does the same for its own tokens.
+- **A hostile server could hang or crash the audit after answering.** A small `allOf`/`$ref`
+  schema took exponential time; two steering patterns and the auth-failure check were quadratic in
+  text the server writes; and there was no limit on how much a server could send, so a large
+  enough listing ran the process out of memory (exit 134). All are now linear, and a server that
+  sends more than 32 MB is stopped and reported.
+- **Server text reached the terminal unescaped in three places** (a failure reason in `init`, a
+  policy violation's evidence, what the control plane said back to `push`), and newlines, Unicode
+  tag characters and some variation selectors were let through everywhere. All are escaped, and
+  the steering scan flags tag-character text.
+- **The pull request comment let mentions through**, because GitHub decodes `&#64;` before it
+  looks for them, and autolinked `www.` hosts. Both are broken with a zero-width space. The comment
+  also replaced the first comment carrying its marker, whoever wrote it; it now replaces only its
+  own, and it lists policy violations, which a build failing on policy alone did not explain.
+- **A token file or folder with wide permissions was never tightened,** and a symlink at its path
+  was followed. Both are tightened on every write, the file is replaced rather than written
+  through, and a symlinked folder is refused.
+- **Smaller ones:** an empty `NULLADRIFT_BUILD_AUDIENCE` asked GitHub for a token with an empty
+  audience; `push --token` now says the token is visible to other processes; a crawl container
+  is killed after a fixed time even if the client that started it is gone, and the names for the
+  Docker host and cloud metadata service point back at the container; `tool.execution` and the
+  server's icons are now recorded; and `required` arrays inside `const`, `default` and `enum`
+  values are no longer sorted.
+
+### Changed
+
+- **Lockfile additions,** all optional, in the JSON Schema and the runtime parser:
+  `provenance.files`, `tools[].execution`, `serverInfo.icons` and the root `unaudited` list. A
+  server whose tools declare `execution`, or which declares icons, reports one change on the
+  first `check` after upgrading, because those fields were not recorded before, as does a schema
+  with a `required` array inside a `const`, `default` or `enum` value, which is no longer
+  reordered; accept it with `review`.
+- `logout` says which server's credentials it deleted, or that none were stored.
+
 ### Added
 
 - The README lists every environment variable the collector reads: the ones you set

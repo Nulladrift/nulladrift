@@ -22,6 +22,8 @@ export function renderJsonReport(report: AuditReport, exitCode: ExitCode): strin
         steering: (report.steering ?? []).reduce((sum, server) => sum + server.signals.length, 0),
         /** Unlike steering, these DO decide the exit code. */
         violations: (report.violations ?? []).length,
+        /** Answered, but what they run could not be established. Never part of the verdict. */
+        unverified: (report.unverified ?? []).length,
       },
       changes: report.changes.map((change) => ({
         kind: change.kind,
@@ -36,6 +38,7 @@ export function renderJsonReport(report: AuditReport, exitCode: ExitCode): strin
       /** Text that began addressing the model since the lock was approved. Reported, never gated. */
       steering: report.steering ?? [],
       violations: report.violations ?? [],
+      unverified: report.unverified ?? [],
     },
     null,
     2,

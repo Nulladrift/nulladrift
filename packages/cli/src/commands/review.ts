@@ -7,8 +7,7 @@
  */
 import { createInterface } from "node:readline/promises";
 import { steeringSignals, surfaceCapabilities, surfaceText } from "@nulladrift/core";
-import { captureAll } from "../audit";
-import { diffLockfiles } from "../diff";
+import { captureAll, compareWithLock } from "../audit";
 import type { Change } from "../diff/types";
 import { readLockfile, writeLockfile } from "../lock/io";
 import type { Lockfile } from "../lock/types";
@@ -90,7 +89,7 @@ export async function runReview(options: ReviewOptions): Promise<ExitCode> {
     userConfigs: options.userConfigs,
   });
 
-  const changes = diffLockfiles(committed, result.lock);
+  const changes = compareWithLock(committed, result);
   if (changes.length === 0) {
     process.stdout.write(`${green(`✓ nothing to review; ${options.lockPath} is up to date`)}\n`);
     return result.unreachable.length > 0 && !options.allowUnreachable ? EXIT_INCOMPLETE : EXIT_CLEAN;
@@ -134,9 +133,26 @@ export async function runReview(options: ReviewOptions): Promise<ExitCode> {
       }
 
       accepted += 1;
-      const fresh = result.lock.subjects[serverName];
+      let fresh = result.lock.subjects[serverName];
+      /*
+       * A pin this run could not re-establish -- a registry that did not answer -- is kept. Taking
+       * the fresh entry as it was deleted it: accepting an unrelated description change on a day
+       * the registry was down dropped the artifact pin, and the next run pinned whatever had been
+       * published since, with nothing to compare it against. A pin displaced by the configuration
+       * is a change of its own, reported and accepted as one, so that case keeps no pin.
+       */
+      const pin = committed.subjects[serverName]?.provenance;
+      const displaced = result.displaced.some((moved) => moved.server === serverName);
+      if (fresh && fresh.provenance === undefined && pin !== undefined && result.unverified.includes(serverName) && !displaced) {
+        fresh = { ...fresh, provenance: pin };
+      }
       if (fresh) next.subjects[serverName] = fresh;
       else delete next.subjects[serverName];
+      // Accepting a server that could not be audited agrees to leave it unaudited, as reached now.
+      const unaudited = { ...next.unaudited };
+      if (!fresh && result.unaudited[serverName] !== undefined) unaudited[serverName] = result.unaudited[serverName];
+      else delete unaudited[serverName];
+      next.unaudited = Object.keys(unaudited).length > 0 ? unaudited : undefined;
 
       // A rename leaves the old key behind; accepting the rename retires it.
       for (const change of serverChanges) {

@@ -56,6 +56,26 @@ describe("normalizeSchema", () => {
   it("recurses into nested schemas", () => {
     expect(normalizeSchema({ properties: { nested: { required: ["z", "a"] } } })).toEqual({ properties: { nested: { required: ["a", "z"] } } });
   });
+
+  /*
+   * Inside a value, `required` is data the model is shown, and its order is the server's. Sorting
+   * it there made a `const` of ["backup", "delete"] and one of ["delete", "backup"] compare as
+   * the same schema, so a server could reorder what it tells the model and `check` passed.
+   */
+  it.each(["const", "default", "examples", "example"])("leaves a `required` array inside `%s` as the server wrote it", (keyword) => {
+    const value = { required: ["delete", "backup"] };
+    expect(normalizeSchema({ type: "object", [keyword]: value })).toEqual({ type: "object", [keyword]: value });
+  });
+
+  it("leaves `required` inside an enum value alone", () => {
+    expect(normalizeSchema({ enum: [{ required: ["b", "a"] }] })).toEqual({ enum: [{ required: ["b", "a"] }] });
+  });
+
+  it("treats a property named `required` as a schema, not as the keyword", () => {
+    expect(normalizeSchema({ properties: { required: { type: "array", required: ["b", "a"] } } })).toEqual({
+      properties: { required: { type: "array", required: ["a", "b"] } },
+    });
+  });
 });
 
 describe("extractHeaderParams", () => {

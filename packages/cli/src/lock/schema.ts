@@ -66,6 +66,7 @@ const tool = z.object({
   behavior,
   headerParams: z.array(z.string()).optional(),
   icons: z.array(icon).optional(),
+  execution: jsonObject.optional(),
   meta: jsonObject.optional(),
   digest: digestString,
 });
@@ -129,6 +130,7 @@ const provenance = z.object({
   version: z.string().optional(),
   integrity: z.string().optional(),
   requested: z.string().optional(),
+  files: z.record(z.string(), z.string()).optional(),
 });
 
 const server = z.object({
@@ -152,6 +154,7 @@ const server = z.object({
       version: z.string().optional(),
       description: z.string().optional(),
       websiteUrl: z.string().optional(),
+      icons: z.array(icon).optional(),
     })
     .optional(),
   capabilities: jsonObject.optional(),
@@ -188,4 +191,6 @@ export const lockfileSchema = z.object({
    * switch over the result stops compiling until it handles it.
    */
   subjects: z.record(z.string(), z.discriminatedUnion("kind", [server])),
+  // Listed here or lost, like provenance: an acknowledgement stripped on read is one `check` ignores.
+  unaudited: z.record(z.string(), z.object({ transport: transport.optional() })).optional(),
 });

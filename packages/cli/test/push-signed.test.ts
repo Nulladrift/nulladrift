@@ -13,9 +13,9 @@ import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { runPush } from "../src/commands/push";
-import { EXIT_CLEAN } from "../src/lib/exit";
+import { EXIT_CLEAN, EXIT_INCOMPLETE } from "../src/lib/exit";
 
 const SERVER = fileURLToPath(new URL("./fixtures/servers/wire-server.mjs", import.meta.url));
 
@@ -97,6 +97,19 @@ const ACTIONS = () => ({
   NULLADRIFT_BUILD_AUDIENCE: undefined,
 });
 
+const pushOptions = (root: string) => ({
+  projectRoot: root,
+  lockPath: join(root, "mcp.lock"),
+  configFiles: [],
+  timeoutMs: 20_000,
+  allowUnreachable: false,
+  format: "human" as const,
+  apiUrl: origin,
+  token: "ndft_test",
+  project: "web",
+  provenance: false,
+});
+
 const push = (root: string) =>
   runPush({
     projectRoot: root,
@@ -136,5 +149,49 @@ describe("push on GitHub Actions", () => {
     const [request] = received;
     expect(request!.headers["nulladrift-build-token"]).toBe("from-gitlab");
     expect(request!.headers["nulladrift-reading-token"]).toBeUndefined();
+  });
+});
+
+/*
+ * Tokens that cannot be sent. Node refuses a header value with a line break in a message that
+ * quotes the whole header, token and all, and push printed that message to the job log.
+ */
+describe("a token with a line break in it", () => {
+  async function stderrOf(run: () => Promise<unknown>): Promise<{ result: unknown; text: string }> {
+    const written: string[] = [];
+    const spy = vi.spyOn(process.stderr, "write").mockImplementation((chunk: string | Uint8Array) => {
+      written.push(String(chunk));
+      return true;
+    });
+    try {
+      return { result: await run(), text: written.join("") };
+    } finally {
+      spy.mockRestore();
+    }
+  }
+
+  it("is refused by name, and the collector token is never printed", async () => {
+    const { result, text } = await stderrOf(() =>
+      inActions({ GITHUB_ACTIONS: undefined }, (root) => runPush({ ...pushOptions(root), token: "ndft_SECRET\nrest" })),
+    );
+    expect(result).toBe(EXIT_INCOMPLETE);
+    expect(text).toContain("--token");
+    expect(text).not.toContain("ndft_SECRET");
+    expect(received).toHaveLength(0);
+  });
+
+  it("leaves out an identity token it cannot send, and still pushes", async () => {
+    const { result, text } = await stderrOf(() =>
+      inActions({ GITHUB_ACTIONS: undefined, ACTIONS_ID_TOKEN_REQUEST_URL: undefined, ACTIONS_ID_TOKEN_REQUEST_TOKEN: undefined, NULLADRIFT_ID_TOKEN: "id-SECRET\nx" }, push),
+    );
+    expect(result).toBe(EXIT_CLEAN);
+    expect(text).toContain("NULLADRIFT_ID_TOKEN");
+    expect(text).not.toContain("id-SECRET");
+    expect(received[0]!.headers["nulladrift-build-token"]).toBeUndefined();
+  });
+
+  it("says that --token is visible to other processes", async () => {
+    const { text } = await stderrOf(() => inActions({ GITHUB_ACTIONS: undefined }, push));
+    expect(text).toContain("prefer NULLADRIFT_TOKEN");
   });
 });

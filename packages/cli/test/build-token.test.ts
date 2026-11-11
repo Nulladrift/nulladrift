@@ -42,6 +42,13 @@ describe("getting a build token", () => {
     expect(new URL(asked[0]!.url).searchParams.get("audience")).toBe("nulladrift-acme");
   });
 
+  // What `${{ vars.X }}` gives a workflow when the variable is unset. It asked for `audience=`.
+  it("treats an empty audience as unset, rather than asking for a token minted for nobody", async () => {
+    const { fetch, asked } = provider({ body: { value: "t" } });
+    await acquireBuildToken({ env: { ...ACTIONS, NULLADRIFT_BUILD_AUDIENCE: "" }, fetch });
+    expect(new URL(asked[0]!.url).searchParams.get("audience")).toBe("nulladrift");
+  });
+
   it("prefers a token somebody set on purpose, which is how GitLab's id_tokens arrive", async () => {
     const { fetch, asked } = provider({ body: { value: "from-github" } });
     expect(await acquireBuildToken({ env: { ...ACTIONS, NULLADRIFT_ID_TOKEN: "from-gitlab" }, fetch })).toEqual({ token: "from-gitlab", source: "environment" });

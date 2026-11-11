@@ -34,28 +34,48 @@ export function isEscalation(previous: LockedBehavior, next: LockedBehavior): bo
   );
 }
 
+/*
+ * Keywords whose value is data rather than a schema. A `required` array inside a `const` or a
+ * `default` is part of a value the model is shown, and its order is the server's to choose:
+ * sorting it there made `["backup", "delete"]` and `["delete", "backup"]` compare as the same.
+ */
+const DATA_KEYWORDS = new Set(["const", "default", "enum", "examples", "example"]);
+/** Keywords whose value maps names to schemas: the keys are names, never keywords. */
+const NAMED_SCHEMAS = new Set(["properties", "patternProperties", "$defs", "definitions", "dependentSchemas"]);
+
 /**
- * Sorts `required` arrays wherever they appear. Member order there is semantically
- * insignificant and is the most common source of diffs that mean nothing. Every other array
- * keeps server order, because order *is* significant in `prefixItems`, `allOf` and `icons`, and
- * we only reorder where we can show it is safe.
+ * Sorts the `required` keyword's array. Member order there is semantically insignificant and is
+ * the most common source of diffs that mean nothing. Every other array keeps server order,
+ * because order *is* significant in `prefixItems`, `allOf` and `icons`, and we only reorder where
+ * we can show it is safe.
  *
- * The rule is positional rather than schema-aware: a non-schema object with a string-array
- * member literally named `required` would also be sorted. That costs nothing we can observe and
- * avoids carrying a JSON Schema interpreter around.
+ * Only where `required` is a keyword: not inside a value (`const`, `default`, `enum`,
+ * `examples`), and not as the name of a property, which is a schema of its own.
  */
 export function normalizeSchema(value: JsonValue): JsonValue {
-  if (Array.isArray(value)) return value.map(normalizeSchema);
+  return normalizeNode(value, false);
+}
+
+function normalizeNode(value: JsonValue, namesOnly: boolean): JsonValue {
+  if (Array.isArray(value)) return value.map((member) => normalizeNode(member, false));
   if (value === null || typeof value !== "object") return value;
 
   // No prototype, so a member named `__proto__` is kept (see toJson in canonical.ts).
   const out = Object.create(null) as JsonObject;
   for (const [key, member] of Object.entries(value)) {
+    if (namesOnly) {
+      out[key] = normalizeNode(member, false);
+      continue;
+    }
     if (key === "required" && Array.isArray(member) && member.every((entry) => typeof entry === "string")) {
       out[key] = [...(member as string[])].sort();
       continue;
     }
-    out[key] = normalizeSchema(member);
+    if (DATA_KEYWORDS.has(key)) {
+      out[key] = member;
+      continue;
+    }
+    out[key] = normalizeNode(member, NAMED_SCHEMAS.has(key));
   }
   return out;
 }

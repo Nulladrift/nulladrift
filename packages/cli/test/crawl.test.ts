@@ -59,6 +59,13 @@ describe("isAuthFailure", () => {
     expect(isAuthFailure(new UnreachableServerError("s", "connect ECONNREFUSED"))).toBe(false);
     expect(isAuthFailure(new UnreachableServerError("s", "spawn ENOENT"))).toBe(false);
   });
+
+  // A server's error message is the server's to write; this one held the audit for two minutes.
+  it("reads a hostile megabyte of error text in well under a second", () => {
+    const started = performance.now();
+    expect(isAuthFailure(new UnreachableServerError("s", "invalid or missing ".repeat(65_000)))).toBe(false);
+    expect(performance.now() - started).toBeLessThan(1000);
+  });
 });
 
 describe("a crawl over time", () => {

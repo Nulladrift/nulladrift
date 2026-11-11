@@ -23,7 +23,7 @@ function byName<T extends { name: string }>(members: T[]): T[] {
   return [...members].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
 }
 
-function lockIcons(icons: Tool["icons"]): LockedIcon[] | undefined {
+export function lockIcons(icons: Tool["icons"]): LockedIcon[] | undefined {
   if (!icons || icons.length === 0) return undefined;
   return icons.map((icon) => ({
     src: icon.src,
@@ -87,6 +87,7 @@ function lockTool(tool: Tool, ignoredMeta: readonly string[]): LockedTool {
     behavior: resolveBehavior(annotations),
     headerParams: headerParams.length > 0 ? headerParams : undefined,
     icons: lockIcons(tool.icons),
+    execution: (tool as { execution?: unknown }).execution ? (toJson((tool as { execution?: unknown }).execution) as JsonObject) : undefined,
     meta: stripIgnoredMeta(toJson(tool._meta), ignoredMeta),
   });
 }
