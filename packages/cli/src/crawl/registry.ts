@@ -11,7 +11,7 @@
 import { z } from "zod";
 import type { ConfiguredServer, ConfiguredTransport } from "../config/types";
 import { USER_AGENT } from "../lib/version";
-import type { SandboxOptions } from "./sandbox";
+import type { SandboxFetch, SandboxOptions } from "./sandbox";
 import { sandboxedStdio } from "./sandbox";
 
 const REGISTRY_URL = "https://registry.modelcontextprotocol.io/v0/servers";
@@ -78,6 +78,8 @@ export interface CorpusStats {
 /** A registry entry may advertise several endpoints; the extras are tried only if the first fails. */
 export interface CrawlTarget extends ConfiguredServer {
   alternates?: ConfiguredTransport[];
+  /** A registry package: fetched into a volume before `transport` can start. See sandbox.ts. */
+  fetch?: SandboxFetch;
 }
 
 export interface Corpus {
@@ -176,7 +178,7 @@ export async function fetchCorpus(options: FetchCorpusOptions = {}): Promise<Cor
         if (seen.has(entry.server.name) || targets.length >= limit) continue;
         seen.add(entry.server.name);
         stats.stdioSandboxed += 1;
-        targets.push({ name: entry.server.name, source: { client: "manual", file: "registry.modelcontextprotocol.io" }, transport: sandboxed.transport });
+        targets.push({ name: entry.server.name, source: { client: "manual", file: "registry.modelcontextprotocol.io" }, transport: sandboxed.transport, fetch: sandboxed.fetch });
         continue;
       }
       stats.remote += 1;

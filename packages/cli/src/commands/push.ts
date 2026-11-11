@@ -304,6 +304,17 @@ export async function runPush(options: PushOptions): Promise<ExitCode> {
   lines.push("");
   process.stdout.write(lines.join("\n"));
 
+  /*
+   * A reading pushed from a surface only partly read is sent, so the control plane has what was
+   * seen, and is not called finished here: the same exit 2 `check` gives it, unless allowed.
+   */
+  if (result.partial.length > 0 && options.allowPartial !== true) {
+    process.stderr.write(
+      `${yellow("incomplete:")} ${result.partial.map((entry) => visibleControls(entry.server)).join(", ")} could not be read in full. Pass --allow-partial to accept that.\n`,
+    );
+    return EXIT_INCOMPLETE;
+  }
+
   // The server's answer, not ours.
   return verdict.exitCode === 0 ? EXIT_CLEAN : verdict.exitCode === 1 ? EXIT_DRIFT : EXIT_INCOMPLETE;
 }

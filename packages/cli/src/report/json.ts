@@ -24,6 +24,8 @@ export function renderJsonReport(report: AuditReport, exitCode: ExitCode): strin
         violations: (report.violations ?? []).length,
         /** Answered, but what they run could not be established. Never part of the verdict. */
         unverified: (report.unverified ?? []).length,
+        /** Read, but not in full. Part of the verdict (exit 2) unless --allow-partial. */
+        partial: (report.partial ?? []).length,
       },
       changes: report.changes.map((change) => ({
         kind: change.kind,
@@ -39,6 +41,7 @@ export function renderJsonReport(report: AuditReport, exitCode: ExitCode): strin
       steering: report.steering ?? [],
       violations: report.violations ?? [],
       unverified: report.unverified ?? [],
+      partial: report.partial ?? [],
     },
     null,
     2,

@@ -12,6 +12,26 @@ telemetry). Renaming a change kind breaks every consumer that matched on it.
 
 Nothing yet.
 
+## [0.9.0] - 2026-11-11
+
+### Added
+
+- **A reading says when it did not see the whole surface.** A tool listing that does not end (past
+  64 pages, or a repeated page cursor) used to fail the server; and one the server said changed
+  while it was being read was pinned as if it had held still. Both are now pinned as far as they
+  were read and marked `coverage: { complete: false, reasons }` in the lock. `check`, `init`,
+  `review` and `push` exit `2` on such a reading unless `--allow-partial` or `policy.allowPartial`
+  is set, and every report format lists it. A server that announces one change at start-up is
+  read again and is complete.
+
+### Security
+
+- **The crawl runs registry packages with no network.** A package is fetched in one container that
+  has the network and runs none of its code (`npm install --ignore-scripts` into a Docker volume),
+  and run in a second with `--network none` and that volume read-only. Before, the package ran
+  with the network so `npx` could fetch it, which let a hostile one reach the Docker host's gateway
+  and a cloud metadata service. Packages that need an install script now fail to start and are
+  counted as unreachable.
 ## [0.8.0] - 2026-11-11
 
 ### Security

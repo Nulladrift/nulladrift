@@ -43,6 +43,8 @@ const STEERING_RULE = "steering.passage.arrived";
  * here read as "the code behind it did not change", which nobody had checked.
  */
 const UNVERIFIED_RULE = "server.artifact.unverified";
+/** A server whose listing could not be read in full. A warning: it decides the exit code unless allowed. */
+const PARTIAL_RULE = "server.surface.partial";
 
 const RULE_HELP: Partial<Record<ChangeKind, string>> = {
   "tool.capability.gained":
@@ -89,6 +91,7 @@ export function renderSarifReport(report: AuditReport, options: { steering?: boo
   const violations = report.violations ?? [];
   const steering = options.steering ? (report.steering ?? []) : [];
   const unverified = report.unverified ?? [];
+  const partial = report.partial ?? [];
 
   /*
    * One shape for all three sources. Without it the three `map`s infer three different literal
@@ -125,6 +128,15 @@ export function renderSarifReport(report: AuditReport, options: { steering?: boo
           shortDescription: { text: "Text that began addressing the model" },
           fullDescription: { text: "A passage a model is shown started reading as an instruction since this lock was approved. A signal to read, not a verdict: legitimate servers trip the same shape. It does not affect the exit code." },
           defaultConfiguration: { level: "note" as const },
+        }]
+      : []),
+    ...(partial.length > 0
+      ? [{
+          id: PARTIAL_RULE,
+          name: "ServerSurfacePartial",
+          shortDescription: { text: "A server's surface could not be read in full" },
+          fullDescription: { text: "The listing did not end within the page limit, or the server said it changed while being read on every pass. Compared as far as it was read; the audit did not finish." },
+          defaultConfiguration: { level: "warning" as const },
         }]
       : []),
     ...(unverified.length > 0
@@ -188,6 +200,13 @@ export function renderSarifReport(report: AuditReport, options: { steering?: boo
               partialFingerprints: { "mcpAuditChange/v1": `${server}/${signal.field}/${signal.kind}` },
             })),
           ),
+          ...partial.map<SarifResult>((entry) => ({
+            ruleId: PARTIAL_RULE,
+            level: "warning",
+            message: { text: `${entry.server}: could not be read in full. ${entry.reasons.join("; ")}` },
+            locations: at(entry.server, entry.server),
+            partialFingerprints: { "mcpAuditChange/v1": `${entry.server}/partial` },
+          })),
           ...unverified.map<SarifResult>((server) => ({
             ruleId: UNVERIFIED_RULE,
             level: "note",

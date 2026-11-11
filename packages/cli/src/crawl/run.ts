@@ -10,6 +10,7 @@ import { LOCKFILE_VERSION } from "../lock/types";
 import { VERSION } from "../lib/version";
 import { captureSurface } from "../mcp/capture";
 import { isAuthFailure } from "../mcp/types";
+import { discardFetch, runFetch } from "./sandbox";
 import type { Corpus, CrawlTarget } from "./registry";
 import type { FailureStreak, History, Outcome, RunRecord, ServerObservation } from "./state";
 import { CORPUS_LOCK, emptyHistory, PRUNE_AFTER_ABSENT_RUNS, readHistory, writeHistory } from "./state";
@@ -104,6 +105,23 @@ interface Captured {
  * only hands the operator a second rejected request to log.
  */
 async function captureAny(target: CrawlTarget, timeoutMs: number): Promise<Captured> {
+  /*
+   * A registry package is fetched first, with the network and none of its code, then run with
+   * neither; see sandbox.ts. The volume it was fetched into goes either way.
+   */
+  if (target.fetch) {
+    const fetched = await runFetch(target.fetch, Math.max(timeoutMs, 120_000));
+    try {
+      if (!fetched.ok) return { target, failure: "unreachable" };
+      return await captureCandidates(target, timeoutMs);
+    } finally {
+      await discardFetch(target.fetch);
+    }
+  }
+  return captureCandidates(target, timeoutMs);
+}
+
+async function captureCandidates(target: CrawlTarget, timeoutMs: number): Promise<Captured> {
   const candidates = [target.transport, ...(target.alternates ?? [])];
 
   for (const transport of candidates) {

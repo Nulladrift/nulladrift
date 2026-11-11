@@ -20,7 +20,7 @@ export const DEFAULT_LOCK_FILENAME = "mcp.lock";
 /** Declared key order per structural node. Anything not listed here is sorted. */
 const KEY_ORDER = {
   root: ["lockfileVersion", "generatedBy", "policy", "subjects", "unaudited"],
-  policy: ["ignoreMetaPrefixes", "allowUnreachable", "deniedCapabilities"],
+  policy: ["ignoreMetaPrefixes", "allowUnreachable", "allowPartial", "deniedCapabilities"],
   server: ["kind", "source", "transport", "protocol", "serverInfo", "capabilities", "instructions", "tools", "resources", "resourceTemplates", "prompts", "digest"],
   source: ["client", "file", "scope"],
   transport: ["type", "command", "args", "envKeys", "cwd", "url", "headerKeys"],

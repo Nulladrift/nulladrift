@@ -32,6 +32,7 @@ export async function buildReport(options: CommonOptions): Promise<{ report: Aud
 
   const changes = compareWithLock(committed, result);
   const allowUnreachable = options.allowUnreachable || committed.policy?.allowUnreachable === true;
+  const allowPartial = options.allowPartial === true || committed.policy?.allowPartial === true;
 
   const report: AuditReport = {
     changes,
@@ -49,6 +50,7 @@ export async function buildReport(options: CommonOptions): Promise<{ report: Aud
     unreachable: result.unreachable,
     // Reported beside the verdict and never part of it; see `AuditReport.unverified`.
     unverified: result.unverified,
+    partial: result.partial,
     serversChecked: Object.keys(result.lock.subjects).length,
     lockPath: options.lockPath,
     projectRoot: options.projectRoot,
@@ -63,7 +65,11 @@ export async function buildReport(options: CommonOptions): Promise<{ report: Aud
        * able to make it pass: policy is the thing acceptance cannot overrule.
        */
       driftCount: changes.length + (report.violations?.length ?? 0),
-      incompleteCount: allowUnreachable ? 0 : result.unreachable.length,
+      /*
+       * A surface only partly read is neither drift nor clean: the audit did not finish, which is
+       * what an unreachable server already means, for the same reason.
+       */
+      incompleteCount: (allowUnreachable ? 0 : result.unreachable.length) + (allowPartial ? 0 : result.partial.length),
     }),
   };
 }

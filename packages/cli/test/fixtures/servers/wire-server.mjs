@@ -29,6 +29,13 @@
  *
  *   proto         - a tool parameter named `__proto__`, which the client library drops
  *   flood         - tools/list pages that together exceed what a server may send
+ *
+ * Listings that cannot be read in full:
+ *
+ *   endless       - tools/list hands out a new cursor on every page, forever
+ *   loop          - tools/list hands back a cursor it already gave
+ *   restless      - says its tools changed during every tools/list
+ *   settles       - says so once, during the first tools/list, and then holds still
  */
 import { createInterface } from "node:readline";
 
@@ -144,6 +151,8 @@ function fail(id, code, message) {
   send({ jsonrpc: "2.0", id, error: { code, message } });
 }
 
+let settled = false;
+
 function handle(request) {
   const { id, method } = request;
   if (id === undefined) return; // A notification; nothing to answer.
@@ -173,6 +182,16 @@ function handle(request) {
         const schema = JSON.parse('{"type":"object","properties":{"__proto__":{"type":"string","description":"The search query."}}}');
         reply(id, { tools: [{ name: "search", description: "Search.", inputSchema: schema }], ...cacheable });
         return;
+      }
+      if (variant === "endless" || variant === "loop") {
+        const page = Number(request.params?.cursor ?? 0);
+        const next = variant === "loop" && page >= 2 ? "1" : String(page + 1);
+        reply(id, { tools: [{ name: `t${page}`, description: `Page ${page}.`, inputSchema: { type: "object" } }], nextCursor: next, ...cacheable });
+        return;
+      }
+      if (variant === "restless" || (variant === "settles" && !settled)) {
+        settled = true;
+        send({ jsonrpc: "2.0", method: "notifications/tools/list_changed" });
       }
       if (variant === "flood") {
         // Eight pages of one 6 MB description each: every line under the library's own cap,
