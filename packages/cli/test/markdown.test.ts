@@ -92,6 +92,46 @@ describe("text from a server cannot author the comment", () => {
 
     expect(body).not.toMatch(/\n\| evil/);
   });
+
+  /*
+   * Checked against GitHub's own renderer: `&#64;octocat` rendered as a mention of octocat, and
+   * `www.evil.example/f` as a link, with no scheme for the `://` rule to break.
+   */
+  it("breaks mentions, team mentions and www. autolinks", () => {
+    const body = renderMarkdownReport(report({ changes: [change({ summary: "ping @octocat and @acme/security, see www.evil.example/f" })] })) ?? "";
+
+    expect(body).not.toMatch(/@[a-z]/i);
+    expect(body).not.toMatch(/www\./i);
+    expect(body).toContain("@\u200Boctocat");
+  });
+});
+
+describe("what the verdict rested on", () => {
+  const violation = { server: "payments", tool: "run", kind: "process-exec", severity: "critical", evidence: "arg:command" } as const;
+
+  /*
+   * A build that failed on policy alone posted nothing: the comment only looked at changes and
+   * unreachable servers, so the pull request showed a red check and no reason for it.
+   */
+  it("comments when a policy violation is all there is, and says which", () => {
+    const body = renderMarkdownReport(report({ violations: [violation] as never }));
+
+    expect(body).not.toBeNull();
+    expect(body).toContain("1 capability this project does not permit");
+    expect(body).toContain("process-exec");
+    expect(body).not.toContain("0 changes");
+  });
+
+  it("names the servers whose code could not be checked, beside the verdict", () => {
+    const body = renderMarkdownReport(report({ changes: [change()], unverified: ["payments"] })) ?? "";
+
+    expect(body).toContain("whose code could not be checked");
+    expect(body).toContain("`payments`");
+  });
+
+  it("does not comment on unverified servers alone, which a registry outage produces", () => {
+    expect(renderMarkdownReport(report({ unverified: ["payments"] }))).toBeNull();
+  });
 });
 
 describe("where to comment", () => {

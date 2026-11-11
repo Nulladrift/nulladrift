@@ -1,4 +1,6 @@
 /** Terminal output helpers. Colour is a courtesy, never a carrier of meaning. */
+import { INVISIBLE_CHARACTERS } from "@nulladrift/core";
+
 const enabled =
   process.stdout.isTTY === true && process.env["NO_COLOR"] === undefined && process.env["TERM"] !== "dumb";
 
@@ -28,20 +30,37 @@ export const blue = wrap(34);
  * right-to-left override has changed, and the reviewer is the one who should decide whether
  * that matters; deleting it quietly would hide a real difference in text that reaches a model.
  */
-export function visibleControls(text: string): string {
-  return text.replace(
-    // C0 and C1 controls and DEL, plus the bidirectional overrides and zero-width characters
-    // that change what a line appears to say without changing what it is.
-    // eslint-disable-next-line no-control-regex
-    /[\u0000-\u0008\u000B-\u001F\u007F-\u009F\u200B-\u200F\u202A-\u202E\u2066-\u2069\uFEFF]/g,
-    (character) => `\\u${character.charCodeAt(0).toString(16).padStart(4, "0")}`,
-  );
+export function visibleControls(text: string, options: { multiline?: boolean } = {}): string {
+  return text.replace(options.multiline ? CONTROLS_EXCEPT_LINES : CONTROLS, (character) => {
+    const code = character.codePointAt(0) ?? 0;
+    return code > 0xffff ? `\\u{${code.toString(16)}}` : `\\u${code.toString(16).padStart(4, "0")}`;
+  });
+}
+
+/*
+ * C0 and C1 controls and DEL, plus every character that changes what a line appears to say
+ * without changing what it is (see INVISIBLE_CHARACTERS). Newline and tab included: a server
+ * version of "1.0.1\n\n✓ 1 server(s) match mcp.lock" printed a fake verdict on a line of its own
+ * in the middle of a real report. Text that is meant to span lines is split by its caller and
+ * each line escaped with `multiline`.
+ */
+const CONTROLS = new RegExp(`[\\u0000-\\u001F\\u007F-\\u009F${INVISIBLE_CHARACTERS}]`, "gu");
+const CONTROLS_EXCEPT_LINES = new RegExp(`[\\u0000-\\u0008\\u000B-\\u001F\\u007F-\\u009F${INVISIBLE_CHARACTERS}]`, "gu");
+
+/** Server text that may span lines, each line escaped and indented to sit under the first. */
+export function visibleLines(text: string, indent: string): string {
+  return text
+    .split(/\r?\n/)
+    .map((line) => visibleControls(line))
+    .join(`\n${indent}`);
 }
 
 /** Keeps a long description readable in a terminal without hiding that it was truncated. */
 export function truncate(text: string, limit = 160): string {
-  const collapsed = visibleControls(text).replace(/\s+/g, " ").trim();
-  return collapsed.length <= limit ? collapsed : `${collapsed.slice(0, limit - 1)}…`;
+  const collapsed = visibleControls(text, { multiline: true }).replace(/\s+/g, " ").trim();
+  // By code point, so a character outside the BMP is never cut in half into a replacement mark.
+  const points = [...collapsed];
+  return points.length <= limit ? collapsed : `${points.slice(0, limit - 1).join("")}…`;
 }
 
 /**

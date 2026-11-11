@@ -18,13 +18,13 @@ export {
   sanitizeUrl,
   stripIgnoredMeta,
 } from "./lock/normalize";
-export { countRedacted, REDACTED, redactArgs, redactPath } from "./lock/credentials";
+export { countRedacted, isCredentialName, REDACTED, redactArgs, redactPath } from "./lock/credentials";
 export { diffLockfiles } from "./diff/index";
 export { classifySchemaChange } from "./diff/schema";
 export { CHANGE_KINDS, SEVERITY, SEVERITY_RANK, sortChanges, serversThatShippedNothing, type Change, type ChangeKind, type Severity } from "./diff/types";
 export { CAPABILITY_KINDS, CAPABILITY_SEVERITIES, surfaceCapabilities, toolCapabilities } from "./risk/capability";
 export type { Capability, CapabilityKind, CapabilitySeverity } from "./risk/capability";
-export { STEERING_KINDS, steeringSignals } from "./risk/steering";
+export { INVISIBLE_CHARACTERS, STEERING_KINDS, steeringSignals } from "./risk/steering";
 export type { SteeringKind, SteeringSignal } from "./risk/steering";
 export { capabilityViolations } from "./risk/policy";
 export type { CapabilityViolation } from "./risk/policy";

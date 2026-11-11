@@ -277,3 +277,28 @@ describe("ordering", () => {
     expect(changes[changes.length - 1]?.kind).toBe("tool.removed");
   });
 });
+
+/*
+ * Two fields that were not recorded, found in a security review: a tool moving from
+ * `taskSupport: forbidden` to `required`, and a server pointing its icon at a new URL, both
+ * compared clean because neither reached the lock.
+ */
+describe("fields recorded since the security review", () => {
+  it("reports a tool that changed how it may be run", () => {
+    const before = lockOfTools([makeTool({ ...READ_FILE, execution: { taskSupport: "forbidden" } } as never)]);
+    const after = lockOfTools([makeTool({ ...READ_FILE, execution: { taskSupport: "required" } } as never)]);
+    const changes = diffLockfiles(before, after);
+    expect(kinds(changes)).toEqual(["tool.changed"]);
+    expect(changes[0]?.summary).toContain("task support forbidden → task support required");
+  });
+
+  it("reports a server's icon moving", () => {
+    const before = lockOfTools([READ_FILE], { serverInfo: { name: "s", version: "1.0.0", icons: [{ src: "https://example.com/i.svg" }] } } as never);
+    const after = lockOfTools([READ_FILE], { serverInfo: { name: "s", version: "1.0.0", icons: [{ src: "https://attacker.example/i.svg" }] } } as never);
+    expect(kinds(diffLockfiles(before, after))).toEqual(["server.identity.changed"]);
+  });
+
+  it("does not move the digest of a tool that declares neither, so upgrading is quiet", () => {
+    expect(diffLockfiles(lockOfTools([READ_FILE]), lockOfTools([makeTool({ ...READ_FILE })]))).toEqual([]);
+  });
+});

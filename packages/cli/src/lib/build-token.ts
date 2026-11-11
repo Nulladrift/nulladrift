@@ -70,7 +70,12 @@ export async function acquireBuildToken(options: AcquireOptions = {}): Promise<B
   if (explicit) return { token: explicit, source: "environment" };
 
   if (env["GITHUB_ACTIONS"] !== "true") return undefined;
-  return fromGithubActions(env["NULLADRIFT_BUILD_AUDIENCE"] ?? DEFAULT_AUDIENCE, env, options);
+  /*
+   * `||`, as the reading audience reads it, not `??`. A workflow's `${{ vars.X }}` for an unset
+   * variable is the empty string, and that asked GitHub for a token with an empty audience, which
+   * the control plane was never going to accept for this and something else might.
+   */
+  return fromGithubActions(env["NULLADRIFT_BUILD_AUDIENCE"] || DEFAULT_AUDIENCE, env, options);
 }
 
 /**

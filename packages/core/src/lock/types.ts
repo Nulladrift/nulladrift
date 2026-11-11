@@ -29,6 +29,23 @@ export interface Lockfile {
    * so adding a kind is a new member of `LockedSubject` and not a new branch in every consumer.
    */
   subjects: Record<string, LockedSubject>;
+  /**
+   * Servers the project knowingly leaves unaudited, by how they are reached: a server that only
+   * runs on developers' machines, or needs a credential CI does not hold. Written by
+   * `init --allow-unreachable` and by accepting the server in `review`.
+   *
+   * Under `--allow-unreachable`, a configured server that could not be audited passes only if it
+   * is listed here with the same transport. Without the list, a pull request that added a server
+   * which refused the auditor -- one that exits when the client says it is nulladrift -- passed
+   * with it in the configuration and nothing in the report. Outside the digest and the diff: it
+   * pins nothing, it only records what was agreed to go unpinned.
+   */
+  unaudited?: Record<string, LockedUnaudited>;
+}
+
+export interface LockedUnaudited {
+  /** Absent for a definition this tool cannot read at all (an unsupported transport). */
+  transport?: LockedTransport;
 }
 
 /**
@@ -129,6 +146,16 @@ export interface LockedProvenance {
    * actionable half: a server that floats will move on its own, and the fix is in the config.
    */
   requested?: string;
+  /**
+   * Every file published for this release, by name, with its sha256. PyPI only.
+   *
+   * `integrity` covers one file -- the sdist, or the first universal wheel -- and that is rarely
+   * the one an installer runs: uv and pip take the best wheel for the platform. PyPI also lets a
+   * maintainer add a file to a release after it is published. So a platform wheel added to a
+   * pinned version, or the pinned file removed so another is chosen, changed what ran and left
+   * `integrity` where it was. The release is pinned as the set of its files.
+   */
+  files?: Record<string, string>;
 }
 
 export interface LockedServerInfo {
@@ -137,6 +164,8 @@ export interface LockedServerInfo {
   version?: string;
   description?: string;
   websiteUrl?: string;
+  /** Recorded since a security review: a server could point its icon at any URL and compare clean. */
+  icons?: LockedIcon[];
 }
 
 export interface LockedAnnotations {
@@ -173,6 +202,11 @@ export interface LockedTool {
   /** `propertyPath -> HeaderName`, sorted. Derived from `x-mcp-header`. */
   headerParams?: string[];
   icons?: LockedIcon[];
+  /**
+   * How the tool may be run (`taskSupport`: forbidden, optional, required). A tool that started
+   * requiring to be run as a task behaves differently for every client, and was not recorded.
+   */
+  execution?: JsonObject;
   meta?: JsonObject;
   digest: string;
 }

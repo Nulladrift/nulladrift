@@ -19,14 +19,14 @@ export const DEFAULT_LOCK_FILENAME = "mcp.lock";
 
 /** Declared key order per structural node. Anything not listed here is sorted. */
 const KEY_ORDER = {
-  root: ["lockfileVersion", "generatedBy", "policy", "subjects"],
+  root: ["lockfileVersion", "generatedBy", "policy", "subjects", "unaudited"],
   policy: ["ignoreMetaPrefixes", "allowUnreachable", "deniedCapabilities"],
   server: ["kind", "source", "transport", "protocol", "serverInfo", "capabilities", "instructions", "tools", "resources", "resourceTemplates", "prompts", "digest"],
   source: ["client", "file", "scope"],
   transport: ["type", "command", "args", "envKeys", "cwd", "url", "headerKeys"],
   protocol: ["era", "version", "supportedVersions"],
-  serverInfo: ["name", "title", "version", "description", "websiteUrl"],
-  tool: ["name", "title", "description", "inputSchema", "outputSchema", "annotations", "behavior", "headerParams", "icons", "meta", "digest"],
+  serverInfo: ["name", "title", "version", "description", "websiteUrl", "icons"],
+  tool: ["name", "title", "description", "inputSchema", "outputSchema", "annotations", "behavior", "headerParams", "icons", "execution", "meta", "digest"],
   resource: ["uri", "name", "title", "description", "mimeType", "annotations", "icons", "meta", "digest"],
   resourceTemplate: ["uriTemplate", "name", "title", "description", "mimeType", "annotations", "icons", "meta", "digest"],
   prompt: ["name", "title", "description", "arguments", "icons", "meta", "digest"],
@@ -112,6 +112,14 @@ export function serializeLockfile(lock: Lockfile): string {
         .sort()
         .map((name) => [name, lock.subjects[name]]),
     ),
+    unaudited:
+      lock.unaudited && Object.keys(lock.unaudited).length > 0
+        ? Object.fromEntries(
+            Object.keys(lock.unaudited)
+              .sort()
+              .map((name) => [name, lock.unaudited![name]]),
+          )
+        : undefined,
   };
 
   // `subjects` is a map of arbitrary names, so its children are printed as nodes by hand.

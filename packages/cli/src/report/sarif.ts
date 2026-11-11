@@ -37,6 +37,12 @@ const DENIED_RULE = "policy.capability.denied";
  * the build -- so they are always here.
  */
 const STEERING_RULE = "steering.passage.arrived";
+/*
+ * A note, beside the verdict and not part of it: the server answered and its declarations were
+ * compared, but what it runs could not be established. A code-scanning view that showed nothing
+ * here read as "the code behind it did not change", which nobody had checked.
+ */
+const UNVERIFIED_RULE = "server.artifact.unverified";
 
 const RULE_HELP: Partial<Record<ChangeKind, string>> = {
   "tool.capability.gained":
@@ -82,6 +88,7 @@ export function renderSarifReport(report: AuditReport, options: { steering?: boo
   const used = [...new Set(report.changes.map((change) => change.kind))].sort();
   const violations = report.violations ?? [];
   const steering = options.steering ? (report.steering ?? []) : [];
+  const unverified = report.unverified ?? [];
 
   /*
    * One shape for all three sources. Without it the three `map`s infer three different literal
@@ -117,6 +124,15 @@ export function renderSarifReport(report: AuditReport, options: { steering?: boo
           name: "SteeringPassageArrived",
           shortDescription: { text: "Text that began addressing the model" },
           fullDescription: { text: "A passage a model is shown started reading as an instruction since this lock was approved. A signal to read, not a verdict: legitimate servers trip the same shape. It does not affect the exit code." },
+          defaultConfiguration: { level: "note" as const },
+        }]
+      : []),
+    ...(unverified.length > 0
+      ? [{
+          id: UNVERIFIED_RULE,
+          name: "ServerArtifactUnverified",
+          shortDescription: { text: "What a server runs could not be checked" },
+          fullDescription: { text: "The server answered and its declared surface was compared, but the artifact behind it could not be established on this run: a registry that did not answer, or a launcher configured to fetch from somewhere the pin does not describe. It does not affect the exit code." },
           defaultConfiguration: { level: "note" as const },
         }]
       : []),
@@ -172,6 +188,13 @@ export function renderSarifReport(report: AuditReport, options: { steering?: boo
               partialFingerprints: { "mcpAuditChange/v1": `${server}/${signal.field}/${signal.kind}` },
             })),
           ),
+          ...unverified.map<SarifResult>((server) => ({
+            ruleId: UNVERIFIED_RULE,
+            level: "note",
+            message: { text: `${server}: what this server runs could not be checked on this run` },
+            locations: at(server, server),
+            partialFingerprints: { "mcpAuditChange/v1": `${server}/unverified` },
+          })),
         ],
       },
     ],

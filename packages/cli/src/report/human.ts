@@ -1,7 +1,7 @@
 /** The default output: what moved, worst first, in language a reviewer can act on. */
 import { serversThatShippedNothing } from "../diff/types";
 import type { Change, Severity } from "../diff/types";
-import { bold, dim, elideMiddle, green, red, truncate, yellow, visibleControls } from "../lib/ui";
+import { bold, dim, elideMiddle, green, red, truncate, yellow, visibleControls, visibleLines } from "../lib/ui";
 import type { AuditReport } from "./types";
 
 const MARK: Record<Severity, (text: string) => string> = {
@@ -77,7 +77,8 @@ function renderViolations(report: AuditReport): string[] {
   for (const violation of found) {
     lines.push(
       `  ${red("denied")} ${bold(visibleControls(`${violation.server} \u203a ${violation.tool}`))}  ${dim(violation.kind)}`,
-      `      ${violation.severity} \u00b7 ${violation.evidence}`,
+      // The evidence is an argument name, which the server chose.
+      `      ${violation.severity} \u00b7 ${visibleControls(violation.evidence)}`,
     );
   }
   lines.push(
@@ -135,7 +136,7 @@ export function renderHumanReport(report: AuditReport): string {
     for (const failure of report.unreachable) {
       const label =
         failure.kind === "auth" ? yellow("needs creds") : failure.kind === "forbidden" ? yellow("not permitted") : red("unreachable");
-      lines.push(`  ${label} ${bold(visibleControls(failure.server))}`, `      ${visibleControls(failure.reason)}`, "");
+      lines.push(`  ${label} ${bold(visibleControls(failure.server))}`, `      ${visibleLines(failure.reason, "      ")}`, "");
     }
   }
 

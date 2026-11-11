@@ -39,6 +39,33 @@ describe("redactPath and sanitizeUrl", () => {
     expect(redactPath("/v1/repos/acme/web")).toBe("/v1/repos/acme/web");
   });
 
+  /*
+   * A launcher that runs code by commit names the commit in the path. Replacing it as a key made
+   * two different commits lock to the same line, so swapping one for the other compared clean.
+   */
+  it("keeps a commit or gist id in a launcher argument on a code host, where it is the version", () => {
+    const sha = "1f2e3d4c5b6a79881f2e3d4c5b6a79881f2e3d4c";
+    const args = [
+      "-y",
+      `https://codeload.github.com/acme/mcp-server/tar.gz/${sha}`,
+      `https://raw.githubusercontent.com/acme/mcp-server/${sha}/server.ts`,
+      `https://gist.githubusercontent.com/acme/0123456789abcdef0123456789abcdef/raw/${sha}/server.js`,
+    ];
+    expect(redactArgs(args)).toEqual(args);
+  });
+
+  it("still redacts credentials on a code host: issuer formats, query keys and passwords", () => {
+    expect(redactArgs(["https://raw.githubusercontent.com/acme/x/main/s.ts?token=Zq8xT3vNw7Kd2Lp9Rf4Hc6Jm1Sb5Ya0G"])).toEqual([
+      `https://raw.githubusercontent.com/acme/x/main/s.ts?token=${REDACTED}`,
+    ]);
+    expect(redactArgs(["https://github.com/acme/x/ghp_abcdefghijklmnopqrstuvwxyz0123456789"])).toEqual([`https://github.com/acme/x/${REDACTED}`]);
+    expect(redactArgs(["https://user:hunter2-secret@gitlab.com/acme/x.git"])).toEqual([`https://user:${REDACTED}@gitlab.com/acme/x.git`]);
+  });
+
+  it("still treats a long hex segment as a key anywhere else", () => {
+    expect(redactArgs(["https://mcp.example.com/u/1f2e3d4c5b6a79881f2e3d4c5b6a79881f2e3d4c/sse"])).toEqual([`https://mcp.example.com/u/${REDACTED}/sse`]);
+  });
+
   it("is applied by sanitizeUrl along with the query, fragment and userinfo it already drops", () => {
     expect(sanitizeUrl("https://u:p@mcp.example.com/k/ghp_abcdefghijklmnopqrstuvwxyz0123456789/mcp?x=1#f")).toBe(
       `https://mcp.example.com/k/${REDACTED}/mcp`,

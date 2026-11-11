@@ -170,7 +170,15 @@ and `--json` carries the per-server reason.
 
 Unreachable is a failure by default: a server you cannot check is not a server you can
 trust. `--allow-unreachable` downgrades it to a warning for the cases where you have
-decided that is acceptable.
+decided that is acceptable, and records that decision: `init --allow-unreachable`, or
+accepting the server in `review`, writes it to the lock's `unaudited` list. A server that
+could not be audited and is not on that list, or is reached differently than when it went on,
+is reported as new drift even with the flag, so a pull request cannot add a server that
+refuses the auditor and pass.
+
+A server name defined differently in two config files (`.mcp.json` and `.vscode/mcp.json`,
+say) fails the audit. Each client reads its own file, so checking one definition would vouch
+for the others. Rename one, or make them the same.
 
 `--json` and `--sarif` are available on `check`. SARIF means drift shows up in GitHub code
 scanning, or any AppSec tool that reads SARIF, with no integration to write.
@@ -370,7 +378,7 @@ where a flag does the same job the flag wins.
 | `NULLADRIFT_API_URL` | `push` | The control plane to push readings to. Same as `--api`. |
 | `NULLADRIFT_TOKEN` | `push` | The collector token issued in the dashboard. Same as `--token`. Keep it in a CI secret; `push` refuses an address with credentials in it. |
 | `NULLADRIFT_ID_TOKEN` | `push` | A CI identity token the pipeline minted for this job, which proves which build sent the reading. GitLab mints one into it with `id_tokens` (above); any CI that can mint an OpenID Connect token can set it. GitHub Actions needs nothing here: `push` asks for one itself when the job has `id-token: write`. |
-| `NULLADRIFT_BUILD_AUDIENCE` | `push` | The audience `push` asks GitHub to mint that token for. Defaults to `nulladrift`; change it only together with the control plane's setting of the same name. |
+| `NULLADRIFT_BUILD_AUDIENCE` | `push` | The audience `push` asks GitHub to mint that token for. Defaults to `nulladrift`; change it only together with the control plane's setting of the same name. When set, it also takes the place of the control plane's address in the reading token's audience, which the control plane accepts because it is configured with the same value. Empty counts as unset, so `${{ vars.X }}` for an unset variable falls back to the default. |
 | `GITHUB_TOKEN` | `check --comment` | Lets `check` post its findings on the pull request under review. In GitHub Actions pass `${{ secrets.GITHUB_TOKEN }}` to the step, with `pull-requests: write`. Without it, `--comment` posts nothing and says so. |
 | `NULLADRIFT_PYPI_URL` | `init`, `check` | The PyPI JSON API used to record what a Python server runs. Defaults to `https://pypi.org/pypi`; point it at a mirror or an internal proxy. |
 | `NULLADRIFT_DOCS_URL` | `check --sarif` | Where each finding's "learn more" link points. Unset in this build, so SARIF findings carry no link rather than one that 404s. |

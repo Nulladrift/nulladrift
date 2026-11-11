@@ -41,19 +41,26 @@ const MARK: Record<Severity, string> = { high: "🔴", medium: "🟠", low: "⚪
  * contains). `|` is escaped in both, which a table needs even inside a code span.
  */
 function plain(text: string): string {
-  return visibleControls(text)
+  return visibleControls(text, { multiline: true })
     .replace(/\r?\n/g, " ")
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
     .replace(/>/g, "&gt;")
     .replace(/([\\`*_{}[\]()#+!|~])/g, "\\$1")
-    .replace(/@/g, "&#64;")
+    /*
+     * A zero-width space after `@` and inside `www.`, not an entity: GitHub decodes `&#64;` before
+     * it looks for mentions, so `&#64;octocat` still notified octocat (checked against GitHub's own
+     * renderer), and `www.` autolinks with no scheme at all. The space is the one character that
+     * is not part of a name or a host, so neither survives it.
+     */
+    .replace(/@/g, "@\u200B")
+    .replace(/\bwww\./gi, (prefix) => `${prefix.slice(0, 3)}\u200B.`)
     .replace(/:\/\//g, "&#58;//")
     .trim();
 }
 
 function code(text: string): string {
-  const body = visibleControls(text).replace(/\r?\n/g, " ").replace(/\|/g, "\\|").trim();
+  const body = visibleControls(text, { multiline: true }).replace(/\r?\n/g, " ").replace(/\|/g, "\\|").trim();
   const longest = Math.max(0, ...(body.match(/`+/g) ?? []).map((run) => run.length));
   const fence = "`".repeat(longest + 1);
   const pad = body.startsWith("`") || body.endsWith("`") ? " " : "";
@@ -72,20 +79,26 @@ function row(change: Change): string {
  * is a bot people mute, and a muted bot is one nobody reads on the day it matters.
  */
 export function renderMarkdownReport(report: AuditReport, options: { url?: string } = {}): string | null {
-  if (report.changes.length === 0 && report.unreachable.length === 0) return null;
+  const violations = report.violations ?? [];
+  // A build that fails on policy alone says why where the pull request is read, too.
+  if (report.changes.length === 0 && report.unreachable.length === 0 && violations.length === 0) return null;
 
   const lines: string[] = [];
   const high = report.changes.filter((change) => change.severity === "high").length;
 
-  lines.push(
-    high > 0
-      ? `### ${report.changes.length} change${report.changes.length === 1 ? "" : "s"} to what your agents can reach, ${high} high`
-      : `### ${report.changes.length} change${report.changes.length === 1 ? "" : "s"} to what your agents can reach`,
-    "",
-    "A server changed what it declares. Same version, same package: the comparison is against the",
-    "surface you approved, not the version string.",
-    "",
-  );
+  if (report.changes.length === 0 && violations.length > 0) {
+    lines.push(`### ${violations.length} capabilit${violations.length === 1 ? "y" : "ies"} this project does not permit`, "");
+  } else {
+    lines.push(
+      high > 0
+        ? `### ${report.changes.length} change${report.changes.length === 1 ? "" : "s"} to what your agents can reach, ${high} high`
+        : `### ${report.changes.length} change${report.changes.length === 1 ? "" : "s"} to what your agents can reach`,
+      "",
+      "A server changed what it declares. Same version, same package: the comparison is against the",
+      "surface you approved, not the version string.",
+      "",
+    );
+  }
 
   if (report.changes.length > 0) {
     lines.push("| | Where | What | Detail |", "| --- | --- | --- | --- |", ...report.changes.map(row), "");
@@ -102,6 +115,17 @@ export function renderMarkdownReport(report: AuditReport, options: { url?: strin
         "",
       );
     }
+  }
+
+  if (violations.length > 0) {
+    lines.push(
+      `**${violations.length} capabilit${violations.length === 1 ? "y" : "ies"} this project does not permit.** Set by \`policy.deniedCapabilities\` in the lockfile; accepting the change does not clear it.`,
+      "",
+      "| Where | Capability | Evidence |",
+      "| --- | --- | --- |",
+      ...violations.map((violation) => `| ${code(`${violation.server}/${violation.tool}`)} | ${plain(violation.kind)} | ${code(violation.evidence)} |`),
+      "",
+    );
   }
 
   /*
@@ -138,6 +162,25 @@ export function renderMarkdownReport(report: AuditReport, options: { url?: strin
       ...report.unreachable.map(
         (failure) => `- ${code(failure.server)} · ${AUDIT_FAILURE_LABEL[failure.kind]}: ${plain(failure.reason)}`,
       ),
+      "",
+      "</details>",
+      "",
+    );
+  }
+
+  /*
+   * Said beside the verdict rather than left out of it: "the code behind it did not change" and
+   * "nobody could look" are different statements, and only the human report used to tell them
+   * apart.
+   */
+  const unverified = report.unverified ?? [];
+  if (unverified.length > 0) {
+    lines.push(
+      `<details><summary>${unverified.length} server${unverified.length === 1 ? "" : "s"} whose code could not be checked</summary>`,
+      "",
+      "These answered and their declarations were compared, but what they run could not be established on this run.",
+      "",
+      ...unverified.map((server) => `- ${code(server)}`),
       "",
       "</details>",
       "",
