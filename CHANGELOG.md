@@ -10,6 +10,10 @@ telemetry). Renaming a change kind breaks every consumer that matched on it.
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.8.0] - 2026-11-11
+
 ### Security
 
 Fixes from a security review of the collector. The first five made `check` pass on a change it
@@ -90,7 +94,6 @@ should have failed on, which `SECURITY.md` ranks as the worst class of bug here.
   (`NULLADRIFT_API_URL`, `NULLADRIFT_TOKEN`, `NULLADRIFT_ID_TOKEN`, `NULLADRIFT_BUILD_AUDIENCE`,
   `GITHUB_TOKEN` for `check --comment`, `NULLADRIFT_PYPI_URL` and the rest), what each does and
   its default, and the ones a CI provider sets that `push` and `--comment` read.
-
 ## [0.7.1] - 2026-11-09
 
 ### Security
