@@ -385,7 +385,7 @@ function compareProvenance(name: string, before: LockedMcpServer, after: LockedM
  * field the format gains later is covered here on the day it is added.
  */
 function orderless(entry: LockedMcpServer): string {
-  const { kind: _kind, source: _source, digest: _digest, provenance: _provenance, tools, resources, resourceTemplates, prompts, ...rest } = entry;
+  const { kind: _kind, source: _source, digest: _digest, provenance: _provenance, coverage: _coverage, tools, resources, resourceTemplates, prompts, ...rest } = entry;
   const digests = (members: Array<{ digest: string }> | undefined) => (members ?? []).map((member) => member.digest).sort();
   return stableKey({
     ...rest,

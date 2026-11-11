@@ -158,6 +158,12 @@ export async function runInit(options: InitOptions): Promise<ExitCode> {
     }
   }
 
+  // Pinned as far as it was read, and said so: the lock records it, and `check` will not call it clean.
+  for (const partial of result.partial) {
+    lines.push(`  ${yellow("◐")} ${bold(visibleControls(partial.server))}  ${dim("pinned as far as it could be read")}`);
+    for (const reason of partial.reasons) lines.push(`      ${visibleLines(reason, "      ")}`);
+  }
+
   for (const failure of result.unreachable) {
     // The reason quotes the server: its error message, its stderr. Escaped like any server text.
     lines.push(`  ${red("✗")} ${bold(visibleControls(failure.server))}  ${dim("not pinned")}`, `      ${visibleLines(failure.reason, "      ")}`);
@@ -187,5 +193,6 @@ export async function runInit(options: InitOptions): Promise<ExitCode> {
   await maybeOfferTelemetry();
 
   if (result.unreachable.length > 0 && !options.allowUnreachable) return EXIT_INCOMPLETE;
+  if (result.partial.length > 0 && !options.allowPartial) return EXIT_INCOMPLETE;
   return EXIT_CLEAN;
 }

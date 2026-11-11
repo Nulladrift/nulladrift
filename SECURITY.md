@@ -33,8 +33,9 @@ together, and you are credited unless you ask otherwise.
   to output, logs or the lock, or sends them anywhere but the control plane they were asked for,
   is in scope, and so is any way to make a reading token vouch for bytes other than the ones sent.
 - **A server affecting the machine that audits it,** beyond being audited. The crawl runs
-  registry packages in a container with no host mounts, no host environment, no privileges and
-  a read-only root; an escape from that is in scope, as is any way a hostile server's responses
+  registry packages in a container with no host mounts, no host environment, no privileges, a
+  read-only root and no network, after fetching them in another that runs none of their code; an
+  escape from that, or a way for a package's code to run while it has the network, is in scope, as is any way a hostile server's responses
   can reach a shell, a file path, or the audit process itself.
 - **Script injection in the shipped workflows,** or any other path by which a pull request can
   make CI run attacker-controlled code or exfiltrate a secret.

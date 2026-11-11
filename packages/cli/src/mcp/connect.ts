@@ -29,6 +29,12 @@ export interface Connection {
    * request then fails with, which only says the connection closed.
    */
   refused(): string | undefined;
+  /**
+   * Which lists the server said changed since the last `watchChanges()`: `tools`, `resources`,
+   * `prompts`. A listing read while one of these arrived may not be the list the server now has.
+   */
+  watchChanges(): void;
+  changed(): string[];
   close(): Promise<void>;
 }
 
@@ -296,6 +302,22 @@ export async function connect(server: ConfiguredServer, timeoutMs = DEFAULT_TIME
 
   refuseUnsendable(server);
 
+  /*
+   * Each list's `list_changed` notification, recorded rather than acted on. Registered before the
+   * connection opens, so one sent the moment it does is not missed; what counts is whether one
+   * arrives while the lists are being read, which capture asks after each pass.
+   */
+  const changes = new Set<string>();
+  for (const [list, method] of [
+    ["tools", "notifications/tools/list_changed"],
+    ["resources", "notifications/resources/list_changed"],
+    ["prompts", "notifications/prompts/list_changed"],
+  ] as const) {
+    client.setNotificationHandler(method, () => {
+      changes.add(list);
+    });
+  }
+
   let transport: Transport | undefined;
   const guard = new SurfaceGuard(() => {
     void transport?.close().catch(() => {});
@@ -324,6 +346,8 @@ export async function connect(server: ConfiguredServer, timeoutMs = DEFAULT_TIME
     client,
     stderr: () => stderrBuffer,
     refused: () => guard.refusal,
+    watchChanges: () => changes.clear(),
+    changed: () => [...changes].sort(),
     close: async () => {
       await client.close().catch(() => {});
     },

@@ -63,6 +63,11 @@ export interface LockPolicy {
   ignoreMetaPrefixes?: string[];
   allowUnreachable?: boolean;
   /**
+   * A server whose listing could not be read in full is a warning rather than a failure. The
+   * same choice `allowUnreachable` makes about a server that could not be read at all.
+   */
+  allowPartial?: boolean;
+  /**
    * Capabilities no server in this project may have. Checked against the surface itself rather
    * than against the diff, so accepting drift cannot make one allowed and a repository that never
    * changes is still covered.
@@ -156,6 +161,15 @@ export interface LockedProvenance {
    * `integrity` where it was. The release is pinned as the set of its files.
    */
   files?: Record<string, string>;
+}
+
+/**
+ * A surface that was not read in full: a listing that did not end, or that changed while it was
+ * being read. Every reason is a fact the protocol stated, never a guess from a tool's name.
+ */
+export interface LockedCoverage {
+  complete: false;
+  reasons: string[];
 }
 
 export interface LockedServerInfo {
@@ -265,6 +279,11 @@ export interface LockedMcpServer extends LockedSubjectBase {
   transport: LockedTransport;
   /** What the command resolved to. Stdio only, and only when it could be established. */
   provenance?: LockedProvenance;
+  /**
+   * Present only when the listing this entry was built from is known to be incomplete. Outside
+   * the digest, like provenance: it says how much of the surface was seen, not what the surface is.
+   */
+  coverage?: LockedCoverage;
   protocol: LockedProtocol;
   serverInfo?: LockedServerInfo;
   capabilities?: JsonObject;

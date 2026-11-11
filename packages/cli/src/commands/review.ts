@@ -92,7 +92,7 @@ export async function runReview(options: ReviewOptions): Promise<ExitCode> {
   const changes = compareWithLock(committed, result);
   if (changes.length === 0) {
     process.stdout.write(`${green(`✓ nothing to review; ${options.lockPath} is up to date`)}\n`);
-    return result.unreachable.length > 0 && !options.allowUnreachable ? EXIT_INCOMPLETE : EXIT_CLEAN;
+    return (result.unreachable.length > 0 && !options.allowUnreachable) || (result.partial.length > 0 && !options.allowPartial) ? EXIT_INCOMPLETE : EXIT_CLEAN;
   }
 
   const grouped = new Map<string, Change[]>();
@@ -170,5 +170,6 @@ export async function runReview(options: ReviewOptions): Promise<ExitCode> {
   if (declined > 0) process.stdout.write(`${yellow(`${declined} server(s) left unaccepted; \`check\` will still fail on them.`)}\n`);
 
   if (result.unreachable.length > 0 && !options.allowUnreachable) return EXIT_INCOMPLETE;
+  if (result.partial.length > 0 && !options.allowPartial) return EXIT_INCOMPLETE;
   return declined > 0 ? EXIT_DRIFT : EXIT_CLEAN;
 }

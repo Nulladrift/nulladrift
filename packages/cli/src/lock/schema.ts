@@ -142,6 +142,7 @@ const server = z.object({
   }),
   transport,
   provenance: provenance.optional(),
+  coverage: z.object({ complete: z.literal(false), reasons: z.array(z.string()) }).optional(),
   protocol: z.object({
     era: z.enum(["modern", "legacy"]),
     version: z.string(),
@@ -177,6 +178,7 @@ export const lockfileSchema = z.object({
     .object({
       ignoreMetaPrefixes: z.array(z.string()).optional(),
       allowUnreachable: z.boolean().optional(),
+      allowPartial: z.boolean().optional(),
       /*
        * Validated against the real list rather than accepted as free strings: a policy with
        * `process_exec` in it would otherwise parse, forbid nothing, and read in the diff of

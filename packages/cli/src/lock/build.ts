@@ -178,5 +178,6 @@ export function buildLockedServer(server: ConfiguredServer, surface: CapturedSur
     prompts: prompts.map((prompt) => prompt.digest),
   };
 
-  return { kind: "mcp-server", ...entry, digest: digest(toJson(covered)) };
+  // Outside the digest: how much was seen is not part of what was seen.
+  return { kind: "mcp-server", ...entry, ...(surface.coverage ? { coverage: surface.coverage } : {}), digest: digest(toJson(covered)) };
 }

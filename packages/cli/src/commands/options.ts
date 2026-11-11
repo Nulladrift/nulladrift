@@ -5,6 +5,11 @@ export interface CommonOptions {
   configFiles: string[];
   timeoutMs: number;
   allowUnreachable: boolean;
+  /**
+   * A server whose listing could not be read in full warns instead of failing. Off by default:
+   * a check that passes over a surface it only partly saw is asserting something it does not know.
+   */
+  allowPartial?: boolean;
   format: "human" | "json" | "sarif";
   /**
    * Whether steering passages appear in SARIF. Off by default and deliberately a flag: a SARIF

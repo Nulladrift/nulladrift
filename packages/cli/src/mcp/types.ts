@@ -1,6 +1,6 @@
 import { UnauthorizedError } from "@modelcontextprotocol/client";
 import type { Prompt, Resource, ResourceTemplateType as ResourceTemplate, Tool } from "@modelcontextprotocol/client";
-import type { JsonObject, LockedProtocol, LockedServerInfo } from "../lock/types";
+import type { JsonObject, LockedCoverage, LockedProtocol, LockedServerInfo } from "../lock/types";
 
 /** Everything one connection told us about a server. */
 export interface CapturedSurface {
@@ -12,6 +12,8 @@ export interface CapturedSurface {
   resources: Resource[];
   resourceTemplates: ResourceTemplate[];
   prompts: Prompt[];
+  /** Set only when the listing is known not to be the whole surface; see LockedCoverage. */
+  coverage?: LockedCoverage;
 }
 
 /** Why a server could not be captured. Separated from drift so CI can tell them apart. */

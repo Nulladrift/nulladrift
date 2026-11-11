@@ -150,9 +150,23 @@ export function renderHumanReport(report: AuditReport): string {
     );
   }
 
+  /*
+   * Read as far as the server would let it be, and compared that far. Said before any verdict, and
+   * never followed by a tick: a match against part of a surface is not a match.
+   */
+  const partial = report.partial ?? [];
+  if (partial.length > 0) {
+    lines.push(yellow(`Could not read ${partial.length} server(s) in full:`));
+    for (const entry of partial) {
+      lines.push(`  ${bold(visibleControls(entry.server))}`);
+      for (const reason of entry.reasons) lines.push(`      ${visibleLines(reason, "      ")}`);
+    }
+    lines.push(dim("  Compared as far as they were read. This fails the audit; --allow-partial makes it a warning."), "");
+  }
+
   lines.push(...renderSteering(report));
 
-  if (report.changes.length === 0 && report.unreachable.length === 0 && (report.violations ?? []).length === 0) {
+  if (report.changes.length === 0 && report.unreachable.length === 0 && (report.violations ?? []).length === 0 && partial.length === 0) {
     lines.push(green(`✓ ${report.serversChecked} server(s) match ${report.lockPath}`));
     return `${lines.join("\n")}\n`;
   }

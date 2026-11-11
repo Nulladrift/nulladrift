@@ -176,6 +176,12 @@ could not be audited and is not on that list, or is reached differently than whe
 is reported as new drift even with the flag, so a pull request cannot add a server that
 refuses the auditor and pass.
 
+A server whose tool list could not be read in full is a failure too, for the same reason: a
+listing that did not end within 64 pages, or a server that said its tools changed while they were
+being read, on every pass. What was read is pinned and marked partial in the lock, and `check`
+exits `2`. `--allow-partial`, or `policy.allowPartial` in the lock, makes it a warning. Only what
+the protocol states counts; a server is never called partial from the name of one of its tools.
+
 A server name defined differently in two config files (`.mcp.json` and `.vscode/mcp.json`,
 say) fails the audit. Each client reads its own file, so checking one definition would vouch
 for the others. Rename one, or make them the same.
@@ -364,9 +370,11 @@ captures every server's capability surface, and diffs it against the previous re
 `crawl-state` branch. It needs no consent from anyone, has no self-selection, and reports in
 changes per server-year, withholding the figure entirely until enough observation has
 accumulated to support it. `--include-stdio` additionally runs registry packages inside a
-container with no host mounts, no host environment, no privileges and a read-only root; network
-egress is not blocked, because `npx` has to fetch the package. Without that flag those entries
-are skipped, and the report states which population it actually measured.
+container with no host mounts, no host environment, no privileges, a read-only root and no
+network. Each package is fetched first, in a separate container that has the network and runs
+none of the package's code (install scripts off); a package that needs an install script to work
+is counted as unreachable. Without that flag those entries are skipped, and the report states
+which population it actually measured.
 
 ## Environment variables
 
