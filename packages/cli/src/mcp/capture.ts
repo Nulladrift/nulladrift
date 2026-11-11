@@ -3,6 +3,7 @@ import type { Client, Tool } from "@modelcontextprotocol/client";
 import type { ConfiguredServer } from "../config/types";
 import type { JsonObject, LockedProtocol, LockedServerInfo } from "../lock/types";
 import { toJson } from "../lock/canonical";
+import { lockIcons } from "../lock/build";
 import { connect, DEFAULT_TIMEOUT_MS } from "./connect";
 import type { CapturedSurface } from "./types";
 import { UnreachableServerError } from "./types";
@@ -104,7 +105,8 @@ async function listAllTools(client: Client, timeoutMs: number): Promise<Tool[]> 
       tools: Tool[];
       nextCursor?: string;
     };
-    tools.push(...result.tools);
+    // One at a time: spreading a page of 150,000 tools into `push` overflowed the call stack.
+    for (const tool of result.tools) tools.push(tool);
     cursor = result.nextCursor;
     if (cursor === undefined) return tools;
     if (cursors.has(cursor)) throw new Error("tools/list: the server repeated a page cursor, so the listing would never end");
@@ -146,6 +148,7 @@ function readServerInfo(client: Client): LockedServerInfo | undefined {
     version: info.version,
     description: info.description,
     websiteUrl: info.websiteUrl,
+    icons: lockIcons(info.icons),
   };
 }
 
@@ -188,6 +191,11 @@ export async function captureSurface(server: ConfiguredServer, timeoutMs = DEFAU
     connection = opened;
     try {
       return await readSurface(opened.client, server, timeoutMs);
+    } catch (error) {
+      // The guard stopped reading, and the request it was serving failed for that reason.
+      const refused = opened.refused();
+      if (refused !== undefined) throw new UnreachableServerError(server.name, refused, error);
+      throw error;
     } finally {
       await opened.close();
     }

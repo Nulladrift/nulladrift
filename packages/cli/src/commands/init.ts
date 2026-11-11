@@ -2,12 +2,12 @@
 import { steeringSignals, surfaceCapabilities, surfaceText } from "@nulladrift/core";
 import { describeSearch } from "../config/discover";
 import { lstat } from "node:fs/promises";
-import { captureAll } from "../audit";
+import { captureAll, unauditedToRecord } from "../audit";
 import { countRedacted } from "../lock/credentials";
 import { redactedLine } from "../report/redacted";
 import { writeLockfile } from "../lock/io";
 import { EXIT_CLEAN, EXIT_INCOMPLETE, type ExitCode } from "../lib/exit";
-import { bold, dim, elideMiddle, green, red, truncate, yellow, visibleControls } from "../lib/ui";
+import { bold, dim, elideMiddle, green, red, truncate, yellow, visibleControls, visibleLines } from "../lib/ui";
 import { maybeOfferTelemetry } from "./telemetry";
 import type { CommonOptions } from "./options";
 
@@ -85,7 +85,13 @@ export async function runInit(options: InitOptions): Promise<ExitCode> {
    * operator to commit it.
    */
   const pinnedSomething = names.length > 0;
-  if (pinnedSomething) await writeLockfile(options.lockPath, result.lock);
+  /*
+   * With --allow-unreachable, what could not be audited is written down as agreed to, with how it
+   * is reached, so `check` can tell the server somebody chose to leave out from one a pull request
+   * added. Without it, nothing is agreed to: the run fails and says which servers it missed.
+   */
+  const unaudited = options.allowUnreachable ? unauditedToRecord(result) : undefined;
+  if (pinnedSomething) await writeLockfile(options.lockPath, unaudited ? { ...result.lock, unaudited } : result.lock);
 
   const lines: string[] = pinnedSomething
     ? ["", bold(`Pinned ${names.length} server(s) to ${options.lockPath}:`), ""]
@@ -153,7 +159,8 @@ export async function runInit(options: InitOptions): Promise<ExitCode> {
   }
 
   for (const failure of result.unreachable) {
-    lines.push(`  ${red("✗")} ${bold(failure.server)}  ${dim("not pinned")}`, `      ${failure.reason}`);
+    // The reason quotes the server: its error message, its stderr. Escaped like any server text.
+    lines.push(`  ${red("✗")} ${bold(visibleControls(failure.server))}  ${dim("not pinned")}`, `      ${visibleLines(failure.reason, "      ")}`);
   }
 
   // Said, so nobody thinks their own servers were audited when they were left out on purpose.

@@ -71,14 +71,41 @@ export async function upsertComment(target: CommentTarget, body: string): Promis
   if (existing.status === 403) return "forbidden";
   if (!existing.ok) throw new Error(`could not read the comments (${existing.status})`);
 
-  const comments = (await existing.json()) as { id: number; body?: string }[];
-  const mine = comments.find((comment) => comment.body?.startsWith(MARKER));
+  /*
+   * Only a comment this token wrote. The first comment carrying the marker was taken, whoever
+   * wrote it, so anybody could comment the marker first on a public pull request: the edit was
+   * refused and the findings never appeared, or it was allowed and landed in a comment its
+   * author could rewrite afterwards.
+   */
+  const self = await identity(target);
+  const comments = (await existing.json()) as Array<{ id: number; body?: string; user?: { login?: string; type?: string } }>;
+  const mine = comments.find((comment) => comment.body?.startsWith(MARKER) && comment.user?.login === self);
 
-  const written = mine
-    ? await call(target, `/issues/comments/${mine.id}`, { method: "PATCH", body: JSON.stringify({ body: marked }) })
-    : await call(target, `/issues/${target.issue}/comments`, { method: "POST", body: JSON.stringify({ body: marked }) });
+  if (mine) {
+    const updated = await call(target, `/issues/comments/${mine.id}`, { method: "PATCH", body: JSON.stringify({ body: marked }) });
+    if (updated.ok) return "updated";
+    // Not ours to edit after all, or gone: a new comment rather than none.
+    if (updated.status !== 403 && updated.status !== 404) throw new Error(`could not update the comment (${updated.status})`);
+  }
 
-  if (written.status === 403) return "forbidden";
-  if (!written.ok) throw new Error(`could not post the comment (${written.status})`);
-  return mine ? "updated" : "created";
+  const created = await call(target, `/issues/${target.issue}/comments`, { method: "POST", body: JSON.stringify({ body: marked }) });
+  if (created.status === 403) return "forbidden";
+  if (!created.ok) throw new Error(`could not post the comment (${created.status})`);
+  return "created";
+}
+
+/**
+ * Who this token comments as. A personal token can ask; the workflow's own `GITHUB_TOKEN` cannot
+ * (`/user` is refused to an installation), and comments as `github-actions[bot]`.
+ */
+async function identity(target: CommentTarget): Promise<string> {
+  const response = await fetch(`${target.api}/user`, {
+    headers: { accept: "application/vnd.github+json", authorization: `Bearer ${target.token}`, "x-github-api-version": "2022-11-28" },
+    signal: AbortSignal.timeout(10_000),
+  }).catch(() => undefined);
+  if (response?.ok) {
+    const body = (await response.json().catch(() => ({}))) as { login?: unknown };
+    if (typeof body.login === "string" && body.login.length > 0) return body.login;
+  }
+  return "github-actions[bot]";
 }

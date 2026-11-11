@@ -147,11 +147,16 @@ const DOCKER_VALUE_SHORT = new Set(["a", "c", "e", "h", "l", "m", "p", "u", "v",
  * `explicit` is a flag whose value *is* the package (`npx -p`, `uvx --from`, `pipx --spec`): when
  * present, the positional is the binary to run from it, and the package is the flag's value.
  */
-function firstPositional(args: string[], valueFlags: Set<string>, explicitFlags: string[], shortValues?: Set<string>): { positional?: string; explicit?: string } {
+function firstPositional(
+  args: string[],
+  valueFlags: Set<string>,
+  explicitFlags: string[],
+  shortValues?: Set<string>,
+): { positional?: string; explicit?: string; index?: number } {
   let explicit: string | undefined;
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index]!;
-    if (arg === "--") return { positional: args[index + 1], explicit };
+    if (arg === "--") return { positional: args[index + 1], explicit, index: index + 1 };
 
     const equals = arg.indexOf("=");
     if (arg.startsWith("--") && equals > 0) {
@@ -169,7 +174,7 @@ function firstPositional(args: string[], valueFlags: Set<string>, explicitFlags:
       else if (shortValues && !arg.startsWith("--") && arg.length > 2 && shortValues.has(arg.at(-1)!)) index += 1;
       continue;
     }
-    return { positional: arg, explicit };
+    return { positional: arg, explicit, index };
   }
   return { explicit };
 }
@@ -367,13 +372,45 @@ async function resolvePypi(reference: ArtifactReference, options: ResolveOptions
     files.find((file) => file.packagetype === "sdist") ??
     files.filter((file) => /-none-any\.whl$/.test(file.filename as string)).sort((a, b) => (a.filename as string).localeCompare(b.filename as string))[0];
   const sha = chosen?.digests?.sha256;
+  const published = Object.fromEntries(
+    files
+      .filter((file) => typeof file.digests?.sha256 === "string" && /^[a-f0-9]{64}$/.test(file.digests.sha256 as string))
+      .map((file) => [file.filename as string, `sha256:${file.digests!.sha256 as string}`] as const)
+      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)),
+  );
   return {
     ecosystem: "pypi",
     name: reference.name,
     version: body.info.version,
     ...(typeof sha === "string" && /^[a-f0-9]{64}$/.test(sha) ? { integrity: `sha256:${sha}` } : {}),
     ...requestedOf(reference),
+    ...(Object.keys(published).length > 0 ? { files: published } : {}),
   };
+}
+
+/**
+ * The same invocation, made to run the image the pin names rather than whatever its tag gives.
+ *
+ * The digest is what this tool asked the registry for, and the daemon was never asked: a registry
+ * could answer the auditor's request with the approved manifest and the daemon's with another,
+ * and `docker run` also uses a local image under the tag without pulling at all. Naming the
+ * digest makes the image that is audited the image that was pinned -- content-addressed, so no
+ * registry and no cache can substitute it. The tag is kept beside it for whoever reads the
+ * command; the digest is what the runtime goes by.
+ *
+ * Only for the audit's own launch. What is written to the lock is the configuration as written.
+ */
+export function launchPinned(transport: ConfiguredStdio, provenance: LockedProvenance | undefined): ConfiguredStdio | undefined {
+  if (provenance?.ecosystem !== "oci" || provenance.integrity === undefined || !/^sha256:[a-f0-9]{64}$/.test(provenance.integrity)) return undefined;
+  const name = commandName(transport.command);
+  if ((name !== "docker" && name !== "podman") || transport.args[0] !== "run") return undefined;
+  const { positional, index } = firstPositional(transport.args.slice(1), DOCKER_VALUE_FLAGS, [], DOCKER_VALUE_SHORT);
+  if (positional === undefined || index === undefined) return undefined;
+  const image = splitImage(positional);
+  if (!image || image.digest) return undefined;
+  const args = [...transport.args];
+  args[index + 1] = `${positional}@${provenance.integrity}`;
+  return { ...transport, args };
 }
 
 /** Where an image's manifest lives. Docker Hub's short names expand the way `docker pull` does. */

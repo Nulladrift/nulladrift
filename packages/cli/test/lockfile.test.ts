@@ -78,6 +78,28 @@ describe("conformance to the published JSON Schema", () => {
     expect(parseLockfile(text, "mcp.lock").subjects["payments"]?.provenance).toEqual(pinned.subjects["payments"]?.provenance);
   });
 
+  // The fields added after a security review, through both schemas and back.
+  it("keeps a release's files, a tool's execution, a server's icons and what was left unaudited", () => {
+    const lock: Lockfile = structuredClone(RICH);
+    const entry = lock.subjects["payments"]!;
+    const files = { "acme_mcp-1.2.3.tar.gz": `sha256:${"2".repeat(64)}`, "acme_mcp-1.2.3-py3-none-any.whl": `sha256:${"1".repeat(64)}` };
+    lock.subjects["payments"] = {
+      ...entry,
+      provenance: { ecosystem: "pypi", name: "acme-mcp", version: "1.2.3", integrity: `sha256:${"2".repeat(64)}`, files },
+      serverInfo: { ...(entry.serverInfo ?? {}), icons: [{ src: "https://example.com/i.svg" }] },
+      tools: entry.tools?.map((tool, index) => (index === 0 ? { ...tool, execution: { taskSupport: "optional" } } : tool)),
+    };
+    lock.unaudited = { "laptop-only": { transport: { type: "stdio", command: "./bin/local-server" } } };
+
+    const text = serializeLockfile(lock);
+    expect(validate(JSON.parse(text)), errorsOf()).toBe(true);
+    const read = parseLockfile(text, "mcp.lock");
+    expect(read.subjects["payments"]?.provenance?.files).toEqual(files);
+    expect(read.subjects["payments"]?.serverInfo?.icons).toEqual([{ src: "https://example.com/i.svg" }]);
+    expect(read.subjects["payments"]?.tools?.[0]?.execution).toEqual({ taskSupport: "optional" });
+    expect(read.unaudited).toEqual(lock.unaudited);
+  });
+
   it("validates the committed example", async () => {
     const example = JSON.parse(await readFile(fileURLToPath(EXAMPLE_URL), "utf8")) as unknown;
     expect(validate(example), errorsOf()).toBe(true);

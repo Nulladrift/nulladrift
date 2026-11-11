@@ -125,6 +125,27 @@ function redactFormats(value: string): string {
   return out;
 }
 
+/*
+ * Hosts that serve code from a path naming what it is: a commit (`/acme/server/1f2e...4c/main.ts`),
+ * a gist, a tarball of a ref. The long hex segment there is the version being run, not a key, and
+ * replacing it made a launcher that swapped one commit for another compare clean. Credentials on
+ * these hosts travel in the query or the userinfo, which are still redacted, as is any segment in
+ * an issuer's credential format.
+ */
+const CODE_HOSTS = new Set([
+  "github.com",
+  "raw.githubusercontent.com",
+  "codeload.github.com",
+  "gist.github.com",
+  "gist.githubusercontent.com",
+  "api.github.com",
+  "gitlab.com",
+  "bitbucket.org",
+  "cdn.jsdelivr.net",
+  "esm.sh",
+  "deno.land",
+]);
+
 /** In a URL inside an argument: the password, credential parameters in the query or fragment, key path segments. */
 function redactUrl(value: string): string {
   if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(value)) return value;
@@ -145,7 +166,7 @@ function redactUrl(value: string): string {
       changed = true;
     }
   }
-  const path = redactPath(url.pathname);
+  const path = redactPath(url.pathname, { contentAddressed: CODE_HOSTS.has(url.hostname.toLowerCase()) });
   if (path !== url.pathname) {
     url.pathname = path;
     changed = true;
@@ -286,15 +307,20 @@ function looksLikeAnOperand(value: string): boolean {
  * embeds the key (`https://host/api/<token>/mcp`). The rest of the path stays, so a server that
  * moves to a different path or host is still drift.
  */
-export function redactPath(pathname: string): string {
+export function redactPath(pathname: string, options: { contentAddressed?: boolean } = {}): string {
   return pathname
     .split("/")
     .map((segment) => {
       if (segment === "" || PLACEHOLDER.test(decoded(segment))) return segment;
       if (looksRandom(segment)) return REDACTED;
       // A UUID or a long hex string in a hosted server's address is its key far more often than
-      // not (Pipedream, Composio and the like put the account's key there).
-      if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(segment) || /^[0-9a-f]{32,}$/i.test(segment)) return REDACTED;
+      // not (Pipedream, Composio and the like put the account's key there). On a code host it is
+      // a commit or a gist, and it is the thing being pinned.
+      if (
+        !options.contentAddressed &&
+        (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(segment) || /^[0-9a-f]{32,}$/i.test(segment))
+      )
+        return REDACTED;
       return redactFormats(segment);
     })
     .join("/");

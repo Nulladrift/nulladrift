@@ -11,10 +11,20 @@
  * host environment (nothing is forwarded; the container gets four variables it needs), and
  * resources (pid, memory and CPU caps).
  *
+ * And time: the package runs under `timeout -s KILL`, inside the container, with an init process
+ * as PID 1. Ending the audit closed stdin and killed the `docker` client, and neither stops a
+ * container: a package that ignored both kept running, with network and a CPU, after the audit
+ * and after the whole crawl. Now the container ends itself, however the client went away.
+ *
  * What it does **not** take away: network egress. `npx` has to reach the registry to fetch the
- * package, so a hostile package can also reach the network. Closing that needs a two-phase
- * fetch-then-run with an offline second phase, which is worth doing and is not done here. Run
- * the crawl somewhere you would be willing to run untrusted code.
+ * package, so a hostile package can also reach the network -- including the Docker host's
+ * gateway and, on a cloud runner, the metadata service at its link-local address, which hands
+ * out the runner's credentials. The names Docker and cloud providers give those
+ * (`host.docker.internal`, `metadata.google.internal`) are pointed at the container's own
+ * loopback; their addresses are not, and cannot be without a network of its own. Closing that
+ * needs a two-phase fetch-then-run with an offline second phase, which is worth doing and is not
+ * done here. Run the crawl somewhere you would be willing to run untrusted code, without
+ * credentials on the metadata service.
  */
 import type { ConfiguredTransport } from "../config/types";
 
@@ -25,6 +35,8 @@ export interface SandboxOptions {
   memory?: string;
   cpus?: string;
   pidsLimit?: number;
+  /** How long the container may live at all, whatever happens to the client that started it. */
+  lifetimeSeconds?: number;
 }
 
 export interface RegistryPackage {
@@ -85,9 +97,22 @@ export function sandboxedStdio(pkg: RegistryPackage, options: SandboxOptions = {
     "npm_config_update_notifier=false",
     "--env",
     "NO_COLOR=1",
+    // Names that reach the host or the cloud's metadata service, sent back to the container itself.
+    "--add-host",
+    "host.docker.internal:127.0.0.1",
+    "--add-host",
+    "gateway.docker.internal:127.0.0.1",
+    "--add-host",
+    "metadata.google.internal:127.0.0.1",
+    // An init process as PID 1, and a hard limit on how long the package can run under it.
+    "--init",
     "--entrypoint",
-    "npx",
+    "timeout",
     options.image ?? DEFAULT_SANDBOX_IMAGE,
+    "-s",
+    "KILL",
+    String(options.lifetimeSeconds ?? 120),
+    "npx",
     "--yes",
     spec,
   ];

@@ -14,6 +14,7 @@ import type { ConfiguredStdio } from "../src/config/types";
 import { diffLockfiles } from "../src/diff";
 import {
   carriedForward,
+  launchPinned,
   imageLocation,
   isExact,
   referenceOf,
@@ -197,6 +198,11 @@ describe("resolving against a registry", () => {
       name: "mcp-server-git",
       version: "0.6.2",
       integrity: `sha256:${"2".repeat(64)}`,
+      // Every file in the release: an installer picks the wheel, not the sdist `integrity` names.
+      files: {
+        "mcp_server_git-0.6.2-py3-none-any.whl": `sha256:${"1".repeat(64)}`,
+        "mcp_server_git-0.6.2.tar.gz": `sha256:${"2".repeat(64)}`,
+      },
     });
   });
 
@@ -261,6 +267,32 @@ describe("resolving against a registry", () => {
   });
 });
 
+/*
+ * Found in a security review. The digest is what this tool asked the registry, and the daemon was
+ * never asked: a registry can answer the two differently, and `docker run` uses a cached image
+ * under the tag without pulling. Launching by digest makes the audited image the pinned one.
+ */
+describe("launching an image by the digest it was pinned at", () => {
+  const DIGEST = `sha256:${"a".repeat(64)}`;
+  const image: LockedProvenance = { ecosystem: "oci", name: "ghcr.io/acme/mcp", integrity: DIGEST, requested: "1.4" };
+
+  it("names the digest beside the tag, after the run flags", () => {
+    const launched = launchPinned(run("docker", "run", "-i", "--rm", "-e", "TOKEN", "ghcr.io/acme/mcp:1.4", "--stdio"), image);
+    expect(launched?.args).toEqual(["run", "-i", "--rm", "-e", "TOKEN", `ghcr.io/acme/mcp:1.4@${DIGEST}`, "--stdio"]);
+  });
+
+  it("does the same for podman, and after --", () => {
+    expect(launchPinned(run("podman", "run", "--rm", "--", "ghcr.io/acme/mcp"), image)?.args).toEqual(["run", "--rm", "--", `ghcr.io/acme/mcp@${DIGEST}`]);
+  });
+
+  it("leaves an invocation that already names a digest, or is not an image, alone", () => {
+    expect(launchPinned(run("docker", "run", `ghcr.io/acme/mcp@${DIGEST}`), image)).toBeUndefined();
+    expect(launchPinned(run("npx", "-y", "pkg"), image)).toBeUndefined();
+    expect(launchPinned(run("docker", "run", "ghcr.io/acme/mcp:1.4"), undefined)).toBeUndefined();
+    expect(launchPinned(run("docker", "run", "ghcr.io/acme/mcp:1.4"), { ...image, integrity: undefined })).toBeUndefined();
+  });
+});
+
 describe("keeping a pin this run could not re-establish", () => {
   const pinned: LockedProvenance = { ecosystem: "npm", name: "pkg", version: "1.2.3", integrity: "sha512-x", requested: "1.2.3" };
 
@@ -321,6 +353,52 @@ describe("comparing what ran", () => {
     // A lock from before this existed, and a run with the registry down: neither is a change.
     expect(diffLockfiles(locked(undefined), locked(npm()))).toEqual([]);
     expect(diffLockfiles(locked(npm()), locked(undefined))).toEqual([]);
+  });
+
+  /*
+   * Found in a security review. `integrity` names the sdist, and uv installs a wheel: a platform
+   * wheel added to the pinned release, or the sdist and universal wheel taken away so only a
+   * platform wheel was left, changed what ran and compared clean.
+   */
+  describe("a PyPI release whose files changed under the same version", () => {
+    const SDIST = `sha256:${"2".repeat(64)}`;
+    const pypi = (files: Record<string, string>, integrity: string | undefined = SDIST): LockedProvenance => ({
+      ecosystem: "pypi",
+      name: "acme-mcp",
+      version: "1.2.3",
+      ...(integrity ? { integrity } : {}),
+      files,
+    });
+    const pinnedFiles = { "acme_mcp-1.2.3.tar.gz": SDIST, "acme_mcp-1.2.3-py3-none-any.whl": `sha256:${"1".repeat(64)}` };
+
+    it("is reported when a wheel is added", () => {
+      const changes = diffLockfiles(
+        locked(pypi(pinnedFiles)),
+        locked(pypi({ ...pinnedFiles, "acme_mcp-1.2.3-py3-none-manylinux_2_17_x86_64.whl": `sha256:${"9".repeat(64)}` })),
+      );
+      expect(changes.map((change) => change.kind)).toEqual(["server.artifact.changed"]);
+      expect(changes[0]?.summary).toContain("added acme_mcp-1.2.3-py3-none-manylinux_2_17_x86_64.whl");
+    });
+
+    it("is reported when the pinned file is taken away and only a platform wheel is left", () => {
+      const changes = diffLockfiles(locked(pypi(pinnedFiles)), locked(pypi({ "acme_mcp-1.2.3-cp312-cp312-manylinux_2_17_x86_64.whl": `sha256:${"9".repeat(64)}` }, undefined)));
+      expect(changes.map((change) => change.kind)).toEqual(["server.artifact.changed"]);
+    });
+
+    it("is reported when the pinned file disappears from a lock that predates the file list", () => {
+      const before: LockedProvenance = { ecosystem: "pypi", name: "acme-mcp", version: "1.2.3", integrity: SDIST };
+      const after: LockedProvenance = { ecosystem: "pypi", name: "acme-mcp", version: "1.2.3" };
+      expect(diffLockfiles(locked(before), locked(after)).map((change) => change.kind)).toEqual(["server.artifact.changed"]);
+    });
+
+    it("says nothing when the files are the ones that were pinned", () => {
+      expect(diffLockfiles(locked(pypi(pinnedFiles)), locked(pypi({ ...pinnedFiles })))).toEqual([]);
+    });
+
+    it("says nothing on the first run after upgrading, when the lock has no file list yet", () => {
+      const before: LockedProvenance = { ecosystem: "pypi", name: "acme-mcp", version: "1.2.3", integrity: SDIST };
+      expect(diffLockfiles(locked(before), locked(pypi(pinnedFiles)))).toEqual([]);
+    });
   });
 
   it("does not call a PyPI release a substitution, since releases can gain files", () => {

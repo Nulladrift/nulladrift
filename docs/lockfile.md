@@ -217,8 +217,8 @@ a stdio invocation, by content address.
 | Ecosystem | Read from | `integrity` |
 | ---- | ---- | ---- |
 | `npm` | `npx`, `bunx`, `pnpm dlx`, `yarn dlx`, `npm exec` | The registry's `dist.integrity` for that version |
-| `pypi` | `uvx`, `uv tool run`, `pipx run` | sha256 of the source distribution, else the first universal wheel |
-| `oci` | `docker run`, `podman run` | The manifest digest the tag resolves to, read anonymously |
+| `pypi` | `uvx`, `uv tool run`, `pipx run` | sha256 of the source distribution, else the first universal wheel; and `files`, every file in the release with its sha256 |
+| `oci` | `docker run`, `podman run` | The manifest digest the tag resolves to, read anonymously; the audit then runs the image by that digest |
 | `file` | `node index.js`, `python server.py`, `./bin/server` | sha256 of the file |
 
 **Outside the server digest, compared on its own.** A lock written before this field existed,
@@ -237,6 +237,20 @@ could not re-establish it -- the registry's own rule guarantees it still means t
 A floating request (`latest`, a range, an image tag) is not carried forward, because that
 would claim yesterday's version for code that may have moved since.
 
+**A PyPI release is pinned as all of its files.** `integrity` names one file, and that is rarely
+the one an installer runs: uv and pip take the best wheel for the platform, and PyPI lets a
+maintainer add a file to a release after it is published. So `files` records every file in the
+release with its sha256, and a file added, removed or changed under the same version is
+`server.artifact.changed`. So is the pinned file disappearing, which leaves an installer to
+choose another. A lock written before `files` existed compares as before until it is next
+written.
+
+**An image is audited by the digest it was pinned at.** The digest is the registry's answer to
+this tool, and the daemon is never asked: a registry can answer the two differently, and
+`docker run` uses an image cached under the tag without pulling. So the audit runs the image as
+`name:tag@sha256:...`, content-addressed, which no registry or cache can substitute. The lock
+still records the command as the configuration writes it.
+
 **A package fetched from elsewhere is unverified, not pinned.** The pin is the public
 registry's answer (or that of a registry you set in your own environment, `npm_config_registry`,
 which is asked instead). When the launcher is pointed somewhere else, the package that runs is
@@ -247,6 +261,16 @@ or user `.npmrc`, `.yarnrc.yml` or `bunfig.toml` naming another one, a copy in `
 `[tool.uv]` in `pyproject.toml`, or `pip.conf` for `pipx`. Such a server is listed as unverified
 and no pin is carried forward for it. npm's global config and global installs, and tools
 installed with `uv tool install`, are not read.
+
+Where the lock already pinned that server, this is a change, not a gap: `server.artifact.changed`,
+naming the pin and what displaced it. One file in a pull request is enough to point a launcher
+elsewhere, and treating it as "could not establish" let the pull request's author decide whether
+substitution was checked at all. Accepting it in `review` is the deliberate way to drop the pin.
+A pin that could not be re-established because a registry did not answer is kept by `review`,
+whatever else is accepted for that server.
+
+Unverified servers are listed in every report format: the human report, `--json`
+(`unverified`), `--sarif` (`server.artifact.unverified`, a note) and the pull request comment.
 
 **Substitution is claimed only where it cannot be innocent.** npm refuses to republish a
 version, so the same version with different bytes means something between here and the
@@ -264,6 +288,23 @@ design, so the same comparison there is the ordinary `server.artifact.changed`.
   split across many modules is covered only as far as its first file.
 
 `--no-provenance` skips every lookup, for an air-gapped run. Exact pins are kept either way.
+
+## 10. Servers left unaudited on purpose
+
+`unaudited`, at the root, lists servers the project has agreed to leave out of the audit -- one
+that only runs on developers' machines, or needs a credential CI does not hold -- by how each is
+reached. `init --allow-unreachable` writes it for every server it could not audit, and accepting
+such a server in `review` adds it.
+
+Under `--allow-unreachable`, a server that could not be audited passes only if it is listed here
+with the same transport. One that is not, or is reached differently than when it was agreed to,
+is `server.added`: without the list, a pull request could add a server that refused the
+auditor -- one that exits when the client says it is nulladrift -- and pass with nothing in the
+report. The list pins nothing and is outside every digest.
+
+A name defined differently in two config files is never audited and never agreed to. Each client
+reads its own file (`.vscode/mcp.json`, `.cursor/mcp.json`), so auditing one definition vouched
+for the others; `check` fails until the names differ or the definitions match.
 
 ## Version 2: the root stopped naming a protocol
 

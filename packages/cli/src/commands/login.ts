@@ -9,13 +9,14 @@
 import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { auth } from "@modelcontextprotocol/client";
-import { discoverServers } from "../config/discover";
+import { discoverServers, portablePath } from "../config/discover";
 import type { ConfiguredServer } from "../config/types";
 import { EXIT_CLEAN, EXIT_INCOMPLETE, type ExitCode } from "../lib/exit";
 import { bold, dim, green, red } from "../lib/ui";
 import { sanitizeUrl } from "../lock/normalize";
 import { credentialPath, DEFAULT_CALLBACK_PATH, FileTokenProvider } from "../mcp/oauth";
-import { rm } from "node:fs/promises";
+import { rm, stat } from "node:fs/promises";
+import { resolve } from "node:path";
 
 const CALLBACK_TIMEOUT_MS = 5 * 60 * 1_000;
 
@@ -87,6 +88,22 @@ async function awaitCallback(expectedState: string): Promise<{ redirectUrl: stri
 async function findServer(projectRoot: string, configFiles: string[], name: string): Promise<ConfiguredServer | { error: string }> {
   // Every config, the user's own included: login stores a token for this person and writes no lock.
   const discovery = await discoverServers(projectRoot, configFiles, { userConfigs: true });
+
+  /*
+   * A name defined differently in two files is two servers, and a token is a credential for one
+   * of them. Project files are read first, so a cloned repository that defined `linear` sent the
+   * person's login, and the token it stored, to the repository's server instead of their own.
+   * A file named with --config says which is meant; otherwise nothing is guessed.
+   */
+  const conflict = discovery.conflicts.find((candidate) => candidate.name === name);
+  if (conflict) {
+    const named = new Set(configFiles.map((file) => portablePath(resolve(projectRoot, file), projectRoot)));
+    const chosen = conflict.definitions.filter((definition) => named.has(definition.file));
+    if (chosen.length === 1) return chosen[0]!.server;
+    const where = conflict.definitions.map((definition) => `  ${definition.file}: ${describeTarget(definition.server)}`).join("\n");
+    return { error: `"${name}" is defined differently in more than one config:\n${where}\nName the one you mean with --config <file>.` };
+  }
+
   const server = discovery.servers.find((candidate) => candidate.name === name);
   if (!server) {
     const known = discovery.servers.map((candidate) => candidate.name);
@@ -94,6 +111,12 @@ async function findServer(projectRoot: string, configFiles: string[], name: stri
   }
   if (server.transport.type === "stdio") return { error: `"${name}" is a stdio server; it is launched locally and has nothing to log in to` };
   return server;
+}
+
+/** Where a definition points, without anything in the URL that could be a key. */
+function describeTarget(server: ConfiguredServer): string {
+  const { transport } = server;
+  return transport.type === "stdio" ? `runs ${transport.command}` : sanitizeUrl(transport.url);
 }
 
 export async function runLogin(options: { projectRoot: string; configFiles: string[]; serverName: string | undefined }): Promise<ExitCode> {
@@ -152,7 +175,16 @@ export async function runLogout(options: { projectRoot: string; configFiles: str
     return EXIT_INCOMPLETE;
   }
   const url = found.transport.type === "stdio" ? "" : found.transport.url;
-  await rm(credentialPath(url), { force: true });
-  process.stdout.write(`${dim(`stored credentials for ${found.name} deleted`)}\n`);
+  const path = credentialPath(url);
+  // Said either way, and for which server: "deleted" when nothing was there left a token behind
+  // for somebody who believed they had removed it.
+  const existed = await stat(path).then(
+    () => true,
+    () => false,
+  );
+  await rm(path, { force: true });
+  process.stdout.write(
+    `${dim(existed ? `stored credentials for ${found.name} (${sanitizeUrl(url)}) deleted` : `no credentials were stored for ${found.name} (${sanitizeUrl(url)})`)}\n`,
+  );
   return EXIT_CLEAN;
 }

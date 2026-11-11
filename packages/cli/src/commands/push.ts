@@ -9,7 +9,7 @@
 import { createHash } from "node:crypto";
 import { captureAll } from "../audit";
 import { EXIT_CLEAN, EXIT_DRIFT, EXIT_INCOMPLETE, type ExitCode } from "../lib/exit";
-import { bold, dim, green, red, yellow } from "../lib/ui";
+import { bold, dim, green, red, visibleControls, yellow } from "../lib/ui";
 import { describeRefusal } from "../report/push-error";
 import { redactedNotes } from "../report/redacted";
 import { acquireBuildToken, acquireReadingToken, BUILD_TOKEN_HEADER, READING_TOKEN_HEADER, readingAudience, readingAudienceBase } from "../lib/build-token";
@@ -56,18 +56,20 @@ interface IngestResponseBody {
 
 /** One line about which build the control plane believes sent this, or nothing worth a line. */
 function describeIdentity(identity: IngestResponseBody["identity"], hint: string | undefined): string | undefined {
-  const where = `${identity?.repository ?? ""}${identity?.ref ? ` @ ${identity.ref}` : ""}`;
+  // The control plane's words, escaped like any text this tool did not write itself.
+  const shown = (text: string) => visibleControls(text);
+  const where = shown(`${identity?.repository ?? ""}${identity?.ref ? ` @ ${identity.ref}` : ""}`);
   // Whether the signature covers what was sent, or only who sent it. Said only when the control plane said.
   const contents = identity?.boundToReading
     ? " · contents signed"
     : identity?.bindingRefused
-      ? ` · contents not signed: ${identity.bindingRefused}`
+      ? ` · contents not signed: ${shown(identity.bindingRefused)}`
       : "";
   if (identity?.trust === "trusted") return `${green("signed")} ${dim(`${where} · a trusted build${contents}`)}`;
   if (identity?.trust === "verified") {
     return `${yellow("signed")} ${dim(`${where} · not a build this organization lists as trusted${contents}`)}`;
   }
-  if (identity?.rejected) return `${red("build token refused")} ${dim(identity.rejected)}`;
+  if (identity?.rejected) return `${red("build token refused")} ${dim(shown(identity.rejected))}`;
   return hint ? dim(`unsigned: ${hint}`) : undefined;
 }
 
@@ -99,6 +101,9 @@ export function refuseApiUrl(apiUrl: string): string | undefined {
   if (url.protocol === "https:" || (url.protocol === "http:" && loopback)) return undefined;
   return `the control plane has to be reached over https (http only on this machine), not ${url.protocol}`;
 }
+
+/** What an HTTP header value cannot hold. */
+const UNSENDABLE = /[\r\n\0]/;
 
 export async function runPush(options: PushOptions): Promise<ExitCode> {
   const apiUrl = (options.apiUrl ?? process.env["NULLADRIFT_API_URL"] ?? "").replace(/\/+$/, "");
@@ -132,6 +137,25 @@ export async function runPush(options: PushOptions): Promise<ExitCode> {
   if (refusal) {
     process.stderr.write(`${red("push refused:")} ${refusal}\n`);
     return EXIT_INCOMPLETE;
+  }
+
+  /*
+   * A token with a line break in it cannot be sent as a header, and Node's refusal quotes the
+   * whole header -- `Headers.append: "Bearer <token>" is an invalid header value` -- which was
+   * printed to the job log as the reason. Refused here, by name.
+   */
+  if (UNSENDABLE.test(token)) {
+    process.stderr.write(
+      `${red("push refused:")} the collector token (${options.token !== undefined ? "--token" : "NULLADRIFT_TOKEN"}) contains a line break or NUL; a secret saved with a trailing newline is the usual cause\n`,
+    );
+    return EXIT_INCOMPLETE;
+  }
+  /*
+   * On the command line, a token is in every process listing on the machine for as long as this
+   * runs, and in shell history after. Not refused, since scripts depend on it; said.
+   */
+  if (options.token !== undefined) {
+    process.stderr.write(`${yellow("note:")} --token is visible to other processes on this machine; prefer NULLADRIFT_TOKEN.\n`);
   }
 
   const result = await captureAll({
@@ -213,8 +237,13 @@ export async function runPush(options: PushOptions): Promise<ExitCode> {
     acquireBuildToken(),
     acquireReadingToken(readingAudience(readingAudienceBase(apiUrl), digest)),
   ]);
-  const buildToken = build && "token" in build ? build.token : undefined;
-  const readingToken = reading && "token" in reading ? reading.token : undefined;
+  const sendable = (candidate: string | undefined, what: string): string | undefined => {
+    if (candidate === undefined || !UNSENDABLE.test(candidate)) return candidate;
+    process.stderr.write(`${yellow("note:")} ${what} contains a line break or NUL, so it was left out; the reading goes unsigned.\n`);
+    return undefined;
+  };
+  const buildToken = sendable(build && "token" in build ? build.token : undefined, "the identity token (NULLADRIFT_ID_TOKEN)");
+  const readingToken = sendable(reading && "token" in reading ? reading.token : undefined, "the reading token");
 
   let response: Response;
   try {
@@ -234,7 +263,10 @@ export async function runPush(options: PushOptions): Promise<ExitCode> {
   } catch (error) {
     // A control plane that cannot be reached is an audit that did not happen, which is a 2 for
     // the same reason an unreachable server is.
-    process.stderr.write(`${red("could not reach the control plane:")} ${(error as Error).message}\n`);
+    // Whatever the error quotes, none of the three credentials in the request goes to the log.
+    let message = (error as Error).message;
+    for (const secret of [token, buildToken, readingToken]) if (secret) message = message.split(secret).join("[redacted]");
+    process.stderr.write(`${red("could not reach the control plane:")} ${message}\n`);
     return EXIT_INCOMPLETE;
   }
 
@@ -252,17 +284,23 @@ export async function runPush(options: PushOptions): Promise<ExitCode> {
   const verdict = (await response.json()) as IngestResponseBody;
   const lines: string[] = [""];
   const mark = verdict.verdict === "clean" ? green("✓") : verdict.verdict === "drift" ? yellow("!") : red("✗");
-  lines.push(`${mark} ${bold(verdict.verdict)} ${dim(`· ${servers.length} server(s) · reading ${verdict.readingId.slice(0, 8)}`)}`);
+  /*
+   * Everything below is the control plane's answer, and most of it quotes the audited server:
+   * tool names, summaries. Escaped the way the local report escapes them, whatever the control
+   * plane did or did not do first.
+   */
+  const shown = (text: unknown) => visibleControls(String(text ?? ""));
+  lines.push(`${mark} ${bold(shown(verdict.verdict))} ${dim(`· ${servers.length} server(s) · reading ${shown(verdict.readingId).slice(0, 8)}`)}`);
   const identity = describeIdentity(verdict.identity, build && "hint" in build ? build.hint : undefined);
   if (identity) lines.push(`  ${identity}`);
 
   for (const change of verdict.changes) {
-    lines.push(`  ${change.severity === "high" ? red("●") : change.severity === "medium" ? yellow("●") : dim("●")} ${bold(change.server)}${change.member ? dim(`/${change.member}`) : ""}  ${change.summary}`);
+    lines.push(`  ${change.severity === "high" ? red("●") : change.severity === "medium" ? yellow("●") : dim("●")} ${bold(shown(change.server))}${change.member ? dim(`/${shown(change.member)}`) : ""}  ${shown(change.summary)}`);
   }
   for (const reason of verdict.decision.reasons) {
-    lines.push(`  ${red("blocked")} ${dim(reason.code)}  ${reason.message}`);
+    lines.push(`  ${red("blocked")} ${dim(shown(reason.code))}  ${shown(reason.message)}`);
   }
-  if (verdict.verdict !== "clean") lines.push("", dim(`Review it at ${verdict.url}`));
+  if (verdict.verdict !== "clean") lines.push("", dim(`Review it at ${shown(verdict.url)}`));
   lines.push("");
   process.stdout.write(lines.join("\n"));
 

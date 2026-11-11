@@ -22,8 +22,23 @@ function same(a: unknown, b: unknown): boolean {
   return stableKey(a ?? null) === stableKey(b ?? null);
 }
 
-function indexBy<T>(members: T[] | undefined, key: (member: T) => string): Map<string, T> {
-  return new Map((members ?? []).map((member) => [key(member), member]));
+/**
+ * Members grouped by their key, every copy kept.
+ *
+ * A Map from key to member kept the last of two tools with the same name and dropped the first
+ * without a word. A server that listed a poisoned `read_file` ahead of the approved one compared
+ * clean: the approved copy was the one compared, and the poisoned one was never looked at. Which
+ * copy a client uses is the client's business, so every copy is compared.
+ */
+function groupBy<T>(members: T[] | undefined, key: (member: T) => string): Map<string, T[]> {
+  const groups = new Map<string, T[]>();
+  for (const member of members ?? []) {
+    const k = key(member);
+    const group = groups.get(k);
+    if (group) group.push(member);
+    else groups.set(k, [member]);
+  }
+  return groups;
 }
 
 /**
@@ -90,7 +105,7 @@ const CAPABILITY_SEVERITY: Record<CapabilitySeverity, Severity> = {
 };
 
 function compareToolCapabilities(server: string, before: LockedTool[] | undefined, after: LockedTool[] | undefined): Change[] {
-  const previous = indexBy(before, (tool) => tool.name);
+  const previous = groupBy(before, (tool) => tool.name);
   const changes: Change[] = [];
 
   for (const tool of after ?? []) {
@@ -101,7 +116,8 @@ function compareToolCapabilities(server: string, before: LockedTool[] | undefine
      */
     const existing = previous.get(tool.name);
     if (!existing) continue;
-    const had = new Set(toolCapabilities(existing).map((capability) => capability.kind));
+    // Against every copy that was pinned under this name: what any of them could do was approved.
+    const had = new Set(existing.flatMap((copy) => toolCapabilities(copy).map((capability) => capability.kind)));
     for (const capability of toolCapabilities(tool)) {
       if (had.has(capability.kind)) continue;
       changes.push(
@@ -165,9 +181,20 @@ function compareTool(name: string, before: LockedTool, after: LockedTool): Chang
    * finding.
    */
   if (changes.length === 0) {
-    changes.push(change("tool.changed", name, "tool definition changed (title, icons or _meta)", { ...at, before, after }));
+    const moved = [
+      !same(before.title, after.title) ? "title" : "",
+      !same(before.icons, after.icons) ? "icons" : "",
+      !same(before.execution, after.execution) ? `how it may be run (${describeExecution(before.execution)} → ${describeExecution(after.execution)})` : "",
+      !same(before.meta, after.meta) ? "_meta" : "",
+    ].filter(Boolean);
+    changes.push(change("tool.changed", name, `tool definition changed: ${moved.length > 0 ? moved.join(", ") : "a field this report has no finding for"}`, { ...at, before, after }));
   }
   return changes;
+}
+
+function describeExecution(execution: LockedTool["execution"]): string {
+  const support = execution?.["taskSupport"];
+  return typeof support === "string" ? `task support ${support}` : "unstated";
 }
 
 function describeEscalation(before: LockedTool, after: LockedTool): string {
@@ -198,23 +225,55 @@ function compareMembers<T extends { digest: string }>(
   deep?: (key: string, a: T, b: T) => Change[],
 ): Change[] {
   const changes: Change[] = [];
-  const previous = indexBy(before, spec.key);
-  const next = indexBy(after, spec.key);
+  const previous = groupBy(before, spec.key);
+  const next = groupBy(after, spec.key);
 
-  for (const [key, member] of next) {
+  for (const [key, members] of next) {
     const existing = previous.get(key);
     if (!existing) {
-      const extra = spec.arriving?.(member);
-      changes.push(
-        change(spec.added, name, `new ${spec.noun} ${spec.label(member)}${extra ? ` \u00b7 ${extra}` : ""}`, { member: spec.label(member), after: member }),
-      );
+      for (const member of members) {
+        const extra = spec.arriving?.(member);
+        changes.push(
+          change(spec.added, name, `new ${spec.noun} ${spec.label(member)}${extra ? ` \u00b7 ${extra}` : ""}`, { member: spec.label(member), after: member }),
+        );
+      }
       continue;
     }
-    if (existing.digest === member.digest) continue;
-    changes.push(...(deep ? deep(key, existing, member) : [change(spec.changed, name, `${spec.noun} ${spec.label(member)} changed`, { member: spec.label(member), before: existing, after: member })]));
+
+    /*
+     * Identical copies pair off first, so a server that reorders its list compares clean. What is
+     * left on the new side is compared against what is left on the old one, or, where a copy was
+     * added beside the approved one, against the approved one: a second `read_file` is described
+     * by how it differs from the first, which is the finding a reviewer needs.
+     */
+    const unpairedBefore = [...existing];
+    const unpairedAfter: T[] = [];
+    for (const member of members) {
+      const twin = unpairedBefore.findIndex((candidate) => candidate.digest === member.digest);
+      if (twin === -1) unpairedAfter.push(member);
+      else unpairedBefore.splice(twin, 1);
+    }
+    for (const [index, member] of unpairedAfter.entries()) {
+      const counterpart = unpairedBefore[index] ?? existing[0]!;
+      if (counterpart.digest === member.digest) {
+        changes.push(
+          change(spec.changed, name, `${spec.noun} ${spec.label(member)} is now declared ${members.length} times`, { member: spec.label(member), before: existing, after: members }),
+        );
+        continue;
+      }
+      changes.push(
+        ...(deep
+          ? deep(key, counterpart, member)
+          : [change(spec.changed, name, `${spec.noun} ${spec.label(member)} changed`, { member: spec.label(member), before: counterpart, after: member })]),
+      );
+    }
+    for (const member of unpairedBefore.slice(unpairedAfter.length)) {
+      changes.push(change(spec.removed, name, `one of the ${spec.noun}s declared as ${spec.label(member)} is gone`, { member: spec.label(member), before: member }));
+    }
   }
-  for (const [key, member] of previous) {
-    if (!next.has(key)) changes.push(change(spec.removed, name, `${spec.noun} ${spec.label(member)} is gone`, { member: spec.label(member), before: member }));
+  for (const [key, members] of previous) {
+    if (next.has(key)) continue;
+    for (const member of members) changes.push(change(spec.removed, name, `${spec.noun} ${spec.label(member)} is gone`, { member: spec.label(member), before: member }));
   }
   return changes;
 }
@@ -229,6 +288,23 @@ function compareMembers<T extends { digest: string }>(
  * `server.transport.changed` already reports, and saying it twice is how a reviewer learns to
  * skim.
  */
+/** What differs between two lists of a release's files, said briefly, or nothing when they match. */
+function filesMoved(was: Record<string, string> | undefined, now: Record<string, string> | undefined): string | undefined {
+  if (was === undefined || now === undefined) return undefined;
+  const added = Object.keys(now).filter((file) => !Object.hasOwn(was, file));
+  const removed = Object.keys(was).filter((file) => !Object.hasOwn(now, file));
+  const changed = Object.keys(now).filter((file) => Object.hasOwn(was, file) && was[file] !== now[file]);
+  if (added.length + removed.length + changed.length === 0) return undefined;
+  const list = (files: string[]) => `${files.slice(0, 3).join(", ")}${files.length > 3 ? ` +${files.length - 3}` : ""}`;
+  return [
+    added.length > 0 ? `added ${list(added)}` : "",
+    removed.length > 0 ? `removed ${list(removed)}` : "",
+    changed.length > 0 ? `different contents for ${list(changed)}` : "",
+  ]
+    .filter(Boolean)
+    .join("; ");
+}
+
 function compareProvenance(name: string, before: LockedMcpServer, after: LockedMcpServer): Change[] {
   const was = before.provenance;
   const now = after.provenance;
@@ -246,7 +322,21 @@ function compareProvenance(name: string, before: LockedMcpServer, after: LockedM
   const integrityMoved = was.integrity !== undefined && now.integrity !== undefined && was.integrity !== now.integrity;
 
   if (was.version !== undefined && was.version === now.version) {
-    if (!integrityMoved) return [];
+    if (!integrityMoved) {
+      /*
+       * The pinned file is one of a release's files, and an installer picks among all of them.
+       * A wheel added to the release, or the pinned file taken away, changes what runs without
+       * moving `integrity`; when both sides list the release's files, that is compared too.
+       */
+      const files = filesMoved(was.files, now.files);
+      if (files) {
+        return [change("server.artifact.changed", name, `the files published for ${was.name}@${was.version} are not the ones that were pinned (${files})${unexplained}`, { before: was, after: now })];
+      }
+      if (was.integrity !== undefined && now.integrity === undefined) {
+        return [change("server.artifact.changed", name, `the file pinned for ${was.name}@${was.version} is no longer published, so something else is installed in its place${unexplained}`, { before: was, after: now })];
+      }
+      return [];
+    }
     /*
      * Substitution is claimed only where the registry guarantees one artifact per version. npm
      * refuses to republish a version, so different bytes under the same one means something
@@ -282,6 +372,28 @@ function compareProvenance(name: string, before: LockedMcpServer, after: LockedM
       ? `the image ${was.name}:${was.requested ?? "latest"} now resolves to a different digest`
       : "the file this server runs from has different contents than when it was pinned";
   return [change("server.artifact.changed", name, `${what}${unexplained}`, { before: was, after: now })];
+}
+
+/**
+ * What the server digest covers, with each member list taken as a set.
+ *
+ * Members are stored sorted by name, so copies that share a name keep the order the server sent
+ * them in, and a server that swaps two of them moves its digest without changing anything. The
+ * member comparison already reads that as clean; this is what lets the fallback below agree.
+ *
+ * Everything but the fields the digest leaves out is taken as it is, rather than listed, so a
+ * field the format gains later is covered here on the day it is added.
+ */
+function orderless(entry: LockedMcpServer): string {
+  const { kind: _kind, source: _source, digest: _digest, provenance: _provenance, tools, resources, resourceTemplates, prompts, ...rest } = entry;
+  const digests = (members: Array<{ digest: string }> | undefined) => (members ?? []).map((member) => member.digest).sort();
+  return stableKey({
+    ...rest,
+    tools: digests(tools),
+    resources: digests(resources),
+    resourceTemplates: digests(resourceTemplates),
+    prompts: digests(prompts),
+  });
 }
 
 function compareServer(name: string, before: LockedMcpServer, after: LockedMcpServer): Change[] {
@@ -368,6 +480,20 @@ function compareServer(name: string, before: LockedMcpServer, after: LockedMcpSe
       noun: "prompt",
     }),
   );
+
+  /*
+   * The digest moved and nothing above says why. Every field the digest covers is compared above,
+   * so this should not happen; when it does, a field was missed, and the honest report is a vague
+   * finding rather than a clean one. A false clean is the one failure this engine exists to avoid.
+   */
+  if (changes.length === 0 && orderless(before) !== orderless(after)) {
+    changes.push(
+      change("server.capabilities.changed", name, "the server's pinned definition changed in a way no other finding describes; compare the lock entries", {
+        before: before.digest,
+        after: after.digest,
+      }),
+    );
+  }
 
   return changes;
 }

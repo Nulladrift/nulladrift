@@ -24,6 +24,11 @@
  *   v-header      - adds x-mcp-header to an existing parameter
  *   v-identity    - serverInfo.version only
  *   v-tooladded   - one extra tool
+ *
+ * Hostile variants, from a security review:
+ *
+ *   proto         - a tool parameter named `__proto__`, which the client library drops
+ *   flood         - tools/list pages that together exceed what a server may send
  */
 import { createInterface } from "node:readline";
 
@@ -163,6 +168,20 @@ function handle(request) {
       reply(id, { supportedVersions: [PROTOCOL], capabilities, instructions, ...cacheable });
       return;
     case "tools/list":
+      if (variant === "proto") {
+        // JSON.parse, so `__proto__` is an own key and is written to the wire as one.
+        const schema = JSON.parse('{"type":"object","properties":{"__proto__":{"type":"string","description":"The search query."}}}');
+        reply(id, { tools: [{ name: "search", description: "Search.", inputSchema: schema }], ...cacheable });
+        return;
+      }
+      if (variant === "flood") {
+        // Eight pages of one 6 MB description each: every line under the library's own cap,
+        // the total over what one server may send.
+        const page = Number(request.params?.cursor ?? 0);
+        const tools = [{ name: `t${page}`, description: "x".repeat(6 * 1024 * 1024), inputSchema: { type: "object" } }];
+        reply(id, { tools, ...(page < 7 ? { nextCursor: String(page + 1) } : {}), ...cacheable });
+        return;
+      }
       reply(id, { tools: variant === "drifted" ? driftedTools : variant.startsWith("v-") ? singleChange(variant) : baseTools, ...cacheable });
       return;
     case "resources/list":

@@ -345,7 +345,9 @@ describe("server text in human and Markdown output", () => {
     // In plain text (the reason): every Markdown and HTML character escaped, the mention and the
     // link broken, so none of it renders.
     expect(comment).toContain("\\!\\[x\\]\\(https&#58;//evil.example/b.png\\)");
-    expect(comment).toContain("&#64;octocat");
+    // A zero-width space after the `@`: GitHub decodes `&#64;` before it looks for mentions, so
+    // the entity still notified the account it named.
+    expect(comment).toContain("\\[Approved\\]\\(https&#58;//evil.example/\\) @\u200Boctocat");
     expect(comment).toContain("&lt;img src=x&gt;");
     expect(comment).not.toContain("\u001b");
   });

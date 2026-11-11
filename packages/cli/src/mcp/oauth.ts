@@ -15,9 +15,9 @@
  * instead: an audit that blocks on a human is an audit that hangs a CI job.
  */
 import { spawn } from "node:child_process";
-import { createHash, randomUUID } from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { readFileSync } from "node:fs";
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { homedir, platform } from "node:os";
 import { dirname, join } from "node:path";
 import { ClientCredentialsProvider, UnauthorizedError } from "@modelcontextprotocol/client";
@@ -71,6 +71,34 @@ export class InteractiveAuthRequiredError extends Error {
  * rather than opening anything, which turns "this needs a human" into a message instead of a
  * hung process.
  */
+/**
+ * Tokens are bearer credentials: the directory and the file are owner-only, every time.
+ *
+ * `mode` on `mkdir` and `writeFile` applies only to what they create. A directory restored from
+ * dotfiles at 0755 with a token file at 0644 kept both, and the next refresh token was written
+ * into a world-readable file under a message that said "(owner-only)". A symlink planted at the
+ * file's path was followed, so the token landed wherever it pointed. So the directory is
+ * tightened on every write and must be a directory, not a link to one, and the file is written
+ * new beside its destination and renamed over it, which replaces a link rather than following it.
+ */
+export async function writeOwnerOnly(path: string, contents: string): Promise<void> {
+  const directory = dirname(path);
+  await mkdir(directory, { recursive: true, mode: 0o700 });
+  const found = await lstat(directory);
+  if (found.isSymbolicLink() || !found.isDirectory()) throw new Error(`refusing to store credentials in ${directory}: it is not a plain directory`);
+  await chmod(directory, 0o700);
+
+  const temporary = `${path}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
+  try {
+    await writeFile(temporary, contents, { encoding: "utf8", mode: 0o600, flag: "wx" });
+    await chmod(temporary, 0o600);
+    await rename(temporary, path);
+  } catch (error) {
+    await rm(temporary, { force: true }).catch(() => {});
+    throw error;
+  }
+}
+
 export class FileTokenProvider implements OAuthClientProvider {
   private cache: StoredCredentials | undefined;
   /** One per login attempt, held in memory and checked against what comes back on the callback. */
@@ -116,10 +144,7 @@ export class FileTokenProvider implements OAuthClientProvider {
   private async write(patch: Partial<StoredCredentials>): Promise<void> {
     const next = { ...(await this.read()), ...patch, serverUrl: this.serverUrl };
     this.cache = next;
-    const path = credentialPath(this.serverUrl);
-    // Tokens are bearer credentials: the directory and the file are owner-only.
-    await mkdir(dirname(path), { recursive: true, mode: 0o700 });
-    await writeFile(path, `${JSON.stringify(next, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+    await writeOwnerOnly(credentialPath(this.serverUrl), `${JSON.stringify(next, null, 2)}\n`);
   }
 
   async clientInformation(): Promise<StoredOAuthClientInformation | undefined> {

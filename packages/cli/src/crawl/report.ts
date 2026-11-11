@@ -205,8 +205,9 @@ export function renderMarkdown(history: History, stats: DriftStats): string {
     "",
     stats.coverage.stdioSandboxed > 0
       ? "stdio packages were run inside a container with no host mounts, no host environment, no " +
-        "privileges and a read-only root (`--include-stdio`). Network egress is **not** blocked: npx has " +
-        "to reach the registry to fetch the package, so a hostile package can reach the network too."
+        "privileges and a read-only root (`--include-stdio`), each killed after a fixed time. Network egress " +
+        "is **not** blocked: npx has to reach the registry to fetch the package, so a hostile package can " +
+        "reach the network too, including the Docker host's gateway and a cloud metadata service by address."
       : "This run read **remote servers only**. Auditing a stdio entry means executing a third-party " +
         "package; `--include-stdio` does it in a container, and without that flag those entries are " +
         "skipped. Remote servers skew toward hosted and commercial operators, so a remote-only sample " +

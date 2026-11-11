@@ -17,6 +17,33 @@ import type { JsonObject, JsonValue } from "./types";
 export const MAX_REF_DEPTH = 32;
 export const MAX_VISIT_DEPTH = 12;
 export const MAX_FACTS = 5_000;
+/**
+ * Nodes one call may merge. A ceiling on total work, where the depth caps only bound how far down
+ * one path goes; see `effectiveSchema`.
+ */
+export const MAX_RESOLUTIONS = 100_000;
+
+/*
+ * What each `$ref` resolves to, per schema root. Without it, `allOf: [{$ref: next} x4]` at each of
+ * sixteen levels resolved `next` once per path to it: 4^16 resolutions for an 1.8 KB schema,
+ * synchronously, after the server had answered, so no timeout could stop it. A definition means
+ * the same thing wherever it is referenced from, so it is resolved once.
+ */
+interface ResolutionState {
+  refs: Map<string, JsonObject | undefined>;
+  spent: number;
+}
+const states = new WeakMap<object, ResolutionState>();
+
+function stateOf(root: JsonValue): ResolutionState {
+  if (root === null || typeof root !== "object") return { refs: new Map(), spent: 0 };
+  let state = states.get(root);
+  if (!state) {
+    state = { refs: new Map(), spent: 0 };
+    states.set(root, state);
+  }
+  return state;
+}
 
 export function asObject(value: JsonValue | undefined): JsonObject | undefined {
   return value !== null && value !== undefined && typeof value === "object" && !Array.isArray(value) ? (value as JsonObject) : undefined;
@@ -60,6 +87,10 @@ export function effectiveSchema(node: JsonValue | undefined, root: JsonValue, se
   const object = asObject(node);
   if (object === undefined) return undefined;
   if (depth > MAX_REF_DEPTH) return object;
+  const state = stateOf(root);
+  if (depth === 0) state.spent = 0;
+  // Past the budget, a node is taken as written. Less precise, and never unbounded.
+  if (++state.spent > MAX_RESOLUTIONS) return object;
 
   /*
    * No prototype, and own-property checks rather than `in`. `name in merged` on a plain object is
@@ -92,7 +123,12 @@ export function effectiveSchema(node: JsonValue | undefined, root: JsonValue, se
 
   const ref = object["$ref"];
   if (typeof ref === "string" && !seenRefs.has(ref)) {
-    const resolved = effectiveSchema(resolvePointer(root, ref), root, new Set([...seenRefs, ref]), depth + 1);
+    let resolved: JsonObject | undefined;
+    if (state.refs.has(ref)) resolved = state.refs.get(ref);
+    else {
+      resolved = effectiveSchema(resolvePointer(root, ref), root, new Set([...seenRefs, ref]), depth + 1);
+      state.refs.set(ref, resolved);
+    }
     if (resolved) merge(resolved);
   }
 

@@ -83,6 +83,11 @@ export function isAuthFailure(error: unknown): boolean {
    */
   const outer = `${error instanceof Error ? error.message : String(error)}`;
   const inner = error instanceof UnreachableServerError && error.cause instanceof Error ? error.cause.message : "";
-  const text = `${outer} ${inner}`.toLowerCase();
-  return /\b(401|403)\b|unauthorized|forbidden|invalid or missing.*token|authentication required|invalid_client|dynamic client registration/.test(text);
+  /*
+   * Cut to a length no real error message reaches, and the gap bounded: `invalid or missing.*token`
+   * scanned from every "invalid or missing" to the end of the text, so a server answering with
+   * that phrase repeated across a megabyte held the audit for two minutes after it had answered.
+   */
+  const text = `${outer.slice(0, 4096)} ${inner.slice(0, 4096)}`.toLowerCase();
+  return /\b(401|403)\b|unauthorized|forbidden|invalid or missing[^\n]{0,80}?token|authentication required|invalid_client|dynamic client registration/.test(text);
 }

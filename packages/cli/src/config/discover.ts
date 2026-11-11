@@ -75,8 +75,18 @@ export interface Discovery {
    * the whole team commits; so they are read only when asked for, and said to be there when not.
    */
   userConfigsSkipped: string[];
-  /** Names defined more than once; the first definition won. */
+  /** Names defined more than once, identically each time; the first definition was used. */
   shadowed: Array<{ name: string; keptFrom: string; alsoIn: string }>;
+  /**
+   * Names defined more than once, differently. None of the definitions is in `servers`.
+   *
+   * Each client reads its own file -- VS Code `.vscode/mcp.json`, Cursor `.cursor/mcp.json` --
+   * so a name defined three ways runs three ways, and auditing the first one vouched for two
+   * definitions nobody looked at. A pull request that added `.vscode/mcp.json` with `demo` set to
+   * `curl ... | sh` passed `check` against a lock that pinned the `.mcp.json` one. Which
+   * definition a name means is the project's to settle, so none is audited until it does.
+   */
+  conflicts: Array<{ name: string; definitions: Array<{ file: string; server: ConfiguredServer }> }>;
   /** Files named explicitly that could not be understood. Never silently ignored. */
   problems: Array<{ file: string; reason: string }>;
 }
@@ -164,6 +174,7 @@ export async function discoverServers(
   const skipped: UnsupportedServerError[] = [];
   const filesRead: string[] = [];
   const shadowed: Discovery["shadowed"] = [];
+  const conflicting = new Map<string, Array<{ file: string; server: ConfiguredServer }>>();
   const problems: Discovery["problems"] = [];
 
   // A file named with --config was asked for by name. The candidate list is a guess and may
@@ -209,9 +220,19 @@ export async function discoverServers(
 
     skipped.push(...parsed.skipped);
     for (const server of parsed.servers.map((entry) => anchorCwd(entry, projectRoot))) {
+      const contested = conflicting.get(server.name);
+      if (contested) {
+        contested.push({ file: source.file, server });
+        continue;
+      }
       const existing = byName.get(server.name);
       if (existing) {
-        shadowed.push({ name: server.name, keptFrom: existing.from, alsoIn: source.file });
+        if (sameDefinition(existing.server, server)) {
+          shadowed.push({ name: server.name, keptFrom: existing.from, alsoIn: source.file });
+          continue;
+        }
+        byName.delete(server.name);
+        conflicting.set(server.name, [{ file: existing.from, server: existing.server }, { file: source.file, server }]);
         continue;
       }
       byName.set(server.name, { server, from: source.file });
@@ -230,6 +251,28 @@ export async function discoverServers(
             (path): path is string => path !== undefined,
           ),
     shadowed,
+    conflicts: [...conflicting].map(([name, definitions]) => ({ name, definitions })).sort((a, b) => a.name.localeCompare(b.name)),
     problems,
   };
+}
+
+/**
+ * Whether two definitions start the same server the same way: what is run, with what arguments,
+ * environment values and working directory, or which URL with which headers and OAuth settings.
+ * Values, not names: two files that set `API_URL` to different hosts are two servers.
+ */
+export function sameDefinition(a: ConfiguredServer, b: ConfiguredServer): boolean {
+  const essence = ({ transport }: ConfiguredServer): unknown =>
+    transport.type === "stdio"
+      ? { type: "stdio", command: transport.command, args: transport.args, env: sorted(transport.env), cwd: transport.cwd ?? null }
+      : { type: transport.type, url: transport.url, headers: sorted(lowercased(transport.headers)), oauth: transport.oauth ? sorted({ ...transport.oauth }) : null };
+  return JSON.stringify(essence(a)) === JSON.stringify(essence(b));
+}
+
+function sorted<T>(record: Record<string, T>): Array<[string, T]> {
+  return Object.entries(record).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+}
+
+function lowercased(headers: Record<string, string>): Record<string, string> {
+  return Object.fromEntries(Object.entries(headers).map(([name, value]) => [name.toLowerCase(), value]));
 }

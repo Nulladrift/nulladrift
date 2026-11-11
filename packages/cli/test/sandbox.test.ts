@@ -39,6 +39,25 @@ describe("sandboxedStdio", () => {
     expect(envFlags.sort()).toEqual(["HOME=/home/node", "NO_COLOR=1", "npm_config_cache=/tmp/.npm", "npm_config_update_notifier=false"]);
   });
 
+  /*
+   * Ending an audit closed stdin and killed the docker client, and neither stops a container: a
+   * package that ignored both ran on with network access after the crawl had finished.
+   */
+  it("bounds how long the package can run, inside the container, under an init process", () => {
+    const args = argsFor();
+    const image = args.indexOf(DEFAULT_SANDBOX_IMAGE);
+    expect(args).toContain("--init");
+    expect(args[args.indexOf("--entrypoint") + 1]).toBe("timeout");
+    expect(args.slice(image + 1)).toEqual(["-s", "KILL", "120", "npx", "--yes", "example-mcp@1.2.3"]);
+    const shorter = sandboxedStdio({ registryType: "npm", identifier: "example-mcp", version: "1.2.3" }, { lifetimeSeconds: 30 });
+    expect(shorter.ok && shorter.transport.type === "stdio" && shorter.transport.args).toContain("30");
+  });
+
+  it("sends the names for the Docker host and the metadata service back to the container", () => {
+    const hosts = argsFor().filter((_, index, all) => all[index - 1] === "--add-host");
+    expect(hosts).toEqual(["host.docker.internal:127.0.0.1", "gateway.docker.internal:127.0.0.1", "metadata.google.internal:127.0.0.1"]);
+  });
+
   it("pins the version, because `latest` is not a thing you can re-measure", () => {
     expect(argsFor()).toContain("example-mcp@1.2.3");
   });

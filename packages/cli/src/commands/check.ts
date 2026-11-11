@@ -1,8 +1,7 @@
 /** `nulladrift check` -- re-capture, diff against the lock, fail on drift. */
 import { capabilityViolations, newSteering } from "@nulladrift/core";
 import { dim, yellow } from "../lib/ui";
-import { captureAll } from "../audit";
-import { diffLockfiles } from "../diff";
+import { captureAll, compareWithLock } from "../audit";
 import { readLockfile } from "../lock/io";
 import { resolveExitCode, type ExitCode } from "../lib/exit";
 import { renderHumanReport } from "../report/human";
@@ -31,7 +30,7 @@ export async function buildReport(options: CommonOptions): Promise<{ report: Aud
   // On stderr, so it reaches a person without touching a --format json or sarif report on stdout.
   for (const note of redactedNotes(result.lock)) process.stderr.write(`${yellow("note:")} ${note}\n`);
 
-  const changes = diffLockfiles(committed, result.lock);
+  const changes = compareWithLock(committed, result);
   const allowUnreachable = options.allowUnreachable || committed.policy?.allowUnreachable === true;
 
   const report: AuditReport = {

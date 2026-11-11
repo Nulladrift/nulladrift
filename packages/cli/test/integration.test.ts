@@ -3,7 +3,7 @@
  * pin, and detect a rug pull. Everything below the CLI's argument parsing runs for real.
  */
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -16,7 +16,7 @@ import { runReview } from "../src/commands/review";
 import type { CommonOptions } from "../src/commands/options";
 import { diffLockfiles } from "../src/diff";
 import { EXIT_CLEAN, EXIT_DRIFT, EXIT_INCOMPLETE } from "../src/lib/exit";
-import { readLockfile } from "../src/lock/io";
+import { readLockfile, writeLockfile } from "../src/lock/io";
 
 const SERVER = fileURLToPath(new URL("./fixtures/servers/wire-server.mjs", import.meta.url));
 const TIMEOUT_MS = 20_000;
@@ -203,12 +203,107 @@ describe("init then check", () => {
       const strict = await capturingStdout(() => withIsolatedHome(root, () => runCheck(options(root, { timeoutMs: 5_000 }))));
       expect(strict.result).toBe(EXIT_INCOMPLETE);
 
+      /*
+       * A server the pull request added, which could not be audited, is drift even with the flag:
+       * it is new, and nothing agreed to leave it out. Before, this exited 0, which is also what a
+       * server that exits when the client says it is nulladrift got.
+       */
       const lenient = await capturingStdout(() =>
         withIsolatedHome(root, () => runCheck(options(root, { timeoutMs: 5_000, allowUnreachable: true }))),
       );
-      expect(lenient.result).toBe(EXIT_CLEAN);
+      expect(lenient.result).toBe(EXIT_DRIFT);
+      expect(lenient.output).toContain("could not be audited");
+
+      // Agreed to in review, it only warns, as the flag says.
+      await capturingStdout(() =>
+        withIsolatedHome(root, () => runReview({ ...options(root, { timeoutMs: 5_000, allowUnreachable: true }), acceptAll: true })),
+      );
+      expect((await readLockfile(join(root, "mcp.lock"))).unaudited?.["gone"]?.transport).toMatchObject({ command: "definitely-not-a-real-binary-xyz" });
+      const agreed = await capturingStdout(() =>
+        withIsolatedHome(root, () => runCheck(options(root, { timeoutMs: 5_000, allowUnreachable: true }))),
+      );
+      expect(agreed.result).toBe(EXIT_CLEAN);
+
+      // And reached some other way, it is drift again: the agreement was to that definition.
+      await writeFile(
+        join(root, ".mcp.json"),
+        JSON.stringify({ mcpServers: { fixture: fixtureServer("base"), gone: { command: "another-missing-binary-xyz" } } }, null, 2),
+        "utf8",
+      );
+      const moved = await capturingStdout(() =>
+        withIsolatedHome(root, () => runCheck(options(root, { timeoutMs: 5_000, allowUnreachable: true }))),
+      );
+      expect(moved.result).toBe(EXIT_DRIFT);
     },
-    TIMEOUT_MS * 2,
+    TIMEOUT_MS * 3,
+  );
+
+  /*
+   * A pin displaced by a file in the pull request. `.npmrc` sending the package's scope to
+   * another registry turned a pinned npm package into "could not establish" and an exit 0, so the
+   * author of the pull request decided whether substitution was checked at all.
+   */
+  it(
+    "fails when a pinned package is configured to come from somewhere else",
+    async () => {
+      const root = await workspace({});
+      // A stand-in launcher called `npx`, so the invocation reads as an npm package and nothing is fetched.
+      const bin = join(root, "bin");
+      await mkdir(bin);
+      await writeFile(join(bin, "npx"), `#!/bin/sh\nexec "${process.execPath}" "${SERVER}"\n`, { mode: 0o755 });
+      await writeFile(
+        join(root, ".mcp.json"),
+        JSON.stringify({ mcpServers: { demo: { command: join(bin, "npx"), args: ["-y", "@acme/demo@1.2.3"], env: { NULLADRIFT_FIXTURE_VARIANT: "base" } } } }),
+        "utf8",
+      );
+      await capturingStdout(() => withIsolatedHome(root, () => runInit(options(root, { provenance: false }))));
+
+      // The pin a run against the registry would have written.
+      const lock = await readLockfile(join(root, "mcp.lock"));
+      lock.subjects["demo"] = { ...lock.subjects["demo"]!, provenance: { ecosystem: "npm", name: "@acme/demo", version: "1.2.3", integrity: "sha512-pinned", requested: "1.2.3" } };
+      await writeLockfile(join(root, "mcp.lock"), lock);
+
+      const before = await capturingStdout(() => withIsolatedHome(root, () => runCheck(options(root, { provenance: false }))));
+      expect(before.result).toBe(EXIT_CLEAN);
+
+      await writeFile(join(root, ".npmrc"), "@acme:registry=https://npm.attacker.example/\n", "utf8");
+      const after = await capturingStdout(() => withIsolatedHome(root, () => runCheck(options(root, { provenance: false }))));
+      expect(after.result).toBe(EXIT_DRIFT);
+      expect(after.output).toContain("server.artifact.changed");
+      expect(after.output).toContain("@acme/demo@1.2.3 was pinned from its registry");
+    },
+    TIMEOUT_MS * 3,
+  );
+
+  /*
+   * One name, two definitions. Each client reads its own file, so auditing the first vouched
+   * for the second: a pull request that added `.vscode/mcp.json` with the pinned name pointing
+   * somewhere else passed `check`.
+   */
+  it(
+    "refuses a name another client's config defines differently",
+    async () => {
+      const root = await workspace({ fixture: fixtureServer("base") });
+      await capturingStdout(() => withIsolatedHome(root, () => runInit(options(root))));
+
+      await mkdir(join(root, ".vscode"), { recursive: true });
+      await writeFile(join(root, ".vscode", "mcp.json"), JSON.stringify({ servers: { fixture: { type: "stdio", command: "bash", args: ["-c", "echo pwned"] } } }), "utf8");
+
+      const strict = await capturingStdout(() => withIsolatedHome(root, () => runCheck(options(root, { timeoutMs: 5_000 }))));
+      expect(strict.result).toBe(EXIT_INCOMPLETE);
+      expect(strict.output).toContain("defined differently in .mcp.json and .vscode/mcp.json");
+
+      const lenient = await capturingStdout(() =>
+        withIsolatedHome(root, () => runCheck(options(root, { timeoutMs: 5_000, allowUnreachable: true }))),
+      );
+      expect(lenient.result).toBe(EXIT_DRIFT);
+
+      // The same definition in both files is one server, and passes.
+      await writeFile(join(root, ".vscode", "mcp.json"), JSON.stringify({ servers: { fixture: { type: "stdio", ...fixtureServer("base") } } }), "utf8");
+      const same = await capturingStdout(() => withIsolatedHome(root, () => runCheck(options(root, { timeoutMs: 5_000 }))));
+      expect(same.result).toBe(EXIT_CLEAN);
+    },
+    TIMEOUT_MS * 3,
   );
 
   it(
