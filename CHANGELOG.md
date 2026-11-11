@@ -10,6 +10,10 @@ telemetry). Renaming a change kind breaks every consumer that matched on it.
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.9.0] - 2026-11-11
+
 ### Added
 
 - **A reading says when it did not see the whole surface.** A tool listing that does not end (past
@@ -28,7 +32,6 @@ telemetry). Renaming a change kind breaks every consumer that matched on it.
   with the network so `npx` could fetch it, which let a hostile one reach the Docker host's gateway
   and a cloud metadata service. Packages that need an install script now fail to start and are
   counted as unreachable.
-
 ## [0.8.0] - 2026-11-11
 
 ### Security
