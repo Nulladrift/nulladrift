@@ -12,7 +12,7 @@ import { crawl } from "../src/crawl/run";
 import { MIN_SERVER_DAYS, renderMarkdown, summarize } from "../src/crawl/report";
 import type { Corpus, CrawlTarget } from "../src/crawl/registry";
 import type { History } from "../src/crawl/state";
-import { PRUNE_AFTER_ABSENT_RUNS } from "../src/crawl/state";
+import { CAPTURE_REVISION, PRUNE_AFTER_ABSENT_RUNS, readHistory, writeHistory } from "../src/crawl/state";
 import { readLockfile } from "../src/lock/io";
 import { corpusFile, readCorpus } from "../src/crawl/corpus";
 import { isAuthFailure, UnreachableServerError } from "../src/mcp/types";
@@ -204,6 +204,59 @@ describe("a crawl over time", () => {
       }
 
       expect((await readCorpus(state)).subjects["alpha"]).toBeDefined();
+    },
+    120_000,
+  );
+});
+
+/*
+ * Found when the crawl first kept its state: the corpus was seeded from a reading taken before
+ * collector 0.8.0 recorded each tool's `execution`, and the next run reported 2,300 of 6,032
+ * servers as drifted in a day. The instrument had changed, not the servers.
+ */
+describe("a baseline captured by an older collector", () => {
+  /** Mark a server's pinned baseline as coming from capture revision 1. */
+  async function fromOlderCollector(state: string, name: string): Promise<void> {
+    const history = await readHistory(state);
+    history.servers[name] = { ...history.servers[name]!, revision: 1 };
+    await writeHistory(state, history);
+  }
+
+  it(
+    "is re-baselined, not compared, so the collector changing is not counted as the server changing",
+    async () => {
+      const state = await stateDir();
+      await crawl({ stateDir: state, corpus: corpusOf([target("alpha", "v-desc")]), now: new Date(T0), timeoutMs: 20_000 });
+      await fromOlderCollector(state, "alpha");
+
+      const rebased = await crawl({ stateDir: state, corpus: corpusOf([target("alpha", "base")]), now: new Date(T0 + DAY), timeoutMs: 20_000 });
+      expect(rebased.changes).toEqual([]);
+      expect(rebased.run.outcomes).toMatchObject({ rebaselined: 1, drifted: 0, stable: 0 });
+      expect(rebased.history.servers["alpha"]).toMatchObject({ revision: CAPTURE_REVISION, comparisons: 0, driftEvents: 0 });
+
+      // The next reading compares like with like again.
+      const next = await crawl({ stateDir: state, corpus: corpusOf([target("alpha", "base")]), now: new Date(T0 + 2 * DAY), timeoutMs: 20_000 });
+      expect(next.run.outcomes).toMatchObject({ stable: 1, rebaselined: 0 });
+      expect(next.history.servers["alpha"]?.comparisons).toBe(1);
+    },
+    120_000,
+  );
+
+  it(
+    "keeps the days it observed before the re-baseline, and does not count the gap across it",
+    async () => {
+      const state = await stateDir();
+      await crawl({ stateDir: state, corpus: corpusOf([target("alpha", "base")]), now: new Date(T0), timeoutMs: 20_000 });
+      await crawl({ stateDir: state, corpus: corpusOf([target("alpha", "base")]), now: new Date(T0 + DAY), timeoutMs: 20_000 });
+      await fromOlderCollector(state, "alpha");
+
+      // Five days pass with nothing compared, then a re-baseline.
+      const rebased = await crawl({ stateDir: state, corpus: corpusOf([target("alpha", "base")]), now: new Date(T0 + 6 * DAY), timeoutMs: 20_000 });
+      expect(summarize(rebased.history).serverDays).toBeCloseTo(1, 5);
+
+      const after = await crawl({ stateDir: state, corpus: corpusOf([target("alpha", "base")]), now: new Date(T0 + 7 * DAY), timeoutMs: 20_000 });
+      expect(summarize(after.history).serverDays).toBeCloseTo(2, 5);
+      expect(renderMarkdown(rebased.history, summarize(rebased.history))).toMatch(/re-baselined after a collector change \(not compared\) \| 1 \|/);
     },
     120_000,
   );

@@ -12,6 +12,12 @@ telemetry). Renaming a change kind breaks every consumer that matched on it.
 
 ### Fixed
 
+- **The crawl does not count a new collector as the servers changing.** A baseline records the
+  capture revision it was read at, and one from an older revision is re-baselined rather than
+  compared: the run counts it apart, and the days observed before it still count toward the rate.
+  The first run to keep its state compared a reading taken before 0.8.0 began recording each
+  tool's `execution` with one taken after, and reported 2,300 of 6,032 servers as drifted in a
+  day.
 - **The crawl keeps what it measures.** Its state was one `corpus.lock` of every server, 305 MB at
   6,215 servers, and GitHub refuses a file over 100 MB, so the commit that saves it failed every
   day and each run started again from nothing. The corpus is now one `mcp.lock` per server under

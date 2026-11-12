@@ -55,7 +55,7 @@ if (!values.quiet) {
   );
 }
 
-const MARK = { baseline: dim("·"), stable: green("✓"), drifted: yellow("△"), "auth-required": dim("🔒"), unreachable: red("✗") } as const;
+const MARK = { baseline: dim("·"), stable: green("✓"), drifted: yellow("△"), rebaselined: dim("↺"), "auth-required": dim("🔒"), unreachable: red("✗") } as const;
 
 const result = await crawl({
   stateDir,
@@ -89,7 +89,8 @@ if (values.json) {
       bold(`Crawled ${result.run.targets} server(s)`),
       // A run that started from nothing when it should not have is the failure that hid for a week.
       dim(`  compared against ${result.baselines} pinned server(s) from the previous run`),
-      `  ${green(String(outcomes.stable))} unchanged · ${yellow(String(outcomes.drifted))} drifted · ${dim(String(outcomes.baseline))} new baseline`,
+      `  ${green(String(outcomes.stable))} unchanged · ${yellow(String(outcomes.drifted))} drifted · ${dim(String(outcomes.baseline))} new baseline` +
+        ((outcomes.rebaselined ?? 0) > 0 ? dim(` · ${outcomes.rebaselined} re-baselined after a collector change, not compared`) : ""),
       `  ${dim(`${outcomes["auth-required"]} need credentials · ${outcomes.unreachable} unreachable`)}`,
       ...(result.pruned.length > 0
         ? [dim(`  ${result.pruned.length} subject(s) dropped: no longer listed in the registry`), ""]
