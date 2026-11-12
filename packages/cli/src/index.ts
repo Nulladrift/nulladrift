@@ -42,7 +42,9 @@ ${bold("Options")}
   --force                re-pin over an existing lockfile, discarding it (init)
   --api <url>            control plane to push to (push; or NULLADRIFT_API_URL)
   --token <token>        collector token (push; or NULLADRIFT_TOKEN)
-  --project <name>       project name to report under (push; inferred from CI otherwise)
+  --project <name>       project to report under (push; else from CI, then the git remote, then the folder)
+  --ref <branch>         branch or tag to record (push; else from CI, then the checked-out branch)
+  --commit <sha>         commit to record (push; else from CI, then HEAD)
   --watch                mark this as a scheduled reading rather than one a build asked for (push)
   --comment              post the findings on the pull request being reviewed (check; needs CI)
   -h, --help             this text
@@ -76,6 +78,8 @@ async function main(): Promise<ExitCode> {
       api: { type: "string" },
       token: { type: "string" },
       project: { type: "string" },
+      ref: { type: "string" },
+      commit: { type: "string" },
       watch: { type: "boolean", default: false },
       comment: { type: "boolean", default: false },
       help: { type: "boolean", short: "h", default: false },
@@ -125,7 +129,7 @@ async function main(): Promise<ExitCode> {
     case "check":
       return runCheck(options);
     case "push":
-      return runPush({ ...options, apiUrl: values.api, token: values.token, project: values.project, watch: values.watch });
+      return runPush({ ...options, apiUrl: values.api, token: values.token, project: values.project, ref: values.ref, commit: values.commit, watch: values.watch });
     case "review":
       return runReview({ ...options, acceptAll: values["accept-all"] });
     case "login":

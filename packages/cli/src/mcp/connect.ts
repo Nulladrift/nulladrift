@@ -13,6 +13,7 @@ import type { ConfiguredServer } from "../config/types";
 import { createAuthProvider } from "./oauth";
 import { USER_AGENT, VERSION } from "../lib/version";
 import { UnreachableServerError } from "./types";
+import { describeNetworkFailure } from "./network";
 
 export const DEFAULT_TIMEOUT_MS = 30_000;
 
@@ -335,9 +336,11 @@ export async function connect(server: ConfiguredServer, timeoutMs = DEFAULT_TIME
     await client.close().catch(() => {});
     if (guard.refusal !== undefined) throw new UnreachableServerError(server.name, guard.refusal, error);
     const detail = stderrBuffer.trim();
+    // The network's own reason, when there is one: "fetch failed" alone does not say what to fix.
+    const network = describeNetworkFailure(error);
     throw new UnreachableServerError(
       server.name,
-      `${(error as Error).message}${detail ? `\n  server stderr: ${diagnosticLines(detail).join("\n  ")}` : ""}`,
+      `${(error as Error).message}${network ? ` (${network})` : ""}${detail ? `\n  server stderr: ${diagnosticLines(detail).join("\n  ")}` : ""}`,
       error,
     );
   }

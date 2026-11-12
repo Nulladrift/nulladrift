@@ -66,7 +66,6 @@ const RULES: Rule[] = [
   // execution, and `country_code`, `status_code` and `zip_code` are all waiting behind it.
   { kind: "code-eval", severity: "critical", name: /(^|_)(eval|evaluate|run_code|exec_code|interpret|compile)(_|$)/, arg: /^code$|(^|_)(source_code|code_to_run|js_code|python_code|expression|program|snippet)(_|$)/ },
   { kind: "credential-access", severity: "critical", name: /(^|_)(secret|secrets|credential|credentials|token|keychain|vault|password)(_|$)/, arg: /(^|_)(secret|credential|password|private_key|api_key|access_token)(_|$)/ },
-  { kind: "file-write", severity: "high", name: /(^|_)(write|create_file|put_file|save|delete|remove|unlink|rename|move|copy|chmod|mkdir|rmdir|edit)(_|$)/, arg: /(^|_)(contents|content|data|destination|dest_path|target_path)(_|$)/ },
   { kind: "network-egress", severity: "high", name: /(^|_)(fetch|request|http|curl|download|upload|post|webhook|navigate|browse|send)(_|$)/, arg: /(^|_)(url|uri|endpoint|host|hostname|webhook|callback)(_|$)/ },
   // Narrowed to things that are actually SQL-shaped. `query`, `select` and `update` on their
   // own matched `simulate-research-query`, `browser_select_option` and `trigger-resource-update`,
@@ -75,8 +74,56 @@ const RULES: Rule[] = [
   { kind: "privilege", severity: "high", name: /(^|_)(sudo|root|admin|grant|revoke|permission|permissions|acl|policy)(_|$)/, arg: /(^|_)(role|scope|scopes|permission|permissions|privilege)(_|$)/ },
   { kind: "agent-control", severity: "high", name: /(^|_)(prompt|system_prompt|instruction|instructions|memory|context|persona)(_|$)/, arg: /(^|_)(system_prompt|instruction|instructions|persona)(_|$)/ },
   { kind: "env-access", severity: "medium", name: /(^|_)(env|environment|getenv|setenv|config|settings)(_|$)/, arg: /(^|_)(env|environment|env_var)(_|$)/ },
-  { kind: "file-read", severity: "low", name: /(^|_)(read|read_file|cat|open|load|list_directory|ls|glob|search_files)(_|$)/, arg: /(^|_)(path|file|filename|filepath|directory|dir)(_|$)/ },
+  // `read`, `open` and `load` are not here; see `fileRead` below.
+  { kind: "file-read", severity: "low", name: /(^|_)(read_file|cat|list_directory|ls|glob|search_files)(_|$)/, arg: /(^|_)(path|file|filename|filepath|directory|dir)(_|$)/ },
 ];
+
+/*
+ * Writing files, which needs more than a verb.
+ *
+ * It was one rule like the others: any of a dozen verbs in the name, or an argument called
+ * `content` or `data`. So the official memory server -- `delete_entities`, `delete_relations`,
+ * and `add_observations` with a `contents` field -- was labelled as writing files at HIGH, and an
+ * organization's overview said two of its three servers could write files when one could. Found
+ * by using the product. A verb like `delete` or `move` says something changes; whether it is a
+ * file depends on what is being deleted or moved.
+ *
+ * So, in order:
+ * - verbs that only mean one thing (`write`, `unlink`, `chmod`, `mkdir`...) count on their own;
+ * - other changing verbs count when the name says what they act on is a file, directory or path,
+ *   or the tool takes a path;
+ * - an argument naming where something is written (`destination`) counts on its own, and one
+ *   carrying what is written (`content`, `data`) counts only beside a path.
+ */
+const FILE_ONLY_VERBS = /(^|_)(write|create_file|put_file|unlink|chmod|chown|mkdir|rmdir|truncate)(_|$)/;
+const CHANGING_VERBS = /(^|_)(create|save|delete|remove|rename|move|copy|edit|append|put|overwrite|replace|patch)(_|$)/;
+const FILE_NOUNS = /(^|_)(file|files|filename|dir|dirs|directory|directories|folder|folders|path|paths)(_|$)/;
+const PATH_ARGS = /^(path|paths|file|files|filename|filepath|file_path|directory|dir|folder|source_path)$|(^|_)(path|filepath|filename)$/;
+const DESTINATION_ARGS = /(^|_)(destination|dest|dest_path|target_path|output_path|out_path)(_|$)/;
+const CONTENT_ARGS = /(^|_)(contents|content|data|text|body)$/;
+
+function fileWrite(name: string, args: ReadonlyArray<readonly [string, string]>): string | undefined {
+  if (FILE_ONLY_VERBS.test(name)) return "name";
+  const path = args.find(([, normalized]) => PATH_ARGS.test(normalized));
+  if (CHANGING_VERBS.test(name) && (FILE_NOUNS.test(name) || path)) return "name";
+  const destination = args.find(([, normalized]) => DESTINATION_ARGS.test(normalized));
+  if (destination) return `arg:${destination[0]}`;
+  const content = args.find(([, normalized]) => CONTENT_ARGS.test(normalized));
+  if (content && path) return `arg:${content[0]}`;
+  return undefined;
+}
+
+/*
+ * Reading files, by the same reasoning: `read_graph` and `open_nodes` read the memory server's
+ * own graph, and were labelled as reading files because of the verb alone. A reading verb counts
+ * when the name says what it reads is a file, directory or path; a tool taking a path is caught
+ * by the rule's argument pattern whatever it is called.
+ */
+const READING_VERBS = /(^|_)(read|open|load)(_|$)/;
+
+function fileRead(name: string): boolean {
+  return READING_VERBS.test(name) && FILE_NOUNS.test(name);
+}
 
 /*
  * Cyrillic and Greek letters that are drawn like Latin ones. `run_comm\u0430nd` reads as
@@ -142,6 +189,9 @@ export function toolCapabilities(tool: { name?: string; inputSchema?: unknown } 
     const hit = rule.arg ? args.find(([, normalized]) => rule.arg?.test(normalized)) : undefined;
     if (hit) found.set(rule.kind, { kind: rule.kind, severity: rule.severity, evidence: `arg:${hit[0]}` });
   }
+  if (!found.has("file-read") && fileRead(name)) found.set("file-read", { kind: "file-read", severity: "low", evidence: "name" });
+  const writes = fileWrite(name, args);
+  if (writes) found.set("file-write", { kind: "file-write", severity: "high", evidence: writes });
 
   return [...found.values()].sort(
     (a, b) => CAPABILITY_SEVERITIES.indexOf(a.severity) - CAPABILITY_SEVERITIES.indexOf(b.severity) || a.kind.localeCompare(b.kind),
