@@ -5,26 +5,57 @@ public servers in the MCP registry and diffing it against the previous reading.
 
 ## Headline
 
-Not enough history yet. The first run only establishes a baseline; a drift rate needs at
-least two runs over the same servers.
+| Measure | Value |
+| --- | ---: |
+| Changes per server-year | 56.39 |
+| Servers that ever changed | 104 of 6357 (1.6%) |
+| Comparisons that found a change | 104 of 6122 (1.7%) |
+| Observation window | 673.2 server-days over 3 run(s) |
+
+Quote the per-server-year figure. The per-comparison share depends on how often the crawl
+runs and is not comparable to anything measured on a different schedule.
+
+Both are lower bounds. The crawl samples a surface rather than watching it, so two changes
+between consecutive readings count once, and a change reverted before the next reading is
+not counted at all. The true rate is at least this.
 
 ## What changed
 
-_No changes observed yet._
+| Change kind | Occurrences |
+| --- | ---: |
+| `tool.changed` | 164 |
+| `tool.description.changed` | 77 |
+| `tool.input_schema.narrowed` | 63 |
+| `tool.removed` | 51 |
+| `tool.input_schema.changed` | 50 |
+| `tool.added` | 45 |
+| `server.identity.changed` | 37 |
+| `server.instructions.changed` | 36 |
+| `tool.output_schema.changed` | 35 |
+| `tool.input_schema.widened` | 33 |
+| `resource.changed` | 7 |
+| `tool.capability.gained` | 4 |
+| `resource.added` | 3 |
+| `resource.removed` | 3 |
+| `server.capabilities.narrowed` | 2 |
+| `tool.behavior.relaxed` | 2 |
+| `tool.behavior.escalated` | 1 |
+| `server.protocol.changed` | 1 |
+| `prompt.added` | 1 |
 
 ## Coverage, and what it misses
 
 | Population | Count |
 | --- | ---: |
-| Servers measured in the last run | 6154 |
-|  of those, re-baselined after a collector change (not compared) | 6032 |
-| Required credentials (not measurable anonymously) | 5676 |
+| Servers measured in the last run | 6165 |
+|  of those, re-baselined after a collector change (not compared) | 23 |
+| Required credentials (not measurable anonymously) | 5667 |
 | Unreachable | 2044 |
 | stdio packages run in a container | 0 |
-| stdio packages skipped | 1040 |
-|  of those, unpinned or not an npm package | 304 |
-| Failing 3+ runs in a row (treated as gone) | 0 |
-| Failing for fewer runs than that (an outage, so far) | 7854 |
+| stdio packages skipped | 1038 |
+|  of those, unpinned or not an npm package | 303 |
+| Failing 3+ runs in a row (treated as gone) | 7463 |
+| Failing for fewer runs than that (an outage, so far) | 393 |
 
 This run read **remote servers only**. Auditing a stdio entry means executing a third-party package; `--include-stdio` does it in a container, and without that flag those entries are skipped. Remote servers skew toward hosted and commercial operators, so a remote-only sample is not a uniform sample of everything anyone runs.
 
@@ -39,10 +70,117 @@ authorized one sees, so counting them would mix two different measurements.
 
 | Revision | Servers |
 | --- | ---: |
-| `legacy/2025-11-25` | 3089 (50.2%) |
-| `modern/2026-07-28` | 1698 (27.6%) |
-| `legacy/2025-06-18` | 1056 (17.2%) |
-| `legacy/2025-03-26` | 189 (3.1%) |
+| `legacy/2025-11-25` | 3082 (50.0%) |
+| `modern/2026-07-28` | 1711 (27.8%) |
+| `legacy/2025-06-18` | 1062 (17.2%) |
+| `legacy/2025-03-26` | 188 (3.0%) |
 | `legacy/2024-11-05` | 122 (2.0%) |
 
-_Last run: 2026-11-12T10:32:31.722Z. First run: 2026-11-11T12:05:24.564Z._
+## Servers that changed in the latest run
+
+- `ai.agentgates/compute`
+- `ai.agilex.service/docs`
+- `ai.capxule/capxule`
+- `ai.commercebook/commercebook`
+- `ai.dotsy/mcp`
+- `ai.e-acc/eacc`
+- `ai.hoghogh/chistara`
+- `ai.homouniversalis/cryptography-merkle-tree-rfc6962-jws-ed25519-es256-zero-knowledge-python-ast-code-audit-formal-verification-mutation-testing-reed-muller-multi-agent-deep-think-crucible-barycenter`
+- `ai.homouniversalis/diamond-verifier`
+- `ai.instantclips/instantclips`
+- `ai.letsship/ship`
+- `ai.machinerelations/mri`
+- `ai.makeviral/makeviral`
+- `ai.pipefire/pipefire`
+- `ai.ptally/ptally`
+- `ai.shorti/shorti`
+- `ai.withby/withby`
+- `ai.zindex/zindex`
+- `app.dataclue/catalog`
+- `app.everynumber/spreadsheet-dashboard`
+- `app.fluentive/mcp`
+- `app.liquidvision/derivatives`
+- `app.luala/luala`
+- `app.quantcalc/retirement-engine`
+- `app.travelhealthpass/healthpass`
+- `app.ucad/ucad`
+- `app.vercel.fork-for-agents/fork`
+- `app.vercel.watchesinstock-mcp/watches-in-stock`
+- `at.memebo/memeboat-mcp`
+- `au.sagashi/sagashi`
+- `biz.online-druck/druckprodukte`
+- `ca.bakhour/profitcollector`
+- `ca.veilpoint/opportunity-exchange`
+- `ch.kulalabs.pazair/pazair`
+- `ch.neubau-radar/baupublikationen`
+- `ch.zuerstzuhause/neubauprojekte`
+- `co.esimcompare/travel-esim-prices`
+- `com.6ix/mcp`
+- `com.ableandagent/able-and-agent`
+- `com.ableandagent/sandbox`
+- `com.agentalog/meta-agent-tools`
+- `com.aikizi/mcp`
+- `com.alertasubastas/alertasubastas`
+- `com.alexandrecaramaschi/public-content`
+- `com.apidefects/errata`
+- `com.astralread/astrology`
+- `com.bota-chat/bota`
+- `com.botsrated/botsrated`
+- `com.brofindai/brofindai`
+- `com.calcbright/calcbright`
+- `com.carvoltlab/carvoltlab`
+- `com.commsharbor/commsharbor`
+- `com.cooperemail/cooper-email`
+- `com.crm-connector/crm-connector`
+- `com.dataroia/data-trust`
+- `com.devexpress/docs`
+- `com.difficat/difficat`
+- `com.doesitworkin/doesitworkin`
+- `com.doseedo/doseedo`
+- `com.doseedo/film-score`
+- `com.editalmd/editalmd`
+- `com.emailmovers/mydatahub`
+- `com.essentras/placements`
+- `com.fillprompt/fillprompt`
+- `com.gaduin/gaduin`
+- `com.galacticbridge/radar-exit-check`
+- `com.getagentdepot/agent-provider-depot`
+- `com.getcloseknit/close-knit`
+- `com.googleapis.datastream/mcp`
+- `com.growvib/growvib`
+- `com.howtoreadthefuture/podcast`
+- `com.i2dev/snap`
+- `com.kairossignal/kairos-signal`
+- `com.kareverse/kareverse`
+- `com.keelstats/keel-stats`
+- `com.kulicadvisory/aictionbot-werkbank`
+- `com.kurodyne/catalog`
+- `com.kyde/score`
+- `com.leonidalab/gta6-facts`
+- `com.lordevo/agent-directory`
+- `com.md2sign/md2sign`
+- `com.midasiteurope/civil-nx`
+- `com.msg91.mcp/mcp`
+- `com.ncstatutes/ncgs`
+- `com.neuronto/agents-tools-search-discovery-ard-registry`
+- `com.newvsts/newvsts`
+- `com.nocthost/mcp`
+- `com.nomnaviet/han-nom`
+- `com.okfindex/okfindex`
+- `com.opafex/business-automation`
+- `com.ortexo/mcp`
+- `com.owlchart/owlchart`
+- `com.pontofato/pontofato`
+- `com.praxikon/praxikon`
+- `com.prilago/lp-intelligence`
+- `com.progrss/plates`
+- `com.radar-cnpj/radar-cnpj`
+- `com.redpanda/docs-mcp`
+- `com.reflowpdf/reflowpdf`
+- `com.registryverify/florida-sunbiz-business-kyb`
+- `com.shipmyform/shipmyform`
+- `com.siemens.mcp/siemens`
+- `com.sienasociety/siena`
+- `com.skiplagged/mcp`
+
+_Last run: 2026-11-12T13:10:52.006Z. First run: 2026-11-11T12:05:24.564Z._

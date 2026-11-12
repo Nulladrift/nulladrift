@@ -1,0 +1,1221 @@
+{
+  "lockfileVersion": 2,
+  "subjects": {
+    "com.courtdelta/court-delta": {
+      "kind": "mcp-server",
+      "source": {
+        "client": "manual",
+        "file": "registry.modelcontextprotocol.io"
+      },
+      "transport": {
+        "type": "http",
+        "url": "https://mcp.courtdelta.com/mcp"
+      },
+      "protocol": {
+        "era": "legacy",
+        "version": "2025-11-25"
+      },
+      "serverInfo": {
+        "name": "Court Delta",
+        "version": "1.0.0"
+      },
+      "capabilities": {
+        "experimental": {},
+        "extensions": {
+          "io.modelcontextprotocol/ui": {}
+        },
+        "logging": {},
+        "prompts": {
+          "listChanged": true
+        },
+        "resources": {
+          "listChanged": true,
+          "subscribe": false
+        },
+        "tools": {
+          "listChanged": true
+        }
+      },
+      "instructions": "Tools for North Carolina court records: look up a case by number or citation; search cases by a person's name, a BUSINESS name, or an ATTORNEY's State Bar number; screen a short list of names; and search the money-judgment / criminal-sentence index. Covers hearing dates, case status, charges, the party roster (incl. counsel and how they came to the case), traffic-citation waiver eligibility, bail / bond-forfeiture signals, civil claims and service of process, money judgments and what is owed on them, and links to scanned court documents. North Carolina only. Read-only. Informational, not legal advice.\n\nCriminal and civil cases carry different blocks: `bailRisk` is criminal-side, `service` and `causesOfAction` are civil-side. A null block means NOT APPLICABLE to that kind of case — never report it as an absence of fact (e.g. a null `service` on a criminal case does not mean nobody was served).\n\n`check_traffic_charge` is the exception to the slowness below: it answers \"must I appear for this ticket?\" from the charges alone, instantly, with no case number and no portal request. Use it when the user has a paper citation but no case yet; use `lookup_court_case` whenever a case number exists.\n\nTypical flow: if you have a case or citation number, call `lookup_court_case` directly. If you only have a person's name, call `search_cases_by_party` first, then look up the row the user cares about.\n\nMATCH THE SEARCH TOOL TO WHAT THE SUBJECT IS — they are separate portal modes, not filters on one search, and the wrong one returns nothing rather than a worse answer. A person -> `search_cases_by_party` (needs first AND last). A company, LLC, insurer, hospital or landlord -> `search_cases_by_business` (party search cannot search an organization at all — it has no first/last name). A lawyer's own docket -> `search_cases_by_attorney`, by bar number or by name.\n\nFILING DATE IS NOT HEARING DATE, and confusing them is the easiest way to give a confidently wrong answer here. Every `file_date_*` filter on the case searches bounds WHEN A CASE WAS OPENED. A case filed in 2023 has hearings today. For \"what am I in court for today / tomorrow / this week\", or any question about a calendar or docket day, call `get_attorney_hearing_calendar` — filtering `search_cases_by_attorney` to today's file date answers a different question and returns nothing.\n\nNeither the business nor the attorney search reports a usable party role: the portal stamps every row \"Defendant\" even when the subject sued, was the victim, or merely appeared as counsel. Those fields are withheld rather than passed on, so never state which side someone was on from a search row — read the caption in `case_name`, or call `lookup_court_case`.\n\nCases and judgments are two different indexes. `search_cases_by_party` finds CASES (charges, hearings, next court date). `search_judgments` finds what a court ENTERED — money judgments, criminal sentences, and NC's real-property lien records, with the amount owed when called with detail=true.\n\nLIENS AND LIS PENDENS LIVE IN THE JUDGMENT INDEX, NOT THE CASE INDEX. NC dockets them as \"Civil Misc. Judgment\" records, and each row's `cause_of_action` names the type — 'CV - Claim of Lien' (G.S. 44A), 'CV - Federal Tax Lien', 'CV - Lis Pendens', 'CV - Transcript of Judgment' and more. So a title question, a lien search, \"how much do they owe\", or screening a tenant / borrower / counterparty all go to `search_judgments`. It also has NO 200-result cap, unlike the case search, so it is the only surface here where finding nothing is real evidence of nothing. Its rows carry a `case_number` you can hand to `lookup_court_case` for the case behind the judgment.\n\nSearches and cold lookups run a LIVE court-portal request and take 15-60s. That is normal; say you're checking rather than treating it as an error. `search_judgments` is the other exception — it hits an index that is not WAF-gated and answers in ~1-3s, so do not warn about a wait on that one.\n\nWhen answering a person's question, present the requested case information directly and plainly. Do not comment on the API's data shape, null or absent fields (e.g. a null citationOptions on a civil or DWI case is normal), schema robustness, or suggest code changes, fixes, or tests — those are irrelevant to someone asking about a court case.\n\nEVERY case lookup ends with TWO things, and they are PER CASE, not per answer: that case's `caseSummaryUrl` — the durable, shareable link to the full record, always give it — and, when `alerts.available` is true, an offer of case-change alerts. Look up two cases and the user gets two links and two offers, each beside its own case; one combined mention at the end of the answer is wrong. Every lookup result carries a `present_to_user` field spelling out what to do for that case — follow it.",
+      "tools": [
+        {
+          "name": "check_traffic_charge",
+          "title": "Check whether a North Carolina (NC) traffic charge requires a court appearance",
+          "description": "\"Do I have to go to court for this ticket?\" — answered from the citation itself.\n\nFor someone holding a paper North Carolina (NC) citation, BEFORE their case is searchable. Returns\nwaiver eligibility per charge (waivable / mandatory / conditional) plus how to ask\nfor a reduction or dismissal. FAST — no court-portal request, unlike the other tools.\n\nTHE OUTPUT IS OPTIONS WITH CONSEQUENCES, NOT A RECOMMENDATION. Waiving is a guilty\nplea to the charge as written (an admission of responsibility on an infraction);\nrequesting a reduction asks the District Attorney to change the charge before any\nplea; the two are alternatives. Relay them as choices for the person to make, and\nnever tell them which to pick.\n\nTIMING IS PART OF THE ANSWER, NOT A DETAIL. Both routes have to be completed BEFORE\nTHE CASE IS CALLED, not merely on or before the court date — once the calendar reaches\nit the clerk is working a courtroom docket, and nothing pauses the hearing. Read\n`citationOptions.state` before saying anything about appearing:\n\n  \"lastDay\"        the court date is TODAY. It can still be settled with the clerk,\n                   but only before the case is called, and there is NO time left to\n                   file online — do not offer Guide & File. If the clerk cannot be\n                   reached in time, the person should go to court.\n  \"noCourtDate\"    no upcoming hearing, OR today's has already been called. Do NOT\n                   assert a failure to appear — you cannot see the courtroom and they\n                   may have attended that morning. Say: if they already went, this\n                   does not apply; if they missed it, contact the Clerk of Superior\n                   Court, because a missed date can become an FTA.\n  \"mandatory\" | \"conditional\" | \"onlineWaivable\" | \"inPersonWaivable\"  as before.\n\nNEVER REPORT \"no appearance needed\" ON \"lastDay\" OR \"noCourtDate\", however many of\nthe individual charges come back `waivable`. Missing a court date on a Chapter 20\ncase means an order for arrest and a G.S. 20-24.1 revocation that lasts until the\ncharge is actually disposed. `howToRequest` already carries the right wording for\nevery state — relaying it verbatim is the safe move.\n\nIF THE USER HAS A CASE NUMBER, USE `lookup_court_case` INSTEAD. It runs these same\nrules on the real charges and also gives the court date and the amount owed. This\ntool is for when there is no case number yet.\n\nTHE STATUTE DRIVES THE ANSWER. Pass the G.S. number printed on the citation\n(e.g. \"20-141(J1)\", \"G.S. 20-127(D)\"). Without a parseable statute a charge cannot\nbe classified — ask the user to read the \"G.S.\" line off their citation rather than\nguessing from the offense name. `unclassified` lists any charge that fell through.\n\nPASS EVERY CHARGE ON THE CITATION, not just the one asked about. Eligibility is\ncomputed ACROSS the citation: one mandatory charge forces an appearance for all of\nthem. Reporting on a single charge in isolation gives the wrong answer — a real Wake\ncase has two waivable charges and one DWLR, and the correct answer is \"you must\nappear\".\n\n`viaCompanionCharge: true` on a charge means exactly that: it would be waivable on\nits own, but AOC mandatory-appearance item #39 makes every violation on a citation\nmandatory once ANY violation on it is. Never tell someone they can pay such a charge\noff separately or handle it by mail — the whole citation must be appeared on. Say\nwhich charge is forcing it, since that is usually the one they want to ask the\nDistrict Attorney about.\n\nSPEED CHANGES THE ANSWER. With no charged speed a speeding charge comes back\n`conditional`, not waivable: over 80 mph, or more than 15 over while over 55, is\nmandatory. Pass `actual_speed`/`speed_limit` if known — or just pass the offense line\nverbatim (\"SPEEDING 85 IN A 65\"), which is parsed for the speed.\n\nPASS `offense` VERBATIM FROM THE CITATION for every charge, not a paraphrase. A few\nrules cannot be decided from the statute number alone and are read off the offense\ntext: texting is waivable UNLESS it was while operating a school bus, and a\nregistration or title violation is waivable UNLESS it involves stolen, altered or\nfictitious plates or certificates. Both statutes are the same either way, so a\nparaphrase that drops \"school bus\" or \"fictitious\" silently turns a mandatory\nappearance into \"waivable\". If the user summarises rather than quotes, ask for the\nexact wording on the citation before answering.\n\n`county` (optional) decides the reduction path: participating counties get NC's\nonline Guide & File link, others get the in-person District Attorney route.\n\nPASS `court_date` WHENEVER THE CITATION SHOWS ONE (YYYY-MM-DD), AND PASS THE REAL ONE.\nWithout it the answer assumes there is no upcoming hearing and comes back as \"contact\nthe Clerk of Superior Court\" instead of the resolution options — an open citation with\nno court date often means a failure to appear has already happened. It also unlocks\n`reductionSubmitBy`: NC's online reduction request must be filed SEVERAL BUSINESS DAYS\nBEFORE the court date, so without the date that cutoff is silently missing rather than\nreported.\n\nThe date is read against the Eastern-time clock, so it changes the answer in both\ndirections: a date already past — INCLUDING EARLIER THE SAME DAY — returns\n\"noCourtDate\", and a date that is TODAY returns \"lastDay\". Guessing or rounding the\ndate is therefore not a harmless approximation; it is how someone gets told a ticket\nis cleanly waivable on the morning of their hearing.\n\n`citationOptions.reduction` is a PRE-SCREEN, never an eligibility verdict. Each gate\nis pass / fail / unknown, and `unknown` means the court record cannot decide it —\nreport it as unknown, never as a disqualification. Four of the program's criteria\n(age 18+, valid NC licence, non-CDL, NCDMV compliance on a companion charge) are not\nin court data at all and come back in `userMustConfirm` for the person to check. The\n10-19 mph band and the 80 mph ceiling are AOC / District Attorney PROGRAM CRITERIA,\nnot statute — never attach a G.S. citation to them. The District Attorney decides\nwhether to offer a reduction.\n\nA null `citationOptions` means these are NOT waivable-citation charges — either not\nNC Chapter-20 traffic, or a serious criminal charge (impaired driving, death by\nvehicle, eluding) or a felony, where \"it's just a ticket\" framing is wrong. Say that\nplainly; do not present it as \"no appearance required\".\n\nGeneral guidance for the charges given, NOT a lookup of any real case, and not legal\nadvice. `amountDue` is always null here — there is no case to read a balance from.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "charges": {
+                "description": "At least one charge as {offense, statute}. Speeds may be numbers or strings.",
+                "examples": [
+                  [
+                    {
+                      "actual_speed": 82,
+                      "offense": "SPEEDING",
+                      "speed_limit": 65,
+                      "statute": "20-141"
+                    }
+                  ]
+                ],
+                "items": {
+                  "description": "One charge off a citation. `statute` is what actually drives the answer.\n\nFor a speeding charge pass BOTH `actual_speed` and `speed_limit`. Points key off the\nabsolute speed, but the mandatory 30-day suspension in G.S. 20-16.1 also has a\n\"more than 15 mph over the limit\" branch that cannot be evaluated without the limit.\n\nSPEEDS AND FLAGS ACCEPT EITHER A NUMBER OR A STRING. They were `str`-only, and callers\nkept sending `speed_limit: 65` — the obvious thing to do, since a speed limit is a\nnumber — which pydantic rejected outright:\n\n    1 validation error for call[check_traffic_charge]\n    charges.0.speed_limit  Input should be a valid string [input_value=65]\n\nThat is a wasted round-trip for something the server can trivially normalise, and no\namount of documentation fixes it: the caller has to already know a number must be\nquoted. `_normalise_charge` stringifies on the way to the upstream, which wants text.",
+                  "properties": {
+                    "actual_speed": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "integer"
+                        },
+                        {
+                          "type": "number"
+                        }
+                      ]
+                    },
+                    "construction_zone": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "boolean"
+                        }
+                      ]
+                    },
+                    "degree": {
+                      "type": "string"
+                    },
+                    "offense": {
+                      "type": "string"
+                    },
+                    "school_zone": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "boolean"
+                        }
+                      ]
+                    },
+                    "speed_limit": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "integer"
+                        },
+                        {
+                          "type": "number"
+                        }
+                      ]
+                    },
+                    "statute": {
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "county": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "court_date": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              }
+            },
+            "required": ["charges"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "annotations": {
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Check whether a North Carolina (NC) traffic charge requires a court appearance"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "digest": "sha256:361e7af3e9c5f508102f6f6738c525223c245d6549241d2c255d5567e8b5c33c"
+        },
+        {
+          "name": "court_delta_help",
+          "title": "What Court Delta can do (capabilities + example questions)",
+          "description": "What this Court Delta server covers, with example questions.\n\nCall this ONLY when the user asks what this server / connector can do, what data it\nhas, or how to use it. It is NOT a step toward answering a court question — if the\nuser asked about a case, a citation, a person, or a bond, skip this and call\n`lookup_court_case` / `search_cases_by_party` directly. Calling this first just\ndelays their answer.\n\nTakes no arguments. Returns static text; makes no court-portal request.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {},
+            "type": "object"
+          },
+          "outputSchema": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "annotations": {
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "What Court Delta can do (capabilities + example questions)"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "digest": "sha256:9a6687447f059509778aef739a9392fe8a9ea3e9eb2d2d1f91d08a57a017935e"
+        },
+        {
+          "name": "court_visit_info",
+          "title": "Courthouse location, phone and nearby parking for a North Carolina (NC) county",
+          "description": "Which courthouse, where it is, when it's open, and where to park.\n\nFor \"I have court on Tuesday — where do I go?\". Give a `county` (\"Wake\") or a\n`caseNumber` to derive it. From the North Carolina (NC) AOC directory plus Google Places.\n\nRETURNS `locations[]`, NOT ONE COURTHOUSE. 19 counties have several venues and\npicking one silently is a real way to send someone to the wrong building. Wake has a\nCourthouse, a Justice Center AND a Clerk's office; Guilford has courthouses in\nGreensboro and High Point, in different cities. `multipleLocations:true` means you\nmust disambiguate rather than assume.\n\nTO PICK THE RIGHT ONE, USE THE CASE'S HEARING LOCATION. `lookup_court_case` returns\n`upcomingHearings[].location` (e.g. \"Wake Co. Justice Center\"), which usually names\nthe building. Match it against `locations[].name`, allowing for \"Co.\" vs \"County\".\nBUT DO NOT FORCE A MATCH: measured on real hearings, a third have `\"No location\"` at\nall, and several use names that don't correspond to the directory —\n\"Buncombe Co. Judicial Complex\" is the Buncombe County Courthouse,\n\"Alamance Co. JB Allen\" is the Alamance County Courthouse. When it doesn't map\ncleanly, SHOW THE OPTIONS and let the user choose. Guessing between Wake's Courthouse\nand its Justice Center is exactly the wrong place to be confident.\n\nHOURS ARE REAL — and watch for lunch closures. A value like \"08:30-12:30, 13:30-17:00\"\nmeans the venue SHUTS between those times; someone arriving at 1pm in Nash, Wilson,\nCherokee or either Guilford courthouse finds a locked door. Say the closure out loud.\nCourts also close on NC state holidays, which these hours do not encode.\n\n`parkingAttributes` are what the venue publishes — \"freeLot\", \"paidGarage\",\n\"onSite\" etc. ABSENT MEANS NOT CLAIMED, NOT \"no parking\". `nearbyParking` (actual\nlots near the building, with `distanceMeters` and a `mapsUrl`) and `parkingMapUrl`\n(a static map image, courthouse marked \"C\") appear on AT MOST ONE location — the one\nthe scrape described. Their absence on the others is not a statement about them.\n\n`accessibility` is published PER BUILDING — \"wheelchairEntrance\", \"wheelchairParking\",\n\"wheelchairRestroom\", \"wheelchairSeating\", \"restroom\". Report what a venue claims. An\nABSENT flag is NOT a claim that the feature is missing: every venue claims wheelchair\nentrance, parking and restroom, but only 15 of 121 claim accessible SEATING, and no\nvenue publishes assisted-listening data at all. For anyone who depends on a specific\naccommodation, give what's listed and say to call the courthouse to confirm the rest —\ndo not report \"not accessible\" from a missing flag.\n\n`source:\"nccourts-scrape\"` means the directory had no entry and this fell back to the\nlive site, so `hours` will be empty — tell the user to call rather than inventing\nthem. All 100 counties are currently in the directory, so this should be rare.\n\nTHIS IS LOCATION INFO, NOT CASE INFO — nothing about hearings, charges or status; use\n`lookup_court_case` for those. Cite the disclaimer: verify with the clerk before\ntravelling. Read-only. NC only.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "caseNumber": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "county": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              }
+            },
+            "type": "object"
+          },
+          "outputSchema": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "annotations": {
+            "openWorldHint": true,
+            "readOnlyHint": true,
+            "title": "Courthouse location, phone and nearby parking for a North Carolina (NC) county"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "digest": "sha256:99ad3b5235f78182004f3cafd286b835d7aabc7d3565855be1771adacaeddb65"
+        },
+        {
+          "name": "estimate_license_points",
+          "title": "Estimate North Carolina (NC) driver's-licence points for traffic charges",
+          "description": "Driver's-licence points under G.S. 20-16(c) — a COMPARATOR, not a lookup.\n\nReturns what each possible outcome would cost: convicted as charged, reduced to\nimproper equipment, prayer for judgment, or dismissed. That comparison is the useful\nanswer; a single number is not. Fast — no court-portal request.\n\nLICENCE POINTS ONLY. Insurance (SDIP) points are a SEPARATE system with different\nvalues, set by the Rate Bureau rather than statute, and are NOT included. If someone\nasks what a ticket will do to their premium, say this tool doesn't cover that.\n\nTHE PJC SCENARIO'S ZERO HAS TWO EXCEPTIONS and you must state them. Under\nG.S. 20-4.01(4a) a prayer for judgment counts as a CONVICTION — so it does carry\npoints — if it is the THIRD OR SUBSEQUENT PJC within any five-year period, or for ANY\nPJC where the driver holds a CDL or the offence was in a commercial vehicle. Prior PJC\nhistory is not in court records here, so the 0 assumes neither applies.\n\n`unmatched[]` LISTS CHARGES THAT COULD NOT BE SCORED — always mention them. The\nschedule has a real \"All other moving violations = 2\" row, so a charge that matched\nthe catch-all (`viaCatchAll: true`) and one we failed to classify are different\nthings; do not let a total silently omit either.\n\nNon-Chapter-20 charges score nothing at all — a drug or assault charge is not a\ntraffic offence and gets no points. Non-moving violations (improper equipment,\nparking, inspection, registration, adult seat belt) are 0, which is why \"reduce to\nimproper equipment\" is the standard outcome people seek.\n\nSPEEDING TURNS ON ABSOLUTE SPEED, not how far over the limit: the schedule row is\n\"speeding in excess of 55 mph = 3\". 50-in-a-45 is 2, not 3. Pass `actual_speed` when\nknown — without it a speeding charge cannot be scored and lands in `unmatched`.\n\nPOINTS ARE NOT THE WHOLE CONSEQUENCE OF A SPEEDING CONVICTION. Check\n`excessiveSpeedingSuspension` and report it whenever it applies. G.S. 20-16.1(a)\nmandates a 30-DAY LICENCE SUSPENSION, imposed by the Division without a preliminary\nhearing, on conviction of either (i) more than 15 mph over the limit while ALSO above\n55 mph, or (ii) any speed above 80 mph. This is separate from and additional to points.\nAn 85-in-a-65 is only 3 points but ALSO costs the licence for 30 days — reporting the 3\nalone is a true number that leaves a false impression. Pass `speed_limit` as well as\n`actual_speed`: without the limit, branch (i) cannot be assessed and the tool abstains\n(`determinable: false`) rather than implying there is no suspension.\n\nThat suspension attaches only ON CONVICTION, so a reduction, PJC or dismissal avoids it\n— which is usually the single biggest factor in the comparison, bigger than the points.\n\nG.S. 20-16.1(b)(1): on a FIRST conviction only, the trial judge \"may when feasible\"\nallow a limited driving privilege for purposes reasonably connected with the HEALTH,\nEDUCATION AND WELFARE of the person convicted and their family. There is no listed\n\"work\" privilege — employment is commonly argued under welfare, so do not describe it\nas a work privilege as though the statute named one. The permit is valid for 30 days\nfrom issuance and the judge may restrict days, hours, vehicle types and routes.\n\nTHIS TOOL CANNOT TELL WHETHER IT WOULD BE A FIRST CONVICTION — prior convictions are\nnot in the record, so the seven-year look-back cannot be applied. The privilege is\ndiscretionary and conditioned on feasibility. Answer \"you can ask the court\", never\n\"yes, you will get one\". Do NOT import limited-privilege rules from the DWI statute\n(G.S. 20-179.3); there is no \"hard suspension period\" concept in G.S. 20-16.1.\n\nSUSPENSION FOR ACCUMULATED POINTS is a different mechanism again, with TWO thresholds\n(G.S. 20-16(a)(5)): 12 points in three years, and 8 in\nthe three years after a licence is reinstated. Pass `priorPoints` and\n`recentlyReinstated` if the user knows them — neither is in any court record, so\nwithout them no suspension assessment is made.\n\nSet `commercialLicense` or `outOfStateLicense` and the tool REFUSES rather than\nguessing: a separate, higher schedule applies to CDL holders, and an out-of-state\nconviction is assessed by the licensing state under the Driver Licence Compact.\n\nInformational, not legal advice. Whether a reduction or PJC is actually available is\na decision for the District Attorney and the court.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "charges": {
+                "description": "At least one charge as {offense, statute}.",
+                "examples": [
+                  [
+                    {
+                      "offense": "SPEEDING",
+                      "statute": "20-141"
+                    }
+                  ]
+                ],
+                "items": {
+                  "description": "One charge off a citation. `statute` is what actually drives the answer.\n\nFor a speeding charge pass BOTH `actual_speed` and `speed_limit`. Points key off the\nabsolute speed, but the mandatory 30-day suspension in G.S. 20-16.1 also has a\n\"more than 15 mph over the limit\" branch that cannot be evaluated without the limit.\n\nSPEEDS AND FLAGS ACCEPT EITHER A NUMBER OR A STRING. They were `str`-only, and callers\nkept sending `speed_limit: 65` — the obvious thing to do, since a speed limit is a\nnumber — which pydantic rejected outright:\n\n    1 validation error for call[check_traffic_charge]\n    charges.0.speed_limit  Input should be a valid string [input_value=65]\n\nThat is a wasted round-trip for something the server can trivially normalise, and no\namount of documentation fixes it: the caller has to already know a number must be\nquoted. `_normalise_charge` stringifies on the way to the upstream, which wants text.",
+                  "properties": {
+                    "actual_speed": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "integer"
+                        },
+                        {
+                          "type": "number"
+                        }
+                      ]
+                    },
+                    "construction_zone": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "boolean"
+                        }
+                      ]
+                    },
+                    "degree": {
+                      "type": "string"
+                    },
+                    "offense": {
+                      "type": "string"
+                    },
+                    "school_zone": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "boolean"
+                        }
+                      ]
+                    },
+                    "speed_limit": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "integer"
+                        },
+                        {
+                          "type": "number"
+                        }
+                      ]
+                    },
+                    "statute": {
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "commercialLicense": {
+                "default": false,
+                "type": "boolean"
+              },
+              "outOfStateLicense": {
+                "default": false,
+                "type": "boolean"
+              },
+              "priorPoints": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "recentlyReinstated": {
+                "default": false,
+                "type": "boolean"
+              }
+            },
+            "required": ["charges"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "annotations": {
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Estimate North Carolina (NC) driver's-licence points for traffic charges"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "digest": "sha256:d8b46aec006ee032c0838b091518340617549d9cc17c1dbe7f3f354cca293f8c"
+        },
+        {
+          "name": "get_attorney_hearing_calendar",
+          "title": "An attorney's court calendar (hearings) by North Carolina (NC) State Bar number",
+          "description": "\"What am I in court for today?\" — an attorney's HEARING CALENDAR, by bar number OR by name.\n\nREQUIRES `bar`, OR BOTH `last` AND `first`. A lone first or last name is rejected,\nand so is a call with no arguments at all — which is the most common way this tool\nis called wrongly.\n\nReturns every scheduled hearing in the date range: date and time, case number,\ncaption, hearing type, judge and courtroom. Defaults to TODAY in North Carolina (NC)\nwhen no dates are given, so `get_attorney_hearing_calendar(bar=\"21262\")` is\nexactly \"what's on my calendar today\".\n\nTHIS IS THE TOOL FOR \"TODAY\", \"TOMORROW\", \"THIS WEEK\" AND \"MY CALENDAR\".\n`search_cases_by_attorney` is a different question: it lists the cases an attorney\nis of record on and its `file_date_*` filters bound WHEN A CASE WAS FILED. A case\nfiled in 2023 has hearings today, so filtering that tool's file date to today\nreturns cases OPENED today — almost always nothing. Never substitute it for this.\n\nPREFER THE BAR NUMBER whenever the user can supply it: it resolves to exactly one\nattorney, and a name may not — see `attributable` below for what that costs.\n\nREAD `attributable` BEFORE ATTRIBUTING THE CALENDAR TO ANYONE. True means these\nhearings belong to exactly one attorney; false means they do not and must not be\ndescribed as one person's day. On a BAR search it is always true and\n`attorney_name` is null — the hearing search returns no name, so that null means\n\"not reported\", not \"ambiguous\".\n\nA NAME SEARCH MAY NOT BE ATTRIBUTABLE. The hearing grid has no attorney column,\nso if a name matches several attorneys their hearings come back MERGED with no\nway to tell whose is whose. To catch this the tool cross-checks the name against\nthe case index and reports `matched_attorneys`:\n  - exactly one match -> `attorney_name` is set; treat the calendar as that person's\n  - more than one     -> the calendar spans them all and CANNOT be split. Say so and\n                         ask for a State Bar number. Do not present it as one\n                         lawyer's day.\n  - none              -> no cases exist under that name, so an empty calendar may\n                         mean the name is wrong rather than the day being clear.\nThe cross-check is evidence, not proof — a single match still warrants preferring\nthe bar number when the answer decides whether someone travels to a courthouse.\n\nSLOW ON A CACHE MISS — 30-120 seconds, because it drives a real browser through\ntwo CAPTCHAs. Tell the user you're pulling their calendar and let it run. This is\nthe opposite of `search_cases_by_attorney`, which is fast and needs no warning.\nRepeat calls for the same search and range are served from a 6-hour cache and\nreturn instantly; `cached: true` with `fetched_at` tells you which you got. If the\nanswer is being used to decide whether to appear somewhere, quote `fetched_at`.\n\nAN EMPTY CALENDAR IS A REAL ANSWER, BUT ONLY WHEN THE LOOKUP SUCCEEDED. If the\ncall returns an `error`, the calendar could NOT be checked — say that, and never\nturn it into \"you have nothing scheduled\". Those differ by someone missing court.\n\nCovers all 100 counties at once; there is no county filter on this search.\nPublic record. Read-only. NC only. Informational, not legal advice.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "bar": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "end": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "first": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "last": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "start": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              }
+            },
+            "type": "object"
+          },
+          "outputSchema": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "annotations": {
+            "openWorldHint": true,
+            "readOnlyHint": true,
+            "title": "An attorney's court calendar (hearings) by North Carolina (NC) State Bar number"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "digest": "sha256:b18f8502bd8e914e6c7b31fd9de931f1a220c7a94bcd05088a9ec342094c32f9"
+        },
+        {
+          "name": "list_cases_filed",
+          "title": "List North Carolina (NC) court cases filed by case type, county and date",
+          "description": "What was FILED — every case of a given type in a county over a date range.\n\nAnswers \"what IF cases were filed in Surry County yesterday?\", \"show me the estate\ncases opened in Wake this week\", \"how many civil suits were filed in Mecklenburg on\nMonday?\". This is the DOCKET axis. The other searches are name axes — use\n`search_cases_by_party` / `_business` / `_attorney` when you know WHO, and this when\nyou know WHAT and WHEN.\n\nEVERY ROW NOW CARRIES `case_status`, with no `enrich` needed — so do not call\n`lookup_court_case` merely to find out whether a case is open or closed.\nThe returned text is FINER-GRAINED than the four filter values: alongside \"Pending\"\nand \"Disposed\" you will see \"Disposed - Voluntary Dismissal\", \"Disposed - Dismissal\non Order of the Court\", \"Disposed - Clerk of Superior Court\" — i.e. HOW it ended, not\njust that it did. So never test it with equality against the filter vocabulary\n(`status == \"Disposed\"` misses most disposed rows); match on a prefix, and quote the\nportal's own wording when you report it.\n\n`date_start`/`date_end` are the **FILED** date, not a hearing date. A case filed in\n2023 can have a hearing today — for \"who is in court today\", use\n`get_attorney_hearing_calendar`. Accepts YYYY-MM-DD, or the words \"today\" and\n\"yesterday\" (resolved in North Carolina (NC) time).\n\n**Defaults to YESTERDAY, not today**, when no date is given, and says so in\n`date_note`. Today's filings are still being keyed in by clerks, so a \"today\" answer\nis a partial set that reads like a complete one.\n\n**`case_type` is a case-number PREFIX, not a type code.** `CR` also returns `CRS`;\n`CV` also returns `CVD` and `CVM`. Read `case_type_breakdown` before reporting a\ncount as \"42 CR cases\" — some of them may be CRS.\n\nCommon types: `IF` infraction (traffic), `CR`/`CRS` criminal, `CV`/`CVD`/`CVM` civil,\n`E` estate, `SP` special proceeding, `M` civil misc. judgment (liens, lis pendens).\n\n**Completeness.** The portal caps a search at 200 cases; this splits the query by\ndate and case-number prefix to get past that. If `truncated` is true the count is a\n**LOWER BOUND**, and `incomplete_prefixes` names the exact buckets that were not\nread — say what is missing rather than reporting the number as a total. The remedy\nis a shorter date range or a county.\n\n**An empty result is a real answer, but only when the lookup succeeded.** On an\nupstream failure this returns an `error`; never report that as \"nothing was filed\".\n\n`county_filter: \"server\"` means the county was applied by the portal itself before\nits cap, and every row is additionally checked against the county code embedded in\nits case number — so a county-filtered result here is exact, unlike the\nlocation-substring filter the name searches use.\n\nA date range is required (max 31 days) — an unbounded search cannot be completed.\nRead-only public record, North Carolina only. Informational, not legal advice.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "case_status": {
+                "anyOf": [
+                  {
+                    "enum": ["Pending", "Disposed", "Closed", "Reopened"],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "case_type": {
+                "description": "1-4 letters: IF (infraction), CR/CRS (criminal), CV (civil), E (estate), SP (special proceeding), M (magistrate).",
+                "examples": ["IF", "CR", "CV"],
+                "type": "string"
+              },
+              "county": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "date_end": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "date_start": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "limit": {
+                "default": 200,
+                "type": "integer"
+              },
+              "offset": {
+                "default": 0,
+                "type": "integer"
+              }
+            },
+            "required": ["case_type"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "annotations": {
+            "openWorldHint": true,
+            "readOnlyHint": true,
+            "title": "List North Carolina (NC) court cases filed by case type, county and date"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "digest": "sha256:65436816b491627623f974f172caf8dcff514d64f25f6eca309a6b04ce579613"
+        },
+        {
+          "name": "lookup_court_case",
+          "title": "Look up a North Carolina (NC) court case (by number, citation, or hash)",
+          "description": "Look up a North Carolina (NC) court case or traffic citation.\n\nProvide a case number (e.g. \"26CV001234-012\"), a citation number\n(e.g. \"92403H2\"), OR a `portalSessionRef` from a `search_cases_by_party` row.\n`caseNumber` is the STABLE, canonical identifier — prefer it for anything that\nisn't an immediate follow-up. `portalSessionRef` is a fast path that resolves an\nalready-searched case without re-running the portal search. Its lifetime is\nUNSPECIFIED and not guaranteed — the value rotates on every search and should be\ntreated as short-lived (it survives at least minutes; the upper bound is unmeasured);\nnever persist or reuse it. (`caseHash` is accepted as a deprecated alias for\n`portalSessionRef`.)\nReturns case status, upcoming and recently-elapsed hearing dates/times/\nlocations, charges (including speed fields for traffic cases), and — for\ntraffic charges — whether each charge is waivable or requires a court\nappearance under the NC AOC schedules, plus how to request a reduction or\ndismissal (online via NC Guide & File when the county participates, else in\nperson via the District Attorney) in `citationOptions.howToRequest`. Those are\nOPTIONS WITH CONSEQUENCES, NOT A RECOMMENDATION: waiving is a guilty plea to the\ncharge as written (an admission of responsibility on an infraction), while a\nreduction changes the charge before any plea, and both have to be completed BEFORE\nTHE CASE IS CALLED — not merely on or before the court date. Present them as choices,\nnot advice; `citationOptions.notice` carries this caveat verbatim.\n\n`citationOptions.state` IS THE RESOLUTION PATH AND OUTRANKS THE PER-CHARGE CLASSES.\nTwo of its values turn on the clock, and both forbid \"no appearance needed\" no matter\nhow many charges read `waivable`: \"lastDay\" (the hearing is TODAY — settleable with\nthe clerk only before the case is called, no time to file online) and \"noCourtDate\"\n(no upcoming hearing, or today's has already been called — do not assert a failure to\nappear, since the person may have attended that morning). Relay `howToRequest`\nverbatim and it will be right for every state.\n\nRead-only: no email is sent and nothing is saved. North Carolina only.\nInformational, not legal advice.\n\nEVERY LOOKUP ENDS WITH TWO THINGS, PER CASE. Both are spelled out in\n`present_to_user`, the FIRST key of this result, already filled in for this\nparticular case — read it and do what it says.\n(1) `caseSummaryUrl` — hand it to the user and call it the durable, shareable link\nto the full case record. It does not expire, it is publicly viewable, and the same\ncase returns the same link every time, so it is the canonical way to cite or share\nthe case. THE KEY IS ALWAYS PRESENT, so \"when it appears\" is not the test — the\nVALUE is: non-null means give it; null means minting failed on this lookup, so say\nnothing about a link rather than substituting `trackThisCase.url`, a portal URL, or\na guess.\n(2) `alerts` — when `alerts.available` is true, ask whether they'd like email alerts\nwhen the case changes: a new court date, case information, case events, service\nevents, or financial updates. ASK and wait for a yes. Never call\n`subscribe_to_case_updates` on your own initiative and never invent an email address.\nWhen `available` is false the case is closed, disposed, or not found — nothing would\never be sent — and you must not raise it.\nIN A MULTI-CASE TURN DO BOTH FOR EACH CASE, beside that case's own details. Two\ncases means two links and two offers; one combined link, or a single offer at the\nend of the answer, is wrong.\n(A search row's `portal_url` is ephemeral by contrast — don't present that as\ndurable or persist it.)\n`upcomingHearings` lists only FUTURE hearings; `pastHearings` lists recently-\nelapsed ones (most recent first). The top-level `status` of \"no_upcoming_hearings\"\nmeans exactly that — NOT that the case has no hearing history. Before telling the\nuser they have no court date, check `pastHearings`: an empty `upcomingHearings`\nwith a non-empty `pastHearings` means a hearing has ALREADY occurred (they may\nhave missed it) — a different answer than \"nothing scheduled.\" Never infer \"you\ndidn't miss court\" from an empty `upcomingHearings`/`status` alone.\n`service` answers \"was the defendant actually reached?\" on civil / SP / estate cases\n— the civil-side counterpart to `bailRisk`, and null on criminal/traffic, where\nservice of process does not apply (null there = NOT APPLICABLE, not \"not served\").\nRead `status` FIRST; three of its values mean the absence of a return is EXPECTED and\nmust never be reported as \"not served\":\n  - `served` / `unserved` / `mixed` — a return of service is docketed. `mixed` means\n    both outcomes appear (several defendants, or the alias-and-pluries retry cycle).\n  - `proven_other` — a certificate / affidavit / acceptance of service instead of a\n    formal return. Still proof.\n  - `appeared_service_moot` — the defendant answered or appeared, which waives a\n    service defect. Service became unnecessary.\n  - `not_required` — an appeal or petition; no summons is issued at all.\n  - `pending` — a summons went out recently and nothing is back YET. Say \"service is\n    still outstanding\", NOT \"they weren't served\".\n  - `unknown` — a summons issued, nothing returned, and the case isn't new.\n`returns[]` is the full history (the retry cycle is often the story) and\n`latestReturn` the most recent attempt. `returns[].party` is NULL about a third of\nthe time — the docket records the outcome without naming who it applied to — so\nnever read a null party as \"nobody\". For the same reason there is deliberately NO\nper-defendant served flag: one case in the sample had a single docketed return\nagainst 41 defendants, and a per-party boolean would be confidently wrong.\n`legacyScan:true` means the paper file was scanned as ONE bundle rather than itemised,\nso proof of service may sit inside that PDF where no docket-text rule can see it —\na missing return is weak evidence on those cases.\n`causesOfAction` is the civil counterpart to `charges` — the claims pleaded\n(`cause`, `filedOn`, `remedy`), e.g. \"CV - Unfair Trade Practice\". On a civil / SP /\nestate case this is usually the ONLY statement of what the matter is about, so lead\nwith it there. An empty list means the docket does not ITEMISE causes, NOT that no\nclaims exist — say the docket doesn't break them out rather than implying the case is\nabout nothing. Repeated boilerplate entries are collapsed; distinct dates are kept,\nsince a cause added later is an amendment.\nEach charge also carries `offenseDate` (when the offense occurred — different from the\ncase's `filedOn`, and usually what someone means by \"when was this?\") and `agency`\n(the citing law-enforcement agency).\nIf a tool returns an `error` with `retryable` / `upstream_status`, that is a transport\nor portal failure — NOT a statement about the case. Never turn it into \"no results\" or\n\"case not found\"; say the lookup itself failed, and retry only when `retryable` is\ntrue.\n`caseCategory` normalizes the case class (criminal | civil | infraction |\nspecial_proceeding | estate | juvenile | other). Use it to read null fields\ncorrectly: on a NON-criminal category, `bailRisk`/`citationOptions` = null means\nNOT APPLICABLE, not \"none found.\" `parties` is the register-of-actions roster\n(name + roles[] + attorneys[]{name, appointment} + selfRepresented + counselWaived)\n— `appointment` is how counsel came to the case (\"Retained\" = the party hired them,\nvs \"Court Appointed\" / \"Public Defender\"; null when unstated, and the list is learned\nfrom the register rather than a closed set). It is what makes a `counselWaived:true`\nparty who nonetheless HAS counsel intelligible — appointed, then a waiver, then\nretained. The authoritative\nsource for identifying who is on a case and their role, especially on civil/SP cases\nwhere the caption/DOB are absent; prefer it over a party-search row's caption for\nentity resolution. `selfRepresented:true` = no counsel of record (self-listed as own\nattorney OR a filtered counsel-absence sentinel, with no other attorney); it does\nNOT distinguish an active pro-se appearance from a defaulted / served-by-publication\ndefendant. `counselWaived` is a SEPARATE, independent flag — NOT a narrowing of\n`selfRepresented` — and it is NOT a claim the party is unrepresented: it can be true\nwhile attorneys[] is non-empty (seen on 22CR702455-520, counselWaived:true with a\nCourt Appointed AND a Retained attorney, the docket running appointed counsel ->\nWaiver of Counsel -> retained counsel). Always read it WITH attorneys[], never\ninstead of it. `counselWaived` is set by either\nOdyssey placeholder \"attorney\" name, filtered out of attorneys[] rather than shown\nas a lawyer: \"WAIVED, WAIVED\" (counsel affirmatively waived on the record — the\ndocket does not say whether the waiver covered all assistance of counsel or only\ncourt-appointed counsel) or \"PRO SE\" (the party asserted as their own\nrepresentation). Either means the party declined counsel rather than merely lacking\nit, but the flag does NOT say which placeholder produced it, so it is not proof the\nparty is litigating pro se. `counselWaived:false` means NOT OBSERVED, not \"did not\nwaive\". A true value is predominantly a criminal-side artifact and is rare on civil\nrosters — treat it as unexpected but NOT impossible on a non-criminal `caseCategory`;\ndon't read one there as an error. A false unrepresented party is still any of\ndefaulted / never-served / unappeared-entity / pro-se-without-a-docketed-marker —\nor simply TOO EARLY: on a recently-filed case that has not had a hearing yet,\ncounsel is frequently not entered on the roster. `parties` reflects what is\nDOCKETED, not who is retained; check `filedOn` and an empty `pastHearings` before\nreading an empty attorneys[] as unrepresented — on a pending case that has not\nbeen to court, \"not shown yet\" is usually the better answer than \"no lawyer.\"\nattorneys[] non-empty ⇒ represented ⇒ selfRepresented false.\n`documents` lists scanned filings, newest first — `{date, name, url}`, where `name` is\nthe register entry that produced it (\"Bond Forfeiture Notice\", \"Release Order Issued\",\n\"Waiver of Counsel\"). Most criminal cases have at least one; an empty list means\nnothing is scanned in, not that nothing was filed. Offer the links when they're\nrelevant to what was asked. Retrieval is UNRELIABLE — the portal intermittently\nreturns errors or an empty body while it prepares a document — so present a link as\nsomething that may need a retry, never as \"here is the document\", and never state or\nguess at its contents: this server does not read them.\n`caseEvents` IS THE FULL REGISTER OF ACTIONS and is what to read for \"what has happened\non this case\" — `{number, date, name, comment, filedBy, documentUrl}`, newest first.\nIt is a SUPERSET of `documents`: every scanned filing is an event, but most cases carry\nevents with no scan at all, and `documents` shows only the ones that have one. Do not\ninfer the docket from `documents` — it answers \"what can I link to\", not \"what was\nfiled\".\n`documentUrl` is null when no public scan exists, and SEALED FILINGS NEVER HAVE ONE —\nso the most consequential entries are often the ones `documents` cannot show. Measured\non a Superior Court case, the motion for a temporary restraining order and a\nprovisionally-sealed complaint appeared only here.\nREAD `comment`. Where `name` is a generic register label the substance lives in the\ncomment: a \"Motion\" is \"to Seal Verified Complaint\", an \"Other/Miscellaneous\" is\n\"Certificate of Probate PROPOSED\", and on estates it carries the date of death and\ncreditor claim amounts that appear in no other field.\n`filedBy` is the filing party or attorney, and may be null on clerk-entered rows.\n`number` is the register index; the array is ordered by DATE, so same-day entries are\nnot in `number` order — sort by `number` when you need docket sequence. Unlike\n`documents` (capped at 25) this list is uncapped: typically a handful of entries, but a\nlong-running civil docket can run to well over a hundred.\n`dispositions` gives the per-charge OUTCOME behind a \"Disposed\" status — one row per\ncharge with `plea`, `disposition`, `sentence`, `dispositionDate`, `judge`, and any\njudgment `documentUrls`. This is how you answer \"what happened to the case / to a\ncharge\": a \"Disposed\" caseStatus alone does not say whether a charge was dismissed,\npled down, or convicted — read `dispositions` for that (e.g. a speeding charge reduced\nto improper equipment shows plea \"Responsible to Lesser\"; a \"VD-District Dismissals ...\nPer Plea Agreement\" is a dismissal). Empty on pending/undisposed cases.\n`trackThisCase` is an upstream ELIGIBILITY FLAG (non-null only on an open case), not\nsomething to act on: this server already consumes it — it is what gates\n`alerts.available` — so don't reason from it, and never show `trackThisCase.url` to\nthe user. That is a generic signup page with no case identity. The case-specific\npaths are `caseSummaryUrl` and, once the user has said yes, `subscribe_to_case_updates`.\nFor criminal cases with a bond or bail activity, `bailRisk` is non-null:\nfailure-to-appear history (`ftaCount`, date-deduped; `ftaEvents[]` gives the raw\ncounted entries {date, description} for auditing — voided \"in Error/Stricken\" FTAs\nare already excluded), FTA-triggered `ordersForArrest`, bond amount/type,\nand the NCGS §15A-544.5(f) prior-FTA bar. That bar turns on FTAs that preceded the\nbond's EXECUTION, not the case total: `bondExecutedOn` is the \"Bond Posted\" date for\nthe operative bond and `priorFtasAtExecution` counts FTAs strictly before it (null\nwhen no posting is docketed).\n  - `setAsideBarInapplicable:true` (0-1 prior FTAs) is RELIABLE — (f) cannot bar a\n    set-aside. State it plainly; it's the answer that tells someone a motion is\n    worth filing.\n  - `setAsideBarPossible:true` (2+ prior) is NOT a finding that the bar applies. It\n    means only that the TIMING fits. Under (f), actual notice exists ONLY where a\n    judicial official noted the prior failures on the defendant's release order.\n    Check `releaseOrderFBox` below before saying anything further, and never say\n    \"the forfeiture cannot be set aside\" on the strength of this flag alone.\n  - Both false = execution date unknown; neither ruled out nor suggested.\n`releaseOrderUrl` is the portal PDF of the release order governing that bond — the\ndocument the (f) question actually turns on, since the judicial official's \"second or\nsubsequent failure to appear\" notation appears there (AOC-CR-200) and in NO structured\nfield. ALWAYS present this link when `setAsideBarPossible` is true, even when the read\nbelow already answered the question: the order is the authority.\n`releaseOrderFBox` IS THAT READ, present only on barred cases where the order could be\nfetched and parsed. Report it, and report it precisely — this is the field that decides\nwhether someone spends their one motion:\n  - \"unchecked\" — on its face (f) does NOT bar a set-aside; the prior FTAs do not block\n    relief and it is worth pursuing. Say so, and add that they should confirm it on the\n    order before relying on it.\n  - \"checked\" — (f) MAY bar it. Do NOT say \"cannot be set aside\". Tell them to confirm\n    on the order BEFORE filing, because a motion that fails uses up the single\n    opportunity for relief.\n  - \"ambiguous\" — the order was opened and the box could NOT be read. Say exactly that,\n    and hand over the link. The notation is a flattened checkbox with no glyph in the\n    text layer, so the printed label appears whether or not it is marked. NEVER round\n    this to \"unchecked\": a misread tells a bondsman to abandon a recoverable bond.\n  - absent / null — no read was attempted (not a barred case, no order docketed, or the\n    fetch failed). This is ALSO not \"unchecked\". Fall back to the link.\nFor the forward-looking question (\"could a bond I write NOW be barred?\") use\n`ftaCount`: 2+ FTAs on the case means the next release order should carry the\njudicial notation — tell the user to read it before signing.\nThen `forfeiture` with its `status`\n(the latest DOCKETED forfeiture event — may lag the clock) and the 150-day set-aside\nclock (`noticedOn`, `deadline`, `daysRemaining`, `windowOpen`). `noticeAnchor` says\nwhere `noticedOn` came from: \"notice_event\" = an explicit forfeiture NOTICE line\n(the date the statute runs the 150 days from); \"earliest_forfeiture_event\" = no\nnotice was docketed, so the earliest forfeiture entry stands in — the deadline is\nthen a CONSERVATIVE proxy (earlier than the true notice), and `daysFtaToNotice`\nmeasures FTA-to-forfeiture rather than FTA-to-notice. Don't present a proxy-anchored\ndeadline as the exact statutory date — treat `windowOpen`/`daysRemaining`\nas authoritative for whether the set-aside window is open; once `windowOpen` is false\nthe window has closed even if `status` still reads `in_effect`.\n`deadlineNextBusinessDay` is the first day the clerk's office is open on or after\n`deadline` (equal to it when that is already a business day; later when it falls on\na weekend or NC court holiday). ADVISORY ONLY — it never moves `daysRemaining` /\n`windowOpen`, which stay on the strict notice+150 date, because the safe error is\ntelling someone they have LESS time, never more. null = UNDETERMINED (deadline year\noutside the published NC holiday calendar), NOT \"no adjustment needed\"; never\npresent a null as though the deadline is a normal business day.\n`triggeringFta` (latest counted FTA on or before `noticedOn`) and `daysFtaToNotice`\n(the gap in days) report HOW LONG after the failure the forfeiture notice was\ndocketed. Report the number; do NOT call a long gap a defect or a filing error —\nthere is deliberately no threshold flag, and whether a gap affects the notice's\nvalidity is for the reader's attorney. Plus the bonding\n`agent` (Fiduciary) + `surety` (insurer). All from public NC eCourts records.\n(`citationOptions` is null on disposed/closed cases — the reduction path isn't live.)\nInformational underwriting signal, not legal advice; don't state legal conclusions.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "caseHash": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "caseNumber": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "citation": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "portalSessionRef": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              }
+            },
+            "type": "object"
+          },
+          "outputSchema": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "annotations": {
+            "openWorldHint": true,
+            "readOnlyHint": true,
+            "title": "Look up a North Carolina (NC) court case (by number, citation, or hash)"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "digest": "sha256:88e5add32abfbb7b98f018e3448427db9b6e5133c51c281bdba7aa299fc0b4cd"
+        },
+        {
+          "name": "search_cases_by_attorney",
+          "title": "Find an attorney's cases by North Carolina (NC) State Bar number",
+          "description": "Cases where an attorney is counsel of record — by bar number OR by name.\n\n\"What's on my docket?\" for a lawyer or firm. Returns the case number, caption,\nfiling date, case type and county for every case the register lists that attorney\non. Each `case_number` goes straight into `lookup_court_case`.\n\nEVERY ROW NOW CARRIES `case_status`, with no `enrich` needed — so do not call\n`lookup_court_case` merely to find out whether a case is open or closed.\nThe returned text is FINER-GRAINED than the four filter values: alongside \"Pending\"\nand \"Disposed\" you will see \"Disposed - Voluntary Dismissal\", \"Disposed - Dismissal\non Order of the Court\", \"Disposed - Clerk of Superior Court\" — i.e. HOW it ended, not\njust that it did. So never test it with equality against the filter vocabulary\n(`status == \"Disposed\"` misses most disposed rows); match on a prefix, and quote the\nportal's own wording when you report it.\n\nFAST — about 3-15 seconds. This uses the portal's own attorney-search mode, not\nthe slow WAF-and-CAPTCHA hearing scrape, so do NOT warn the user about a long\nwait here.\n\nPASS EITHER `bar` OR BOTH `last` AND `first` — a first name alone or a last name\nalone is rejected. Prefer the bar number when you have it: it resolves to exactly\none attorney, whereas a name can match several.\n\nWHEN A NAME MATCHES MORE THAN ONE ATTORNEY, `attorney_name` comes back NULL and\n`matched_attorneys` lists everyone matched — the results are then a MERGED docket\nspanning all of them. Say so and offer to narrow by bar number; do not present it\nas one lawyer's caseload. When exactly one attorney matched, `attorney_name` is\nset, and it is worth echoing so the user can confirm it resolved to who they meant.\n\n`case_status=\"Pending\"` is usually what someone means by \"my cases\" — without it\nyou get their entire history, which for a working attorney is mostly closed\nmatters and will hit the cap below. Old cases legitimately remain Pending, so a\n2016 case in a Pending list is not necessarily an error.\n\nTHE 200-CASE CAP IS REAL AND IT BITES HERE. `truncated: true` means matches are\nMISSING, not merely unshown — a busy defender or a large firm exceeds 200\nroutinely. `case_status` and `file_date_start`/`file_date_end` narrow SERVER-SIDE\nand genuinely recover cases; `county` does NOT — it filters after the cap, so a\ntruncated county-filtered count is a lower bound, not a county total. Say the\nlist is incomplete rather than presenting it as the attorney's full caseload.\n\nA DATE RANGE MAY NOT BE ENOUGH ON ITS OWN. Measured: bar 21262 restricted to\ncases filed in 2024 still returned 200 `truncated: true`, spanning only 20 Nov to\n31 Dec. Narrow to a few months and check `truncated` again rather than assuming\none year fixed it.\n\nDates: ISO `YYYY-MM-DD` or `MM/DD/YYYY` — both accepted. `file_date_*` is WHEN\nTHE CASE WAS FILED, not when a hearing is. For \"what's on my calendar today\",\nuse `get_attorney_hearing_calendar` — filtering by file date answers a\ndifferent question and will usually return nothing.\n\n\"OF RECORD\" IS NOT \"CURRENTLY REPRESENTING\". This is what the register records,\nso withdrawn, substituted and long-closed representations still appear. Do not\ndescribe the result as someone's active caseload.\n\nPublic record — the portal offers this same search to anyone, so this is not a\nprivate view of a firm's book of business.\n\nRead-only. North Carolina (NC) only. Informational, not legal advice.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "bar": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "case_status": {
+                "anyOf": [
+                  {
+                    "enum": ["Pending", "Disposed", "Closed", "Reopened"],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "county": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "file_date_end": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "file_date_start": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "first": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "last": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "limit": {
+                "default": 100,
+                "type": "integer"
+              }
+            },
+            "type": "object"
+          },
+          "outputSchema": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "annotations": {
+            "openWorldHint": true,
+            "readOnlyHint": true,
+            "title": "Find an attorney's cases by North Carolina (NC) State Bar number"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "digest": "sha256:f40eaf5d0fb4016d55e4af5e964a6f39fde7ddd083c968fe06134278c28d7b7a"
+        },
+        {
+          "name": "search_cases_by_business",
+          "title": "Find a company's court cases by business name",
+          "description": "Cases with a COMPANY as a party — by business name.\n\nUse this, not `search_cases_by_party`, whenever the subject is an organization:\nan LLC, corporation, insurer, hospital, landlord, dealership or municipality.\nParty search requires a first AND last name, which a business does not have, so\nit cannot answer this at all.\n\nFAST — about 5-45 seconds. No CAPTCHA. Do not warn about a long wait.\n\nEVERY ROW NOW CARRIES `case_status`, with no `enrich` needed — so do not call\n`lookup_court_case` merely to find out whether a case is open or closed.\nThe returned text is FINER-GRAINED than the four filter values: alongside \"Pending\"\nand \"Disposed\" you will see \"Disposed - Voluntary Dismissal\", \"Disposed - Dismissal\non Order of the Court\", \"Disposed - Clerk of Superior Court\" — i.e. HOW it ended, not\njust that it did. So never test it with equality against the filter vocabulary\n(`status == \"Disposed\"` misses most disposed rows); match on a prefix, and quote the\nportal's own wording when you report it.\n\nTYPE THE NAME AS IT APPEARS, COMMA INCLUDED. The comma is significant and\nNARROWING: \"FOOD LION, LLC\" is a different, smaller search than \"FOOD LION\". Do\nnot strip it, and do not replace it with a wildcard — advice to do that appears in\nthe portal's help text but applies to a different search mode.\n\nWILDCARD: a trailing `*` is allowed and needs AT LEAST 4 characters before it.\n\"WALM*\" works; \"WAL*\" is rejected. Use it for a company whose exact registered\nname you do not know (\"CAROLINA TOWING*\").\n\nTHERE IS NO PARTY ROLE IN THIS RESULT, ON PURPOSE. The portal labels every row\n\"Defendant\" regardless of the truth — including cases the company FILED as\nplaintiff and criminal cases where it was the victim. NEVER say the business is\nthe defendant. Read the side from `case_name` (\"X VS Y\" — the company's position\nin the caption is the real signal), or call `lookup_court_case` for the actual\nparty list.\n\nTHE 200-CASE CAP BITES IMMEDIATELY FOR ANY CHAIN OR INSURER. `results_truncated:\ntrue` means real matches are MISSING. Worse, `county` filters AFTER that cap, so\na truncated county-filtered count is a LOWER BOUND, never a total — \"11 cases in\nWake\" may be 11 of the 200 statewide the portal was willing to show. Only\n`case_status` and the file-date range narrow server-side. Say the list is\nincomplete instead of reporting a count as if it were complete.\n\n`matched_businesses` lists the distinct entity names actually hit. More than one\nmeans legally separate entities are mixed together (\"FOOD LION, LLC\" alongside\n\"DELHAIZE AMERICA, LLC\") — surface that rather than treating them as one company.\n\nDates: ISO `YYYY-MM-DD` or `MM/DD/YYYY` — both accepted. These bound WHEN THE\nCASE WAS FILED, not when anything is scheduled. A year at a time is the most\neffective way to get a chain's cases under the 200-cap: 'FOOD LION' unfiltered\ncaps out, but restricted to 2023 it returns 42 complete rows.\n\nPublic record. Read-only. North Carolina (NC) only. Informational, not legal advice.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "case_status": {
+                "anyOf": [
+                  {
+                    "enum": ["Pending", "Disposed", "Closed", "Reopened"],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "county": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "file_date_end": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "file_date_start": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "limit": {
+                "default": 100,
+                "type": "integer"
+              },
+              "name": {
+                "description": "The business name, written as the user wrote it — \"FOOD LION, LLC\" is a narrower search than \"FOOD LION\". For a PERSON use search_cases_by_party instead.",
+                "examples": ["FOOD LION, LLC", "DUKE ENERGY"],
+                "type": "string"
+              }
+            },
+            "required": ["name"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "annotations": {
+            "openWorldHint": true,
+            "readOnlyHint": true,
+            "title": "Find a company's court cases by business name"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "digest": "sha256:23eca33f9fc0ced65595d40131b1cb2443eb531e283de27fa220ad9a33142b22"
+        },
+        {
+          "name": "search_cases_by_party",
+          "title": "Search North Carolina (NC) court cases by party (person) name",
+          "description": "Search North Carolina (NC) court cases by a person's name.\n\nReturns (person, case) matches from the NC eCourts party-name search. Each row\ncarries a `case_number` (the stable id) and a `portal_session_ref` — a Tyler token\nwhose lifetime is UNSPECIFIED (it rotates every search; survives at least minutes;\nupper bound unmeasured). Pass it to `lookup_court_case` (as `portalSessionRef`) for a\nquick follow-up; for anything persisted or delayed use `case_number`. Never persist\nor reuse the ref. Each row also carries `portal_url` — the direct NC eCourts source\nrecord; it embeds the same short-lived token, so treat it like the ref (don't persist).\n`caseSummaryUrl` (from `lookup_court_case`) is the durable link.\nEVERY ROW NOW CARRIES `case_status`, with no `enrich` needed — so do not call\n`lookup_court_case` merely to find out whether a case is open or closed.\nThe returned text is FINER-GRAINED than the four filter values: alongside \"Pending\"\nand \"Disposed\" you will see \"Disposed - Voluntary Dismissal\", \"Disposed - Dismissal\non Order of the Court\", \"Disposed - Clerk of Superior Court\" — i.e. HOW it ended, not\njust that it did. So never test it with equality against the filter vocabulary\n(`status == \"Disposed\"` misses most disposed rows); match on a prefix, and quote the\nportal's own wording when you report it.\n\nRows carry `party_type` (the person's role) plus `party_role_source`: \"caption\"\n= surname confirmed in the case caption (trust it); \"portal_party_type\" = role\nfrom the portal's own PartyTypeKey but no caption to confirm (common on SP /\nforeclosure cases — usable, but corroborate for high-stakes use); null = no role\n(or a role dropped as suspect, e.g. a citing officer mislabeled \"Defendant\" on\nsomeone else's caption). For an AUTHORITATIVE role/roster, call `lookup_court_case`\nand read its `parties` list. `party_role_verified` (bool) = source == \"caption\".\nRead-only. NC only. Informational, not legal advice.\n\nRequired: `last`, `first`. Filters differ in where they apply:\n  - SERVER-SIDE narrowing (reduce the portal search — the ONLY way to clear the\n    200-case cap): `case_status` (\"Pending\"|\"Disposed\"|\"Closed\"|\"Reopened\"), the\n    filed-date range `file_date_start`/`file_date_end` (ISO YYYY-MM-DD or MM/DD/YYYY\n    — both accepted), and a more specific name.\n  - `soundex: true` is also server-side but BROADENS (phonetic surname matching →\n    MORE matches, more likely to truncate) — don't enable it to clear a cap.\n  - CLIENT-SIDE (filter the rows already returned; do NOT recover cases missed by\n    the cap): `county` (\"Wake\" or \"Wake County\") and `case_type` (pick a value\n    from the `narrowing.caseTypes` facet).\n\nSpeed: a search runs a live portal query and takes ~15-50s, with real run-to-run\nvariance — do NOT pick filters for speed. Narrow for COMPLETENESS: `case_status` and\na `file_date` range are server-side and are the only filters that recover cases past\nthe 200-cap; `county`/`case_type` only filter what was already returned.\n\nTwo different limits:\n  - `portal_truncated` true = the portal hit its statewide 200-case cap, so the\n    set is INCOMPLETE (real matches are missing). See `portal_truncated_note`;\n    when true, `narrowing` gives counties only (counts are lower bounds). Clear it\n    with `case_status` / date range / a more specific name.\n  - `results_truncated` true = the (complete) set exceeded `limit`, so not all\n    rows are shown. Pass a higher `limit` (up to 200) to show them all.\n\nBreadth (read `narrowing_hint`): the tool never asks you to withhold results, and it\ndistinguishes two cases with different remedies:\n  - INCOMPLETE (`portal_truncated` true): the shown cases are valid but some are\n    missing. Present them, and to recover the rest narrow with server-side filters\n    (a filed-date range or `case_status`) — or, if autonomous with no user to ask,\n    re-call `confirm_broad=true` to proceed as-is.\n  - COMPLETE but long (a large set with `portal_truncated` false): nothing is missing.\n    List or summarize the results; refining (county/case_type/date) is optional, not\n    required. A moderate complete set is a fine answer on its own.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "case_status": {
+                "anyOf": [
+                  {
+                    "enum": ["Pending", "Disposed", "Closed", "Reopened"],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "case_type": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "confirm_broad": {
+                "default": false,
+                "type": "boolean"
+              },
+              "county": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "file_date_end": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "file_date_start": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "first": {
+                "description": "Given name. Required: a surname alone is rejected.",
+                "examples": ["JOHN", "MARIA"],
+                "type": "string"
+              },
+              "last": {
+                "description": "Surname. A company has none — use search_cases_by_business.",
+                "examples": ["SMITH", "GARCIA"],
+                "type": "string"
+              },
+              "limit": {
+                "default": 100,
+                "type": "integer"
+              },
+              "soundex": {
+                "default": false,
+                "type": "boolean"
+              }
+            },
+            "required": ["first", "last"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "annotations": {
+            "openWorldHint": true,
+            "readOnlyHint": true,
+            "title": "Search North Carolina (NC) court cases by party (person) name"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "digest": "sha256:ddda802b984bd29dda4384e3e79df4c2f24c0f0dae3d4134135fead64a3730ff"
+        },
+        {
+          "name": "search_judgments",
+          "title": "Search North Carolina (NC) money judgments and criminal sentences (incl. aliases)",
+          "description": "Search North Carolina (NC) money judgments and criminal sentences by party name.\n\nREQUIRES AT LEAST ONE OF `party`, `case_number`, `alias` OR `from_date`. The other\narguments are FILTERS, not searches — `county` or `judgment_type` alone is rejected,\nand so is a call with no arguments at all.\n\nThis is the JUDGMENT index, NOT the case index. A judgment is what a court\nENTERED on a case — a money judgment against someone, or a criminal sentence.\nUse this for \"does X have a judgment against them\", \"how much do they owe on\nit\", \"is it still active\", \"find liens/judgments before I lend or rent\".\nFor the case itself — charges, hearings, next court date, parties, service —\nuse `search_cases_by_party` (by name) or `lookup_court_case` (by number).\nEvery row carries `case_number`: that is the handoff key into\n`lookup_court_case` when the user wants the underlying case.\n\nIT CARRIES REAL PROPERTY LIENS, WHICH IS NOT OBVIOUS. NC files these as \"Civil\nMisc. Judgment\" records on the judgment docket, so this index — not the case\nsearch — is where they live. `cause_of_action` on each row says which kind, and\nthe values seen in production include:\n\n    CV - Claim of Lien              (G.S. 44A claim of lien on real property)\n    CV - Federal Tax Lien           CV - NC Certificate of Tax Liability\n    CV - Lien                       CV - Employment Security Comm Lien\n    CV - Institutional Lien (Hospitals)\n    CV - Lis Pendens                (pending action against the property)\n    CV - Transcript of Judgment     (a judgment docketed from another county)\n    CV - Summary Ejectment, CV - Money Owed, CV - Possession,\n    CV - Collection on Account, CV - Other, FAM - Divorce, ...\n\nSo \"are there any liens against this person?\" is answerable HERE, and answerable\nwell: this index has no 200-cap, so a clean search really does mean none found.\n\nDO NOT FILTER TO \"lien\" TO ANSWER \"ARE THERE ANY LIENS?\" — that under-reports badly.\nA money judgment docketed with the clerk is ITSELF a lien on the debtor's real\nproperty in that county, whatever its cause of action says. So `CV - Money Owed`,\n`CV - Collection on Account` and `CV - Transcript of Judgment` rows are encumbrances\ntoo. Measured on one name: 4 rows whose cause contains \"lien\", and 35 further\ndocketed money judgments the filter would silently drop — roughly a tenfold\nunder-count. For a lien or title question, DO NOT filter; report the whole set and\nlet the reader classify.\n\n`cause_of_action` is for isolating a RECORD TYPE — \"show me only the lis pendens\",\n\"only the summary ejectments\" — not for deciding what counts as a lien.\n\nASK WHICH RECORD TYPES THEY WANT — do not guess. Run the search, read\n`narrowing[\"Cause of Action\"]` (computed from the actual rows, BEFORE any filter, so\nit always shows the full menu), tell them what is there, and let them choose.\n\n`cause_of_action` MATCHES ON SUBSTRING AND FILTERS CLIENT-SIDE. `\"lien\"` catches\nevery lien variant above; `\"Claim of Lien\"` catches only G.S. 44A. Because the\nindex offers no server-side filter for it, the match runs over the rows already\nfetched — so when `results_total` exceeds what was fetched, `cause_of_action_note`\nwill say the count is NOT a total. Read that note before reporting a number.\n\nNOT in this index, and not anywhere in this server: UCC financing statements\n(those are NC Secretary of State), Register of Deeds records, and lien-agent\nnotices under G.S. 44A-11.1 (liensnc.com is not a court system). Say so plainly\nrather than implying a clean search covered them.\n\nARGUMENT FORMATS (the requirement itself is stated at the top).\n`party` is a name in \"LAST, FIRST\" form (business names work as-is).\n`case_number` accepts dashed or undashed. `from_date`/`to_date` bound the\ndate the judgment was ORDERED (not the case filing date, and not a hearing\ndate) — ISO `YYYY-MM-DD` or `MM/DD/YYYY`, both accepted.\n\nA PARTY SEARCH DOES NOT COVER ALIASES, so this tool checks them for you.\n`party` and `alias` are separate indexes with no overlap — measured, a search for\n\"WILLIAMS, PAMALA\" as a party misses a judgment filed against \"MCARDELL, PAMALA\"\nthat lists \"WILLIAMS, PAMALA\" as an alias. Whenever you pass a full `party` name,\nan alias sweep runs automatically alongside it and its hits come back in\n`alias_matches`, separate from `results`.\n\nREAD `alias_sweep.status` BEFORE CALLING ANYONE CLEAR:\n  \"ran\"     -> aliases were checked. Zero matches is a real negative.\n  \"failed\"  -> they were NOT checked. Say so; do not report the search as clear.\n  \"skipped\" -> not applicable, EXCEPT when the reason says the name was a surname\n               only. Ask for a full \"LAST, FIRST\" name and re-run.\n\nAN ALIAS IS NOT NECESSARILY A FORMER NAME. It is any other name recorded for that\nparty — a maiden or married name, a hyphenated or reordered variant\n(\"LEWIS-WILLIAMS, FARRAH\" vs \"WILLIAMS, FARRAH LEWIS\"), or a fuller spelling\n(\"WILLIAMS, SHANE\" vs \"WILLIAMS, SHANE CHRISTOPHER\"). Measured, 15% share the\nparty's own surname. Do NOT describe an alias as a name that was \"changed\", and do\nnot infer a marriage or divorce from one — the record does not say.\n\nAn `alias_matches` row is filed against a party recorded under a DIFFERENT NAME, so\nit may be the same person or an unrelated namesake. Report those rows as leads to\nconfirm — never state them as this person's judgments, and never merge them into a\ntotal owed. They carry no amounts.\n\n`alias` as an INPUT searches the alias index directly and takes the same\n\"LAST, FIRST\" form (\"PAMALA WILLIAMS\" returns nothing). Passing it explicitly\nturns the automatic sweep off, since it would repeat the same query.\n\nRow-level `debtor_aliases` / `creditor_aliases` list other names recorded for that\nparty. They are populated essentially only on alias searches — empty on a party\nsearch is normal and means nothing.\n\nCIVIL vs CRIMINAL — read this before reporting a null. Each row has a\n`case_category` of CV, CR or FAM. `judgment_type` populates on civil rows;\n`sentence_type` populates on criminal rows. A null on either one means NOT\nAPPLICABLE to that row's category — it is NOT an absence of fact, and must\nnever be reported as \"no sentence recorded\" or \"no judgment type\".\n\nDOLLAR AMOUNTS ARE FETCHED AUTOMATICALLY WHEN THE RESULT SET IS SMALL — do\nNOT ask the user whether to pull them. Leave `detail` unset and this tool\ndecides: a `case_number` search, or any search returning 10 rows or fewer,\ncomes back with amounts already included. Check `detail_included` to see what\nhappened, and `detail_skipped_reason` when it didn't.\n\nThe reason it is not unconditional: `detail` fans out one upstream call PER\nROW. A broad name search with detail forced on has been measured timing out at\n60s — \"ANDERSON, DAVID\" returns 153 judgments, and asking for 153 amounts at\nonce fails outright, whereas the same search without detail succeeds. So on a\nlarge result set the amounts are deliberately skipped and\n`detail_skipped_reason` tells you how to narrow (county, date range,\njudgment_type, or a specific case_number). Narrow and re-run rather than\nforcing it.\n\nOverride only if you must: `detail=true` still respects the row guard and will\nnot fan out over a large set; `detail=false` suppresses amounts entirely.\n\nWith detail, each row gains `total_judgment_amount`, `principal_amount`,\n`court_costs`, `attorney_fees`, `interest_rate`, `judgment_status` and the\nfor/against party roster. Amounts are strings; a null means the court recorded\nno value, which is different from \"0.00\". Where `detail` is null on a row, no\ndollar figure is available — never infer or state an amount from such a row.\n\nFilters:\n  - `county` — a plain county name (\"Wake\"). Filtered SERVER-SIDE and exactly,\n    covering both that county's District and Superior court. Unlike\n    `search_cases_by_party`, this filter does not eat into a result cap.\n  - `judgment_type` — civil, comma-separated, e.g. \"Recorded\",\n    \"Granted in Whole or Part\", \"Default Civil\".\n  - `sentence_type` — criminal, comma-separated, e.g. \"Active\", \"Community\",\n    \"Intermediate\", \"Fine\".\n  Every valid value for all three is returned in `facets` with live counts,\n  so read `facets` rather than guessing a filter value.\n\nSpeed: ~1-3 seconds. This tool is the FAST exception — it does NOT run the\nslow WAF-gated portal search that `search_cases_by_party` and\n`lookup_court_case` do, so do not warn the user about a long wait here.\n\nCompleteness: `results_total` is the TRUE statewide total. This index has no\n200-case cap, so the truncation caveat that applies to `search_cases_by_party`\ndoes NOT apply here. `results_truncated` reflects only the display `limit`;\npage further with `offset` if needed.\n\nRead-only. NC only. Informational, not legal advice. A name match is not an\nidentity confirmation — same-name people are common.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "alias": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "case_number": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "cause_of_action": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "county": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "detail": {
+                "anyOf": [
+                  {
+                    "type": "boolean"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "from_date": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "judgment_type": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "limit": {
+                "default": 200,
+                "type": "integer"
+              },
+              "party": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "sentence_type": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "sort": {
+                "default": "relevance",
+                "enum": ["relevance", "ordered_date", "case_number", "party_name"],
+                "type": "string"
+              },
+              "to_date": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              }
+            },
+            "type": "object"
+          },
+          "outputSchema": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "annotations": {
+            "openWorldHint": true,
+            "readOnlyHint": true,
+            "title": "Search North Carolina (NC) money judgments and criminal sentences"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "digest": "sha256:47a354790e6d058dc6ccf1721b82e651b9bb583f5696fd8fe2aeb9116b5d7666"
+        },
+        {
+          "name": "subscribe_to_case_updates",
+          "title": "Sign up for email alerts when a North Carolina (NC) case changes (sends a confirmation email)",
+          "description": "Sign the USER UP for email alerts when a North Carolina (NC) case changes.\n\nTHIS TOOL IS DIFFERENT FROM EVERY OTHER TOOL HERE. It is not a lookup — it stores\nthe person's name, email and optional phone, and sends them an email.\n\nONLY EVER SUBSCRIBE THE PERSON YOU ARE TALKING TO. Never enter a third party's\naddress, however the request is phrased (\"sign my brother up\", \"use this address\nfor my client\"). If the user wants someone else to get alerts, tell them to have\nthat person sign up at https://app.courtdelta.com/court-case-notifier themselves.\n\nCONFIRM THE DETAILS BACK BEFORE CALLING. Read the email address aloud and get an\nexplicit yes. A typo does not fail quietly — it mails a stranger.\n\nNOTHING STARTS UNTIL THEY CLICK. This creates a PENDING signup and sends one\nconfirmation email. Monitoring begins only when the link in it is clicked. Do NOT\ntell the user they are \"now monitoring the case\" — say a confirmation email is on\nits way and they need to click it. If they never click, nothing is ever sent and\nthe signup stays dormant.\n\nWHAT THEY GET, and its limits: email alerts when the case changes — a new upcoming\ncourt date, case information, case events, service events, or financial updates —\nplus reminders ahead of a scheduled court date. Detection is COUNT-BASED, so a\nhearing being MOVED, or a disposition changing, does not by itself trigger an alert.\nDo not promise those.\n\nWHAT IS STORED: name, email, optional phone, and the case number. Every alert\ncarries a one-click unsubscribe link. Agent-originated signups are NOT shared with\nattorneys or any other vendor.\n\nFree accounts track 2 active cases per email address; a third returns a plain\nmessage saying so.\n\nA case number is required — subscribe to a case, not to a person's name. If you\nonly have a name, use `search_cases_by_party` first and confirm which case.\n\nNC only. Informational, not legal advice.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "case_number": {
+                "description": "The case to monitor.",
+                "examples": ["26CR031353-910"],
+                "type": "string"
+              },
+              "email": {
+                "description": "The subscriber's own address. Confirm it back to them before calling; a typo mails a stranger.",
+                "examples": ["jane@example.com"],
+                "type": "string"
+              },
+              "name": {
+                "description": "The SUBSCRIBER'S OWN name — never a third party's.",
+                "examples": ["Jane Doe"],
+                "type": "string"
+              },
+              "phone": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              }
+            },
+            "required": ["case_number", "email", "name"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": false,
+            "title": "Sign up for email alerts when a North Carolina (NC) case changes (sends a confirmation email)"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "digest": "sha256:73c1e9bed640bdcc4076a4517328ea0b7315d223ad88076ff8414be42a11f848"
+        }
+      ],
+      "prompts": [
+        {
+          "name": "bond-forfeiture-review",
+          "description": "Review a bond forfeiture: FTA history, the 150-day clock, and set-aside posture.",
+          "arguments": [
+            {
+              "name": "case_number",
+              "required": true
+            }
+          ],
+          "meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "digest": "sha256:19930c87d322e874ce1c5bac818507e36954255bd0af5caa2d10cd6f5fd1d2a8"
+        },
+        {
+          "name": "check-court-date",
+          "description": "Check an upcoming NC court date from a case or citation number.",
+          "arguments": [
+            {
+              "name": "case_or_citation",
+              "required": true
+            }
+          ],
+          "meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "digest": "sha256:70c84d42c2a5cfa8b9deb12d80f47fef7522a607c6769b815cc2fec8081c6c36"
+        },
+        {
+          "name": "screen-name-list",
+          "description": "Screen up to 5 people for NC court cases, then drill into hits.",
+          "arguments": [
+            {
+              "name": "names",
+              "required": true
+            },
+            {
+              "name": "county",
+              "required": false
+            }
+          ],
+          "meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "digest": "sha256:2a781293b87ae413ed38a1db95db81a0aac9a2e46e66e8ec9ed20f5b5e245237"
+        }
+      ],
+      "digest": "sha256:345b5ddcdd453dc75eeffe7683a311bc952fe1df3fc3a7303d6ad0d18a5e0a57"
+    }
+  }
+}
