@@ -29,11 +29,36 @@ export const PERSISTENT_FAILURE_RUNS = 3;
  */
 export const PRUNE_AFTER_ABSENT_RUNS = 7;
 
-export type Outcome = "baseline" | "stable" | "drifted" | "auth-required" | "unreachable";
+/**
+ * What the collector records about a server, as a version. Raise it in the same change that makes
+ * `buildLockedServer` record a field it did not, or normalize one differently.
+ *
+ * A baseline captured at an older revision is not compared: it is re-read and pinned again, and
+ * the run counts it as re-baselined. Comparing it would report the instrument changing as the
+ * servers changing. That is what happened on 12 November 2026: the corpus was seeded from a
+ * reading taken before collector 0.8.0 began recording each tool's `execution`, the next run
+ * compared the two, and 2,300 of 6,032 servers "drifted" in a day, 92% of the findings in a
+ * sample being `execution` going from unstated to `forbidden`.
+ *
+ * 1: before collector 0.8.0. 2: 0.8.0 on, recording `execution` on tools.
+ */
+export const CAPTURE_REVISION = 2;
+
+export type Outcome = "baseline" | "stable" | "drifted" | "rebaselined" | "auth-required" | "unreachable";
 
 export interface ServerObservation {
   firstSeenAt: string;
   lastCheckedAt: string;
+  /** The capture revision of the pinned baseline. Absent on history written before it existed: 1. */
+  revision?: number;
+  /**
+   * Where the current like-for-like window starts, when a re-baseline restarted it. The rate
+   * integrates over time spent comparing like with like, and the gap a re-baseline bridges is not
+   * that. Absent means the window starts at `firstSeenAt`.
+   */
+  windowStart?: string;
+  /** Days observed in windows a re-baseline closed. They still count; they just end. */
+  priorObservedDays?: number;
   lastChangedAt?: string;
   /** Runs where a comparison was possible -- a baseline run is not one. */
   comparisons: number;
@@ -59,7 +84,8 @@ export interface FailureStreak {
 export interface RunRecord {
   at: string;
   targets: number;
-  outcomes: Record<Outcome, number>;
+  /** `rebaselined` is absent on runs recorded before re-baselining existed. */
+  outcomes: Record<Exclude<Outcome, "rebaselined">, number> & { rebaselined?: number };
   changeKinds: Record<string, number>;
   protocols: Record<string, number>;
   corpus: CorpusStats;

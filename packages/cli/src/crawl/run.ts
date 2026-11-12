@@ -10,7 +10,7 @@ import { isAuthFailure } from "../mcp/types";
 import { discardFetch, runFetch } from "./sandbox";
 import type { Corpus, CrawlTarget } from "./registry";
 import type { FailureStreak, History, Outcome, RunRecord, ServerObservation } from "./state";
-import { emptyHistory, PRUNE_AFTER_ABSENT_RUNS, readHistory, writeHistory } from "./state";
+import { CAPTURE_REVISION, emptyHistory, PRUNE_AFTER_ABSENT_RUNS, readHistory, writeHistory } from "./state";
 import { readCorpus, writeCorpus } from "./corpus";
 
 export interface CrawlOptions {
@@ -177,11 +177,15 @@ export async function crawl(options: CrawlOptions): Promise<CrawlResult> {
    */
   const fresh: Record<string, LockedMcpServer> = {};
   const comparable: Record<string, LockedMcpServer> = {};
+  /** Captured, with a baseline the current collector would not have recorded the same way. */
+  const rebaselined = new Set<string>();
   for (const result of captured) {
     if (!result.entry) continue;
     fresh[result.target.name] = result.entry;
     const prior = previous.subjects[result.target.name];
-    if (prior) comparable[result.target.name] = prior;
+    if (!prior) continue;
+    if ((history.servers[result.target.name]?.revision ?? 1) !== CAPTURE_REVISION) rebaselined.add(result.target.name);
+    else comparable[result.target.name] = prior;
   }
 
   const changes = diffLockfiles(
@@ -190,7 +194,7 @@ export async function crawl(options: CrawlOptions): Promise<CrawlResult> {
   );
   const driftedServers = [...new Set(changes.map((change) => change.server))].sort();
 
-  const outcomes: Record<Outcome, number> = { baseline: 0, stable: 0, drifted: 0, "auth-required": 0, unreachable: 0 };
+  const outcomes: Record<Outcome, number> = { baseline: 0, stable: 0, drifted: 0, rebaselined: 0, "auth-required": 0, unreachable: 0 };
   const protocols: Record<string, number> = {};
   const changeKinds: Record<string, number> = {};
   for (const change of changes) changeKinds[change.kind] = (changeKinds[change.kind] ?? 0) + 1;
@@ -219,13 +223,22 @@ export async function crawl(options: CrawlOptions): Promise<CrawlResult> {
     protocols[revision] = (protocols[revision] ?? 0) + 1;
 
     const isBaseline = previous.subjects[name] === undefined;
+    const isRebaseline = rebaselined.has(name);
     const drifted = driftedServers.includes(name);
-    outcomes[isBaseline ? "baseline" : drifted ? "drifted" : "stable"] += 1;
+    outcomes[isBaseline ? "baseline" : isRebaseline ? "rebaselined" : drifted ? "drifted" : "stable"] += 1;
 
     const observation: ServerObservation = history.servers[name] ?? { firstSeenAt: at, lastCheckedAt: at, comparisons: 0, driftEvents: 0 };
+    if (isRebaseline) {
+      // The window being closed was real observation and still counts; the gap to this reading is not.
+      const start = Date.parse(observation.windowStart ?? observation.firstSeenAt);
+      const end = Date.parse(observation.lastCheckedAt);
+      if (Number.isFinite(start) && Number.isFinite(end) && end > start) observation.priorObservedDays = (observation.priorObservedDays ?? 0) + (end - start) / 86_400_000;
+      observation.windowStart = at;
+    }
+    observation.revision = CAPTURE_REVISION;
     observation.lastCheckedAt = at;
     observation.protocol = revision;
-    if (!isBaseline) observation.comparisons += 1;
+    if (!isBaseline && !isRebaseline) observation.comparisons += 1;
     if (drifted) {
       observation.driftEvents += 1;
       observation.lastChangedAt = at;
