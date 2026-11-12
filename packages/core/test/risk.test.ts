@@ -66,6 +66,81 @@ describe("the labels that were wrong on real servers stay wrong no longer", () =
   });
 });
 
+describe("writing files needs a file, not only a verb", () => {
+  const nested = (outer: string, inner: string[]) => ({
+    type: "object",
+    properties: { [outer]: { type: "array", items: { type: "object", properties: Object.fromEntries(inner.map((name) => [name, { type: "string" }])) } } },
+  });
+
+  /*
+   * The official memory server, as it answered on 12 November 2026. Every one of these edits its
+   * own knowledge graph; none names a file, and the agent cannot point any of them at one.
+   */
+  it("does not say the memory server writes files", () => {
+    for (const [name, input] of [
+      ["delete_entities", schema("entityNames")],
+      ["delete_relations", nested("relations", ["from", "to", "relationType"])],
+      ["delete_observations", nested("deletions", ["entityName", "observations"])],
+      ["add_observations", nested("observations", ["entityName", "contents"])],
+      ["create_entities", nested("entities", ["name", "entityType", "observations"])],
+    ] as const) {
+      expect(kinds({ name, inputSchema: input }), name).not.toContain("file-write");
+    }
+  });
+
+  // The official filesystem server's writers, which must stay labelled.
+  it("still says the filesystem server writes files", () => {
+    for (const [name, input] of [
+      ["write_file", schema("path", "content")],
+      ["edit_file", schema("path", "edits", "dryRun")],
+      ["create_directory", schema("path")],
+      ["move_file", schema("source", "destination")],
+      ["append_file", schema("path", "content")],
+      ["copy_file", schema("source", "destination")],
+    ] as const) {
+      expect(kinds({ name, inputSchema: input }), name).toContain("file-write");
+    }
+  });
+
+  it("counts a changing verb when the tool takes a path", () => {
+    expect(kinds({ name: "delete", inputSchema: schema("path") })).toContain("file-write");
+    expect(kinds({ name: "save", inputSchema: schema("filePath", "text") })).toContain("file-write");
+  });
+
+  it("counts content only beside somewhere to put it", () => {
+    expect(kinds({ name: "save_note", inputSchema: schema("title", "content") })).not.toContain("file-write");
+    expect(kinds({ name: "store", inputSchema: schema("path", "data") })).toContain("file-write");
+    expect(kinds({ name: "export_report", inputSchema: schema("destination") })).toContain("file-write");
+  });
+
+  it("does not say the memory server reads files either", () => {
+    for (const [name, input] of [
+      ["read_graph", schema()],
+      ["open_nodes", schema("names")],
+      ["search_nodes", schema("query")],
+    ] as const) {
+      expect(kinds({ name, inputSchema: input }), name).not.toContain("file-read");
+    }
+  });
+
+  it("still says the filesystem server reads files", () => {
+    for (const [name, input] of [
+      ["read_text_file", schema("path", "head", "tail")],
+      ["read_multiple_files", schema("paths")],
+      ["list_directory", schema("path")],
+      ["get_file_info", schema("path")],
+      ["read_file", schema()],
+      ["open_file", schema()],
+    ] as const) {
+      expect(kinds({ name, inputSchema: input }), name).toContain("file-read");
+    }
+  });
+
+  it("still counts the verbs that only mean files", () => {
+    for (const name of ["unlink", "chmod", "mkdir", "rmdir", "write_query"]) expect(kinds({ name }), name).toContain("file-write");
+  });
+});
+
 describe("surfaceCapabilities names the tools behind each label", () => {
   it("groups by kind and lists the tools", () => {
     const found = surfaceCapabilities([
