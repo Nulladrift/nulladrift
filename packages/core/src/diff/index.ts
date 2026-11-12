@@ -176,17 +176,22 @@ function compareTool(name: string, before: LockedTool, after: LockedTool): Chang
   }
 
   /*
-   * The digest covers more than the fields called out above -- title, icons, `_meta`. If none of
-   * them fired, something in that remainder moved, and silence would be worse than a vague
-   * finding.
+   * The digest covers more than the fields called out above -- title, icons, `_meta`, how it may
+   * be run. Whichever of those moved is reported, beside any other finding. They used to be
+   * reported only when nothing else had fired, so a tool whose title and description changed
+   * together showed the description alone: the title a client shows in place of the name changed
+   * and nobody was told, and accepting approved it unseen. Found by changing both at once.
+   *
+   * If none of them moved and nothing else fired, something in the remainder did, and silence
+   * would be worse than a vague finding.
    */
-  if (changes.length === 0) {
-    const moved = [
-      !same(before.title, after.title) ? "title" : "",
-      !same(before.icons, after.icons) ? "icons" : "",
-      !same(before.execution, after.execution) ? `how it may be run (${describeExecution(before.execution)} → ${describeExecution(after.execution)})` : "",
-      !same(before.meta, after.meta) ? "_meta" : "",
-    ].filter(Boolean);
+  const moved = [
+    !same(before.title, after.title) ? "title" : "",
+    !same(before.icons, after.icons) ? "icons" : "",
+    !same(before.execution, after.execution) ? `how it may be run (${describeExecution(before.execution)} → ${describeExecution(after.execution)})` : "",
+    !same(before.meta, after.meta) ? "_meta" : "",
+  ].filter(Boolean);
+  if (moved.length > 0 || changes.length === 0) {
     changes.push(change("tool.changed", name, `tool definition changed: ${moved.length > 0 ? moved.join(", ") : "a field this report has no finding for"}`, { ...at, before, after }));
   }
   return changes;

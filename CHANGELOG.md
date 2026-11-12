@@ -12,6 +12,14 @@ telemetry). Renaming a change kind breaks every consumer that matched on it.
 
 ### Fixed
 
+- **A tool's title change is reported when something else about the tool changed too.** The title,
+  icons, `_meta` and how a tool may be run were reported only when nothing else about the tool had
+  moved, so a title changed together with a description showed the description alone, and
+  accepting the change approved a title nobody was shown. They are now reported beside any other
+  finding, as `tool.changed`. Found by using the control plane end to end.
+- **`push` says when a server could not be read.** It sent the failure and printed nothing, so under
+  a policy that lets an unreachable server warn, the build passed as "clean" with no mention that a
+  server had not been looked at. It now names each one, whatever the control plane decides.
 - **The crawl does not count a new collector as the servers changing.** A baseline records the
   capture revision it was read at, and one from an older revision is re-baselined rather than
   compared: the run counts it apart, and the days observed before it still count toward the rate.

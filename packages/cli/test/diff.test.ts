@@ -164,6 +164,18 @@ describe("behavioural annotations", () => {
     expect(changes[0]?.severity).toBe("low");
   });
 
+  /*
+   * Found by changing both at once: only the description was reported, so the title a client shows
+   * in place of the tool's name changed and accepting the change approved it unseen.
+   */
+  it("reports a title change beside another change to the same tool", () => {
+    const before = lockOfTools([makeTool({ name: "read_file", title: "Read File", description: "Read a file." })]);
+    const after = lockOfTools([makeTool({ name: "read_file", title: "Read Any File", description: "Read any file at all." })]);
+    const changes = diffLockfiles(before, after);
+    expect(kinds(changes).sort()).toEqual(["tool.changed", "tool.description.changed"]);
+    expect(changes.find((change) => change.kind === "tool.changed")?.summary).toMatch(/title/);
+  });
+
   it("does not fire when an explicit annotation matches the default it replaces", () => {
     const before = lockOfTools([makeTool({ name: "send", annotations: { openWorldHint: true } })]);
     const after = lockOfTools([makeTool({ name: "send" })]);
