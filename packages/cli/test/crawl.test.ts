@@ -14,6 +14,7 @@ import type { Corpus, CrawlTarget } from "../src/crawl/registry";
 import type { History } from "../src/crawl/state";
 import { PRUNE_AFTER_ABSENT_RUNS } from "../src/crawl/state";
 import { readLockfile } from "../src/lock/io";
+import { corpusFile, readCorpus } from "../src/crawl/corpus";
 import { isAuthFailure, UnreachableServerError } from "../src/mcp/types";
 
 const SERVER = fileURLToPath(new URL("./fixtures/servers/wire-server.mjs", import.meta.url));
@@ -107,22 +108,25 @@ describe("a crawl over time", () => {
       expect(second.run.outcomes.unreachable).toBe(1);
 
       // And its pinned entry survives, so a transient outage does not discard the baseline.
-      const lock = await readLockfile(join(state, "corpus.lock"));
+      const lock = await readCorpus(state);
       expect(lock.subjects["alpha"]?.tools?.length).toBeGreaterThan(0);
     },
     120_000,
   );
 
   it(
-    "keeps the corpus lock in the product's own format",
+    "keeps the corpus in the product's own format, one lockfile per server",
     async () => {
       const state = await stateDir();
       await crawl({ stateDir: state, corpus: corpusOf([target("alpha", "base"), target("beta", "base")]), now: new Date(T0), timeoutMs: 20_000 });
 
-      const text = await readFile(join(state, "corpus.lock"), "utf8");
-      expect(text).not.toMatch(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/);
-      const lock = await readLockfile(join(state, "corpus.lock"));
-      expect(Object.keys(lock.subjects).sort()).toEqual(["alpha", "beta"]);
+      for (const name of ["alpha", "beta"]) {
+        const text = await readFile(join(state, corpusFile(name)), "utf8");
+        // No timestamps: a server that did not change must leave its file byte-for-byte alone.
+        expect(text).not.toMatch(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/);
+        expect(Object.keys((await readLockfile(join(state, corpusFile(name)))).subjects)).toEqual([name]);
+      }
+      expect(Object.keys((await readCorpus(state)).subjects).sort()).toEqual(["alpha", "beta"]);
     },
     120_000,
   );
@@ -140,7 +144,7 @@ describe("a crawl over time", () => {
       const result = await crawl({ stateDir: state, corpus: corpusOf([withFallback]), now: new Date(T0), timeoutMs: 20_000 });
 
       expect(result.run.outcomes).toMatchObject({ baseline: 1, unreachable: 0 });
-      const lock = await readLockfile(join(state, "corpus.lock"));
+      const lock = await readCorpus(state);
       expect(lock.subjects["alpha"]?.tools?.length).toBeGreaterThan(0);
     },
     120_000,
@@ -175,12 +179,12 @@ describe("a crawl over time", () => {
         expect(last.pruned).toEqual([]);
       }
       // Still pinned on the last run before the threshold: a short walk is not a delisting.
-      expect((await readLockfile(join(state, "corpus.lock"))).subjects["alpha"]).toBeDefined();
+      expect((await readCorpus(state)).subjects["alpha"]).toBeDefined();
       expect(last.history.absent["alpha"]).toBe(PRUNE_AFTER_ABSENT_RUNS - 1);
 
       const final = await crawl({ stateDir: state, corpus: corpusOf([]), now: new Date(T0 + PRUNE_AFTER_ABSENT_RUNS * DAY) });
       expect(final.pruned).toEqual(["alpha"]);
-      expect((await readLockfile(join(state, "corpus.lock"))).subjects["alpha"]).toBeUndefined();
+      expect((await readCorpus(state)).subjects["alpha"]).toBeUndefined();
 
       // The observation survives the snapshot: it is the record the all-time rate is built from.
       expect(final.history.servers["alpha"]).toBeDefined();
@@ -199,7 +203,7 @@ describe("a crawl over time", () => {
         expect(result.pruned).toEqual([]);
       }
 
-      expect((await readLockfile(join(state, "corpus.lock"))).subjects["alpha"]).toBeDefined();
+      expect((await readCorpus(state)).subjects["alpha"]).toBeDefined();
     },
     120_000,
   );

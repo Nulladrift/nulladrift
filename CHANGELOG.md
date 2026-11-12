@@ -10,7 +10,15 @@ telemetry). Renaming a change kind breaks every consumer that matched on it.
 
 ## [Unreleased]
 
-Nothing yet.
+### Fixed
+
+- **The crawl keeps what it measures.** Its state was one `corpus.lock` of every server, 305 MB at
+  6,215 servers, and GitHub refuses a file over 100 MB, so the commit that saves it failed every
+  day and each run started again from nothing. The corpus is now one `mcp.lock` per server under
+  `corpus/`, the largest a few megabytes; a day's commit carries only the servers that moved, and
+  a server's history is `git log` on one file. The old single file is read once and replaced. A
+  state file that cannot be read now costs that one server its baseline and is reported, where an
+  unreadable corpus used to pass for a first run.
 
 ## [0.10.0] - 2026-11-12
 

@@ -1,19 +1,17 @@
 /** One pass over the corpus: capture every server, compare against the pinned snapshot. */
 import { mkdir } from "node:fs/promises";
-import { join } from "node:path";
 import { diffLockfiles } from "../diff";
 import type { Change } from "../diff/types";
 import { buildLockedServer } from "../lock/build";
-import { readLockfile, writeLockfile } from "../lock/io";
 import type { Lockfile, LockedMcpServer } from "../lock/types";
 import { LOCKFILE_VERSION } from "../lock/types";
-import { VERSION } from "../lib/version";
 import { captureSurface } from "../mcp/capture";
 import { isAuthFailure } from "../mcp/types";
 import { discardFetch, runFetch } from "./sandbox";
 import type { Corpus, CrawlTarget } from "./registry";
 import type { FailureStreak, History, Outcome, RunRecord, ServerObservation } from "./state";
-import { CORPUS_LOCK, emptyHistory, PRUNE_AFTER_ABSENT_RUNS, readHistory, writeHistory } from "./state";
+import { emptyHistory, PRUNE_AFTER_ABSENT_RUNS, readHistory, writeHistory } from "./state";
+import { readCorpus, writeCorpus } from "./corpus";
 
 export interface CrawlOptions {
   stateDir: string;
@@ -33,6 +31,10 @@ export interface CrawlResult {
   history: History;
   /** Every change seen this pass, for the detailed section of the report. */
   changes: Change[];
+  /** Servers this run had a baseline for, read from the state directory before it started. */
+  baselines: number;
+  /** Corpus files that could not be read, so those servers started over. Should be empty. */
+  unreadable: string[];
   /** Subjects dropped from the corpus lock because the registry no longer lists them. */
   pruned: string[];
 }
@@ -142,12 +144,14 @@ export async function crawl(options: CrawlOptions): Promise<CrawlResult> {
   const at = now.toISOString();
 
   await mkdir(stateDir, { recursive: true });
-  const lockPath = join(stateDir, CORPUS_LOCK);
-  const previous: Lockfile = await readLockfile(lockPath).catch(() => ({
-    lockfileVersion: LOCKFILE_VERSION,
-    generatedBy: `nulladrift@${VERSION}`,
-    subjects: {},
-  }));
+  /*
+   * Read file by file. It used to be one lockfile read with `.catch(() => empty)`, so a state that
+   * could not be read looked exactly like a first run -- which is what every run looked like for
+   * a week while the state could not be saved. A file that cannot be read now costs that one
+   * server its baseline, and the count is reported.
+   */
+  const stored = await readCorpus(stateDir);
+  const previous: Lockfile = { lockfileVersion: LOCKFILE_VERSION, subjects: stored.subjects };
   const history = await readHistory(stateDir).catch(() => emptyHistory());
 
   let done = 0;
@@ -264,8 +268,8 @@ export async function crawl(options: CrawlOptions): Promise<CrawlResult> {
     pruned.push(name);
   }
 
-  await writeLockfile(lockPath, { lockfileVersion: LOCKFILE_VERSION, generatedBy: `nulladrift@${VERSION}`, subjects });
+  await writeCorpus(stateDir, subjects);
   await writeHistory(stateDir, history);
 
-  return { run, history, changes, pruned: pruned.sort() };
+  return { run, history, changes, pruned: pruned.sort(), baselines: Object.keys(stored.subjects).length, unreadable: stored.unreadable };
 }
