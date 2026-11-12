@@ -25,8 +25,56 @@
           "listChanged": false
         }
       },
-      "instructions": "getcleed finds B2B prospects showing buying signals on LinkedIn and drafts the outreach.\n\nWithout an account, get_sample_pipeline returns a fictional pipeline in the real shapes, so you can show the user what Getcleed produces before they connect. On an account, start with get_pipeline_stats for the lay of the land, list_signals to see what this account treats as a buying signal, and get_icp for who it targets. list_prospects and get_prospect read the pipeline; every signal carries the verbatim quote from the post it came from, so quote that rather than paraphrasing.\n\nTo grow the pipeline: find_leads_from_signals searches recent LinkedIn posts on the account's own signal topics and returns ICP-matching people (nothing is saved until import_sourced_leads), add_leads_from_urls saves specific profiles, and analyze_prospects detects signals on prospects that have none.\n\nsend_email and send_linkedin_message reach real people immediately and cannot be undone. Show the user the draft and get their agreement before calling them.",
+      "instructions": "getcleed finds B2B prospects showing buying signals on LinkedIn and runs the outreach to them. The daily work of the web app can be done here; the user only opens it to sign in to LinkedIn or a mailbox, and for billing.\n\nWithout an account, get_sample_pipeline returns a fictional pipeline in the real shapes, so you can show the user what Getcleed produces before they connect. On an account, start with get_account_status: it says what is set up, what is missing and gives the link for the steps only the user can do in a browser.\n\nThe daily loop:\n1. Find: find_leads searches for people matching the targeting (get_icp, update_targeting) and puts them in a review queue. It runs in the background; get_search_status follows it.\n2. Review: list_search_results shows who was found with a fit level. approve_leads saves people as leads and can add them to a sequence; reject_leads hides them, and add_exclusion stops similar people from coming back.\n3. Reach out: create_sequence, then start_sequence. list_sequence_messages shows what each lead will receive; update_sequence_lead edits or approves one message.\n4. Answer: list_replies, get_conversation, send_reply.\n\nlist_prospects and get_prospect read saved leads; every signal carries the verbatim quote from the post it came from, so quote that rather than paraphrasing. analyze_prospects detects signals on leads that have none.\n\nSending is real. start_sequence, approve_leads or add_leads_to_sequence into a running sequence, approving a message with update_sequence_lead, and turning sending on with update_sending_settings make connection requests and messages go out from the user's own LinkedIn account. They first answer with what will happen and act only when called again with confirm: true. Setting confirm is your statement that the user read that answer and agreed; never set it on your own. send_reply, send_email and send_linkedin_message reach a person immediately and cannot be undone: show the user the exact text and get their agreement before calling them.\n\nWhen a value is missing from an answer, leave it out rather than telling the user it could not be found.",
       "tools": [
+        {
+          "name": "add_exclusion",
+          "title": "Exclude a kind of lead",
+          "description": "Save an exclusion in the account targeting so later searches skip matching people: a job title keyword, an industry, or a company size limit. With candidateId (a result just rejected), matching people still waiting in that same search are removed too. The user can see and remove exclusions with get_icp and remove_exclusion.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "candidateId": {
+                "description": "A result from the search whose queue should also be cleared of matching people",
+                "type": "string"
+              },
+              "direction": {
+                "description": "For size: exclude companies over or under that many employees",
+                "enum": ["over", "under"],
+                "type": "string"
+              },
+              "kind": {
+                "description": "title = a word in the job title, industry = a company industry, size = a company headcount limit",
+                "enum": ["title", "industry", "size"],
+                "type": "string"
+              },
+              "value": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "number"
+                  }
+                ],
+                "description": "The title keyword (at least 5 characters: it hides every title containing it), the industry name, or the number of employees"
+              }
+            },
+            "required": ["kind", "value"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:b55d624b49edc046ca8ef4c9571ef2ffe969023de8a6ad4da4a5c28f20c3db5c"
+        },
         {
           "name": "add_leads_from_urls",
           "title": "Add leads from LinkedIn URLs",
@@ -62,6 +110,42 @@
           "digest": "sha256:aa7d9174c92c3b01add1d0a5e1096dfbefce037bda53c46ca00ecfbb4ce586a8"
         },
         {
+          "name": "add_leads_to_sequence",
+          "title": "Add saved leads to a sequence",
+          "description": "Put saved leads (prospect ids from list_prospects) into a sequence. Leads already in a sequence, dismissed, or who replied are skipped. If the sequence is running, the first call returns what will be sent and needs confirm: true. Without LinkedIn connected and a sending schedule on, the leads wait in the sequence until start_sequence.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "confirm": {
+                "description": "Set to true only after the user agreed to what the first call (without it) said would happen.",
+                "type": "boolean"
+              },
+              "prospectIds": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "sequenceId": {
+                "type": "string"
+              }
+            },
+            "required": ["prospectIds", "sequenceId"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": true,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:64d1638d6a329bc7c5702dad8298ed90cf2541f8cb44e2cf0fec69d67c2b0f45"
+        },
+        {
           "name": "analyze_prospects",
           "title": "Analyze prospects",
           "description": "Run the signal pipeline on prospects: enrich anyone missing company data, read their recent LinkedIn activity, and detect buying signals. Every signal kept must quote its source verbatim. Counts against the monthly analysis quota. Slow: expect up to a few minutes.",
@@ -94,6 +178,47 @@
             "readOnly": false
           },
           "digest": "sha256:74fd7a21fed4b7a074e63dac5370e0fa32b1df59f4b144b682aa6d0d27e90f26"
+        },
+        {
+          "name": "approve_leads",
+          "title": "Approve search results",
+          "description": "Save people from the review queue as leads (in a list named after their search), and optionally add them to a sequence. Pass ids from one search, or a searchId to approve everyone still waiting in it. If the sequence is running, the first call returns what will be sent and needs confirm: true. Without LinkedIn connected the leads wait inside the sequence until it is started.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "confirm": {
+                "description": "Set to true only after the user agreed to what the first call (without it) said would happen.",
+                "type": "boolean"
+              },
+              "ids": {
+                "description": "Result ids from list_search_results, all from the same search",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "searchId": {
+                "description": "Approve everyone still to review in this search",
+                "type": "string"
+              },
+              "sequenceId": {
+                "description": "Also add them to this sequence (see list_sequences)",
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": true,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:9d1a3d84b49f0c41f1799860faea1111078feb0509e37358cb240755b3761e92"
         },
         {
           "name": "create_custom_signal",
@@ -131,6 +256,54 @@
             "readOnly": false
           },
           "digest": "sha256:1930160557b1a448950129ade6b8a9676a75e31cb3a990d27f89737d14c22e77"
+        },
+        {
+          "name": "create_sequence",
+          "title": "Create a sequence",
+          "description": "Create an outreach sequence. approach \"signal\": a connection request, then an opener Getcleed writes for each lead from their own signals and two follow-ups (the default, and what the product is for). \"simple\": four short generic messages. \"own\": fixed messages you pass, sent to everyone with {{first_name}} and {{company|your team}} filled in (write a fallback after | for company). The sequence is created stopped and empty: nothing is sent until leads are added and start_sequence is confirmed. Does not need LinkedIn connected.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "approach": {
+                "default": "signal",
+                "enum": ["signal", "simple", "own"],
+                "type": "string"
+              },
+              "dailyLimit": {
+                "default": 20,
+                "description": "Most leads started per day",
+                "type": "integer"
+              },
+              "messages": {
+                "description": "For approach \"own\": the messages in order. The first goes out the day after they accept the connection request.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "name": {
+                "type": "string"
+              },
+              "reviewBeforeSend": {
+                "default": false,
+                "description": "true: every message waits for an approval before it is sent. false (the product default): messages go out on schedule.",
+                "type": "boolean"
+              }
+            },
+            "required": ["name"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:acd4cfd8173a59f4b4c3ee228b2476adf2ede91b5e3280bf8422884dceada0f6"
         },
         {
           "name": "draft_email",
@@ -211,6 +384,32 @@
           "digest": "sha256:d3ae8a0726842fe6ada02ed1693a3d53b399ed6a00b5cdd575d9904f59e1f528"
         },
         {
+          "name": "find_leads",
+          "title": "Find leads (Deep Search)",
+          "description": "Search for new people matching the account targeting (see get_icp; change it with update_targeting or add_exclusion first if the user wants someone else). Runs in the background for two to five minutes and puts the people found in the review queue: nobody is saved until approve_leads. Counts against the weekly discovery allowance. Call get_search_status to follow it, then list_search_results.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "name": {
+                "description": "A name for this search. It titles its list and its section in a sequence. Defaults to the targeting name.",
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:51ea5563ade7fe48290c7a213ccc1f6a0fe41a34f5c5a0411b3b57bea19e5c07"
+        },
+        {
           "name": "find_leads_from_signals",
           "title": "Find new leads from signal topics",
           "description": "Search recent LinkedIn posts on the topics of this account's own signal definitions, keep only posts a check can prove are on topic, and return the people who wrote, commented on or reacted to them, filtered against the ICP (role, industry, country) and ranked. Nothing is saved: pass the returned candidates to import_sourced_leads. Spends a little of the monthly sourcing budget.",
@@ -241,9 +440,9 @@
           "digest": "sha256:c251172cf5946afafc6e7555b26de723ba8b8b65c35321265012eac4bad9a6e0"
         },
         {
-          "name": "get_icp",
-          "title": "Get the ideal customer profile",
-          "description": "The active ICP: target roles, industries, countries, company sizes, relevant keywords and any exclusions. This is what sourcing and scoring filter against.",
+          "name": "get_account_status",
+          "title": "Account status and what to set up next",
+          "description": "Where the account stands: plan and allowances, whether the targeting exists, whether LinkedIn and a mailbox are connected, the sending schedule, and the next steps the product suggests. Steps that need a browser (connecting LinkedIn or a mailbox, billing) come with the link to give the user. Call this first in a new conversation.",
           "inputSchema": {
             "additionalProperties": false,
             "properties": {},
@@ -259,7 +458,62 @@
             "openWorld": true,
             "readOnly": true
           },
-          "digest": "sha256:fe14f8208043afe80f1b66eb35a5dd8e3fa57486c76fdd643e8701c9dde91b25"
+          "digest": "sha256:f79d6349bb321ed27f7ca3fcfba187e1d1d3fa715aa91ea0c2b106adbb014ed9"
+        },
+        {
+          "name": "get_conversation",
+          "title": "Read a conversation",
+          "description": "The messages of one conversation with a lead, oldest first, each marked as written by the user or by the lead. Read it before writing a reply.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "channel": {
+                "enum": ["linkedin", "email"],
+                "type": "string"
+              },
+              "cursor": {
+                "type": "string"
+              },
+              "id": {
+                "description": "The id from list_replies",
+                "type": "string"
+              }
+            },
+            "required": ["channel", "id"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:3cf6078aaaa2f15858d27a73c399d915b6bf4ff8d26d43d171a6c20aeb1cb928"
+        },
+        {
+          "name": "get_icp",
+          "title": "Get the ideal customer profile",
+          "description": "The active targeting (ICP): target roles, industries, countries, company sizes, relevant keywords and every saved exclusion. This is what find_leads searches for and what scoring filters against. Change it with update_targeting, add_exclusion and remove_exclusion.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {},
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:14b87703af4318f2b0780cc2fbe03f64fb4841194be0810740c5ac6ccdc17362"
         },
         {
           "name": "get_pipeline_stats",
@@ -332,6 +586,62 @@
             "readOnly": true
           },
           "digest": "sha256:18bca26bd0c525c8e25a3f42725263fb127f1c56b5e518016e45265f0fa0d26a"
+        },
+        {
+          "name": "get_search_status",
+          "title": "Search status",
+          "description": "Whether a find_leads search is running or finished, how many people are waiting in the review queue per search, and the weekly discovery allowance left.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {},
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:74505abc19d14f2c732818f60c0ab91c5917ec8e1287f25d3a1ed1eadb428337"
+        },
+        {
+          "name": "get_sequence",
+          "title": "Get one sequence",
+          "description": "One sequence in full: its steps, its sections (the search each group of leads came from, which can be stopped or resumed on its own), and each lead with where they are, what happens next and when.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "limit": {
+                "default": 50,
+                "description": "How many leads to return",
+                "type": "integer"
+              },
+              "offset": {
+                "default": 0,
+                "type": "integer"
+              },
+              "sequenceId": {
+                "type": "string"
+              }
+            },
+            "required": ["sequenceId"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:f9e300541b23e36de18ff386057e8c7eccca4577fcf73d8bf0d237837415a931"
         },
         {
           "name": "import_sourced_leads",
@@ -438,6 +748,147 @@
           "digest": "sha256:706e06afd85806078f9b04148f90737ce8042af186f506da0a780a802c9d47dc"
         },
         {
+          "name": "list_replies",
+          "title": "List replies waiting for an answer",
+          "description": "Conversations where a lead answered the outreach and the user has not replied yet, newest first, on LinkedIn and by email. Use the id and channel with get_conversation and send_reply.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "channel": {
+                "default": "all",
+                "enum": ["all", "linkedin", "email"],
+                "type": "string"
+              },
+              "cursor": {
+                "description": "nextCursor from the previous call",
+                "type": "string"
+              },
+              "days": {
+                "default": "28",
+                "description": "How far back to look",
+                "enum": ["7", "28", "90"],
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:4d7430d604d401c9bbd56c21a40734d4b755956ca19f80faf94079262bd09bc6"
+        },
+        {
+          "name": "list_search_results",
+          "title": "List search results to review",
+          "description": "People found by searches, best fit first. \"to_review\" is the queue waiting for a decision, \"approved\" the ones saved as leads, \"rejected\" the ones marked not a fit (they can be restored with reject_leads undo). Each person has a fit level against the targeting and the reason for it.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "limit": {
+                "default": 30,
+                "type": "integer"
+              },
+              "offset": {
+                "default": 0,
+                "type": "integer"
+              },
+              "searchId": {
+                "description": "Only this search (ids from get_search_status)",
+                "type": "string"
+              },
+              "status": {
+                "default": "to_review",
+                "enum": ["to_review", "approved", "rejected"],
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:acffa09462ed400a390f61a9d750307b16b57ca686f9ba4bcc345c78aee43f4e"
+        },
+        {
+          "name": "list_sequence_messages",
+          "title": "Read the messages a sequence will send",
+          "description": "For each lead in a sequence, the messages still to be sent to them, with the text when it is already written, and the evidence about the lead the text is based on. Use it to show the user what will go out, and before approving a message when review is on (pass the evidenceFingerprint to update_sequence_lead).",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "awaitingApprovalOnly": {
+                "default": false,
+                "type": "boolean"
+              },
+              "limit": {
+                "default": 10,
+                "description": "How many leads",
+                "type": "integer"
+              },
+              "offset": {
+                "default": 0,
+                "type": "integer"
+              },
+              "sequenceId": {
+                "type": "string"
+              }
+            },
+            "required": ["sequenceId"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:350ce023b18e4f7037136909280cb8ba5baa2c23414ede3b208658074a751b10"
+        },
+        {
+          "name": "list_sequences",
+          "title": "List sequences",
+          "description": "Every outreach sequence in the account: whether it is running, whether each message is reviewed before sending, its steps in short, and how many leads are in each state.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "includeArchived": {
+                "default": false,
+                "type": "boolean"
+              }
+            },
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:e82f57cfb1c7a6fd7a3609ae4c4ed6fc86855a7c30705010962add3dc1a0d831"
+        },
+        {
           "name": "list_signals",
           "title": "List signal definitions",
           "description": "The buying signals this account looks for: the predefined ones and the custom ones, each with the definition used to detect it and whether it is enabled. Use the returned type values with list_prospects and find_leads_from_signals.",
@@ -490,6 +941,91 @@
             "readOnly": false
           },
           "digest": "sha256:a980fa8cb662ea33a925e29df2d63b2347357b0cb5f3a85a6a2dfa8e62a25426"
+        },
+        {
+          "name": "reject_leads",
+          "title": "Reject search results",
+          "description": "Mark people in the review queue as not a fit, optionally with the reason. They leave the queue and later searches skip them. With undo: true, brings rejected people back to the queue. When the reason would apply to others too, offer add_exclusion.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "ids": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "note": {
+                "type": "string"
+              },
+              "reason": {
+                "description": "function = wrong job function, seniority, company_type, company_size, other",
+                "enum": ["function", "seniority", "company_type", "company_size", "other"],
+                "type": "string"
+              },
+              "undo": {
+                "description": "Restore these rejected people to the review queue",
+                "type": "boolean"
+              }
+            },
+            "required": ["ids"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:c346513397f7c7e3fcce66aa94b232d69289950f93f590ddabb64b3b6940e9bb"
+        },
+        {
+          "name": "remove_exclusion",
+          "title": "Remove an exclusion",
+          "description": "Take one saved exclusion out of the account targeting. Pass it as get_icp lists it under exclusions.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "direction": {
+                "description": "For size: exclude companies over or under that many employees",
+                "enum": ["over", "under"],
+                "type": "string"
+              },
+              "kind": {
+                "description": "title = a word in the job title, industry = a company industry, size = a company headcount limit",
+                "enum": ["title", "industry", "size"],
+                "type": "string"
+              },
+              "value": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "number"
+                  }
+                ],
+                "description": "The title keyword (at least 5 characters: it hides every title containing it), the industry name, or the number of employees"
+              }
+            },
+            "required": ["kind", "value"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:9e6ce9eb7826b8abcffae710265b4de23e843aa22c5cb34005146fc34f0c1874"
         },
         {
           "name": "send_email",
@@ -558,9 +1094,320 @@
             "readOnly": false
           },
           "digest": "sha256:9ab28035e601f5c2bd92675d35bfddee1f1bc3db61229e2b8484a155dc52906d"
+        },
+        {
+          "name": "send_reply",
+          "title": "Send a reply",
+          "description": "Send a reply in a conversation, from the user's own LinkedIn account or mailbox. It reaches the lead immediately and cannot be undone: show the user the exact text and get their agreement first. Only conversations started by Getcleed outreach can be answered here.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "channel": {
+                "enum": ["linkedin", "email"],
+                "type": "string"
+              },
+              "id": {
+                "description": "The id from list_replies",
+                "type": "string"
+              },
+              "text": {
+                "type": "string"
+              }
+            },
+            "required": ["channel", "id", "text"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": true,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:6443ca9874bebbaee66c5dd65dd6c3693fad1d87988e0e062534a7e25942084e"
+        },
+        {
+          "name": "set_lead_status",
+          "title": "Dismiss or restore saved leads",
+          "description": "Dismiss saved leads (prospect ids from list_prospects): no more outreach goes to them and any sequence they are in is paused for them. \"restored\" brings dismissed leads back.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "prospectIds": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "status": {
+                "enum": ["dismissed", "restored"],
+                "type": "string"
+              }
+            },
+            "required": ["prospectIds", "status"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:5b31ad8e7761927407973a8e717adb9cdae227343420526131be835bbc5895b9"
+        },
+        {
+          "name": "start_sequence",
+          "title": "Start or resume a sequence",
+          "description": "Start a sequence: its leads are enrolled and steps begin going out on the sending schedule, from the user's own LinkedIn account. The first call returns how many people it reaches and whether messages are reviewed first; it only starts with confirm: true. With section, resumes just that section after stop_sequence (also confirmed first when the sequence is running). Needs LinkedIn connected and the sending schedule on (see get_account_status).",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "confirm": {
+                "description": "Set to true only after the user agreed to what the first call (without it) said would happen.",
+                "type": "boolean"
+              },
+              "section": {
+                "additionalProperties": false,
+                "description": "One section of the sequence, as get_sequence lists it (sourceId and sourceName; leave both out for leads added manually)",
+                "properties": {
+                  "sourceId": {
+                    "type": "string"
+                  },
+                  "sourceName": {
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              },
+              "sequenceId": {
+                "type": "string"
+              }
+            },
+            "required": ["sequenceId"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": true,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:5027af6df4e651dd6a19eb753ca6cb4c15875fce732e9cf35ecdce1955287717"
+        },
+        {
+          "name": "stop_sequence",
+          "title": "Stop a sequence",
+          "description": "Stop a running sequence: nothing more is sent until it is started again. With section, stops only the leads that came from that search and leaves the rest running. Stopping never unsends anything.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "section": {
+                "additionalProperties": false,
+                "description": "One section of the sequence, as get_sequence lists it (sourceId and sourceName; leave both out for leads added manually)",
+                "properties": {
+                  "sourceId": {
+                    "type": "string"
+                  },
+                  "sourceName": {
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              },
+              "sequenceId": {
+                "type": "string"
+              }
+            },
+            "required": ["sequenceId"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:837401d81f8ef8fde28a75d40831aa2098fa976e1481b54a4a56ebd6b1318250"
+        },
+        {
+          "name": "update_sending_settings",
+          "title": "Set the sending schedule",
+          "description": "When and how fast sequences send: time zone, days, hours, daily limits, and whether sending is on at all. Fields left out keep their value. Turning it on lets running sequences send: that first call returns the schedule and needs confirm: true, and the first time it also needs the time zone. Needs LinkedIn connected.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "activeDays": {
+                "description": "Days sending is allowed: 0 Sunday to 6 Saturday",
+                "items": {
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              "confirm": {
+                "description": "Set to true only after the user agreed to what the first call (without it) said would happen.",
+                "type": "boolean"
+              },
+              "dailyLimit": {
+                "description": "Messages per day",
+                "type": "integer"
+              },
+              "enabled": {
+                "description": "Whether sequences may send",
+                "type": "boolean"
+              },
+              "endHour": {
+                "type": "integer"
+              },
+              "invitationsPerDay": {
+                "type": "integer"
+              },
+              "invitationsPerWeek": {
+                "type": "integer"
+              },
+              "minutesBetweenSends": {
+                "type": "integer"
+              },
+              "startHour": {
+                "type": "integer"
+              },
+              "timezone": {
+                "description": "IANA time zone, e.g. Europe/Paris",
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": true,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:4470c4c24a373b0f5c6550dadc6f53cc86f1ee1609d99592d71024bfae968011"
+        },
+        {
+          "name": "update_sequence_lead",
+          "title": "Edit, approve, pause or skip one lead in a sequence",
+          "description": "Act on one lead inside a sequence (enrollmentId from get_sequence or list_sequence_messages). editText rewrites a message not sent yet. status \"active\" approves the waiting message when review is on (pass the evidenceFingerprint that list_sequence_messages returned with the text the user read) or resumes a paused lead (approving first returns the text and needs confirm: true); \"paused\" holds them; \"skipped\" takes them out of the sequence for good. An approved message is sent on schedule and cannot be unsent.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "confirm": {
+                "description": "Set to true only after the user agreed to what the first call (without it) said would happen.",
+                "type": "boolean"
+              },
+              "editText": {
+                "additionalProperties": false,
+                "properties": {
+                  "stepIndex": {
+                    "type": "integer"
+                  },
+                  "subject": {
+                    "type": "string"
+                  },
+                  "text": {
+                    "type": "string"
+                  }
+                },
+                "required": ["stepIndex", "text"],
+                "type": "object"
+              },
+              "enrollmentId": {
+                "type": "string"
+              },
+              "evidenceFingerprint": {
+                "type": "string"
+              },
+              "status": {
+                "enum": ["active", "paused", "skipped"],
+                "type": "string"
+              }
+            },
+            "required": ["enrollmentId"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": true,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:3e53cde0c0c9bce7ced6d764f244fe477aae0f394a6606074d95d0dcab50c203"
+        },
+        {
+          "name": "update_targeting",
+          "title": "Update the targeting",
+          "description": "Change who find_leads looks for: target job titles, industries, countries and company sizes. Each field passed replaces that field; fields left out stay as they are. Show the user the current targeting (get_icp) and the change before calling. To exclude people, use add_exclusion instead.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "companySize": {
+                "items": {
+                  "enum": ["1-10 employees", "11-50 employees", "51-200 employees", "201-500 employees", "501-1000 employees", "1000+ employees"],
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "countries": {
+                "description": "Country names",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "industries": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "roles": {
+                "description": "Job titles to reach, e.g. \"Head of Sales\"",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:d4e7d236a816fd787c7ed4cdc85ae1d57676cc348326d8c415721a8444a4c94b"
         }
       ],
-      "digest": "sha256:28df1d580e7cdf426a103a66031ede140028023673284c7fe0cf74d004913cbf"
+      "digest": "sha256:97df172e2e920cd42b7be6aa395fc435e275b63c98a834830423aae559d411ab"
     }
   }
 }

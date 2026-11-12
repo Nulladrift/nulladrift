@@ -13010,7 +13010,7 @@
         {
           "name": "tendon_design",
           "title": "Design or check a girder's prestressing tendons (Tendon Designer)",
-          "description": "Designs the post- or pre-tensioning tendons of a concrete girder in the open model to EN 1992-1-1 with the Tendon Designer plugin's own engine, or reads the model's own tendons and checks them (mode improve, the default when tendons run along the girder). Reads the girder (a structure group, element list or the CIVIL NX selection; for improve it is picked from the tendons), its sections, supports and concrete, and the forces: construction-stage results when the model has stages (stage by stage for improve), else the static load cases named, plus an optional live envelope and ULS envelope combination. The girder is ONE girder line (a group holding several girders is split; girderLine picks one). Composite girders (precast + deck slab) are checked stage by stage (compositeMode) with the slab's own concrete, including the slab top; standard precast beams are pre-tensioned on their published strand positions, with debonded (sleeved) strands set or searched for by debonding, each end's length separately. Then auto-designs the layout (new) or reads the tendons in (improve), and runs every check: stresses at transfer and in service, Magnel, load balancing, losses, ULS bending, cover, spacing, bend radius, anchorage zones. autoResolve tries the smallest change that clears failed checks. The design is kept (designId) for tendon_write. Read-only.",
+          "description": "Designs the post- or pre-tensioning tendons of a concrete girder in the open model to EN 1992-1-1 with the Tendon Designer plugin's own engine, or reads the model's own tendons and checks them (mode improve, the default when tendons run along the girder). Reads the girder (a structure group, element list or the CIVIL NX selection; for improve it is picked from the tendons), its sections, supports and concrete, and the forces: construction-stage results when the model has stages (stage by stage for improve), else the static load cases named, plus an optional live envelope and ULS envelope combination. The girder is ONE girder line (a group holding several girders is split; girderLine picks one). Composite girders (precast + deck slab) are checked stage by stage (compositeMode) with the slab's own concrete, including the slab top; standard precast beams are pre-tensioned on their published strand positions, with debonded (sleeved) strands set or searched for by debonding, each end's length separately. Then auto-designs the layout (new), reads the tendons in (improve), or takes tendons the user gives as heights above the soffit with transverse distances (soffitTendons, e.g. an existing bridge's tendon schedule), and runs every check: stresses at transfer and in service, Magnel, load balancing, losses, ULS bending, cover, spacing, bend radius, anchorage zones. autoResolve tries the smallest change that clears failed checks. exportSoffitCsv returns the tendons as a soffit-height CSV (download link). The design is kept (designId) for tendon_write. Read-only.",
           "inputSchema": {
             "additionalProperties": false,
             "properties": {
@@ -13079,6 +13079,11 @@
                   "type": "integer"
                 },
                 "type": "array"
+              },
+              "exportSoffitCsv": {
+                "default": false,
+                "description": "Also return the design's tendons (new, improved or given) as the soffit-height CSV - Tendon, Station (m), Height above soffit (mm), Transverse distance y (mm), one row per point - as a download link (soffitHeightsCsv). It is the file the plugin's Heights from soffit… imports and soffitTendons.csv reads.",
+                "type": "boolean"
               },
               "externalTendons": {
                 "additionalProperties": false,
@@ -13213,8 +13218,52 @@
                 "type": "object"
               },
               "mode": {
-                "description": "new = auto-design new tendons; improve = read the model's own tendons on the girder and check / improve them. Default: improve when tendons run along the girder, else new.",
-                "enum": ["new", "improve"]
+                "description": "new = auto-design new tendons; improve = read the model's own tendons on the girder and check / improve them; given = the tendons in soffitTendons (set automatically when soffitTendons is given). Default: improve when tendons run along the girder, else new.",
+                "enum": ["new", "improve", "given"]
+              },
+              "search": {
+                "additionalProperties": false,
+                "description": "mode new, post-tensioned: how hard to look for the layout. fast (default, seconds) = the plugin's quick search, every tendon on one shared profile. deep = the plugin's Find the best layout - Deep: every arrangement (strands per tendon x tendons per column), each on one shared profile AND with a profile per mirrored pair of columns (outer webs, inner webs ... each with its own low points, levels over the piers and anchors), hundreds to thousands of profiles sampled then refined span by span; returns the chosen layout plus the best option of each arrangement (autoDesign.deep.options). Use deep when the user wants the best / most economical layout or tendons profiled individually.",
+                "properties": {
+                  "balance": {
+                    "additionalProperties": false,
+                    "description": "deep only: load balancing as the aim, as the plugin's Load balancing + Deep. Passing layouts that balance target % of the chosen load in EVERY span (within ±5 points) are ranked first, then the least strand; otherwise the closest. The aim never overrides a failing check. Each option reports its balance per span.",
+                    "properties": {
+                      "load": {
+                        "default": "permanent",
+                        "description": "permanent = self-weight + superimposed dead (final force); self = self-weight; girder = self-weight + wet slab; transfer = load at transfer (force at transfer).",
+                        "enum": ["permanent", "self", "girder", "transfer"]
+                      },
+                      "target": {
+                        "description": "Target, % of that load balanced in each span.",
+                        "maximum": 150,
+                        "minimum": 1,
+                        "type": "number"
+                      }
+                    },
+                    "required": ["target"],
+                    "type": "object"
+                  },
+                  "depth": {
+                    "default": "fast",
+                    "enum": ["fast", "deep"]
+                  },
+                  "options": {
+                    "default": 8,
+                    "description": "deep: options listed (the best of each arrangement).",
+                    "maximum": 20,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "seconds": {
+                    "default": 90,
+                    "description": "deep: time limit, s.",
+                    "maximum": 600,
+                    "minimum": 10,
+                    "type": "number"
+                  }
+                },
+                "type": "object"
               },
               "sectionNodeLine": {
                 "description": "Only when CIVIL NX will not send the section records: the node line (top, centroid, bottom) the tendon heights are measured from. Worked out from the model otherwise.",
@@ -13268,6 +13317,66 @@
                 },
                 "type": "object"
               },
+              "soffitTendons": {
+                "additionalProperties": false,
+                "description": "Tendons given by the user - typically an existing bridge's tendon schedule - as heights of the tendon centre ABOVE THE SOFFIT at stations along the girder, with the transverse distance across the section: the plugin's Heights from soffit… input. Either tendons (each with its points) or csv (the plugin's soffit-height CSV / template: Tendon, Station (m), Height above soffit (mm), Transverse distance y (mm), one row per point; a sheet with stations across also reads). Every check then runs on these tendons as given (no auto-design), and tendon_write can write them. A full-length tendon becomes a spline through its points; a part-length tendon at a constant depth becomes a slab tendon.",
+                "properties": {
+                  "csv": {
+                    "description": "The soffit-height CSV text instead of tendons.",
+                    "type": "string"
+                  },
+                  "strandsPerTendon": {
+                    "description": "Strands per tendon (default: the plugin's default unit, or settings).",
+                    "maximum": 61,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "tendons": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "name": {
+                          "type": "string"
+                        },
+                        "points": {
+                          "items": {
+                            "additionalProperties": false,
+                            "properties": {
+                              "heightAboveSoffit_mm": {
+                                "description": "Height of the tendon centre above the soffit, mm.",
+                                "minimum": 0,
+                                "type": "number"
+                              },
+                              "station_m": {
+                                "description": "m from the girder's start (its first node; see startNode).",
+                                "type": "number"
+                              },
+                              "transverse_mm": {
+                                "description": "Transverse distance at this point, mm (e.g. a tendon in a sloping web).",
+                                "type": "number"
+                              }
+                            },
+                            "required": ["heightAboveSoffit_mm", "station_m"],
+                            "type": "object"
+                          },
+                          "maxItems": 200,
+                          "minItems": 2,
+                          "type": "array"
+                        },
+                        "transverse_mm": {
+                          "description": "Transverse distance from the section centroid, mm (+ as in the plugin's section view), for every point that does not give its own. Default 0.",
+                          "type": "number"
+                        }
+                      },
+                      "required": ["points"],
+                      "type": "object"
+                    },
+                    "maxItems": 200,
+                    "type": "array"
+                  }
+                },
+                "type": "object"
+              },
               "standardStrands": {
                 "default": true,
                 "description": "mode new: a section named after a UK/Irish standard precast beam (Y, TY, SY, M, U, W ...) is pre-tensioned on the beam's published strand positions. false (or settings.prestressType \"post\") post-tensions it instead.",
@@ -13294,7 +13403,7 @@
             "openWorld": false,
             "readOnly": true
           },
-          "digest": "sha256:a86d00c8d6906195634cdd8ff653e6848b810aea4174445f34f96d5531887aa3"
+          "digest": "sha256:ab3a857e504a288e976995bd99143d7197887ffcfe599ad703928cd2bc3cb006"
         },
         {
           "name": "tendon_write",
@@ -13428,7 +13537,7 @@
           "digest": "sha256:915c308a69af0aa4ba8a21d9692a2a30a57355ebe56c46fc7450f14ad5a4117d"
         }
       ],
-      "digest": "sha256:e94a8aaad6ba8959f986b838ae8b125f895449d49097ea643299c195985ff969"
+      "digest": "sha256:336ec8ff4fd351df25da0ebc28e113307f053c0058ad085107fee0357502fb17"
     }
   }
 }

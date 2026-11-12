@@ -25,7 +25,7 @@
           "listChanged": true
         }
       },
-      "instructions": "# 好啦体检服务（haola-pe）MCP 使用指南\n\n## 授权（先读这一节）\n\n本服务使用 OAuth 2.1 + PKCE。未授权时 tools/call 返回 HTTP 401，响应头带：\n  WWW-Authenticate: Bearer resource_metadata=\"<resource_metadata 地址>\"\n\n收到 401 后按顺序执行，不要跳过：\n1. GET 上面的 resource_metadata，取 authorization_servers[0]\n2. GET <issuer>/.well-known/oauth-authorization-server，取 authorization_endpoint、token_endpoint、registration_endpoint\n3. POST registration_endpoint 做动态客户端注册：redirect_uris=[\"http://127.0.0.1:<port>/callback\"]、token_endpoint_auth_method=\"none\"、grant_types=[\"authorization_code\",\"refresh_token\"]\n4. 生成 code_verifier 与 code_challenge(S256)，拼 authorize URL，把链接直接发给用户并请其登录授权\n5. 在 127.0.0.1:<port> 监听 /callback 收 code；POST token_endpoint 换 access_token\n6. 带 Authorization: Bearer <token> 重试原调用\n\n禁止行为：\n- 不要向用户索要 token —— 用户没有 token，token 由第 3–5 步产生\n- 不要把 401 当作\"接口不可用\"\"服务异常\"或\"功能未开通\"\n- 不要在宿主不支持 OAuth 时放弃：宿主只支持静态 header 时，用 HTTP 客户端（curl 等）手工执行 1–5，再把 token 放进请求头\n\n## 多步推理\n- 不确定参数与取值时，先用 help 查看工具入参说明，再调用业务工具。\n- 甲方归属（partnerid）由服务端按调用方身份解析，不要自行拼造 UUID。\n- 品牌名→短码用 vendor_brands 查询，不要拼造。\n- 宽接口 + filter：同一工具用不同过滤条件覆盖多种查询，不要把可用过滤当成缺失端点。\n\n## 体检套餐设计与预约流程\n- 个人套餐设计用 vendor_items：按 vendorId 和 population 查 items 和 rules；population 取 man=男性、girl=未婚女性、lady=已婚女性；服务端组装为人群数组后过滤项目并重新生成规则，再按必选、捆绑、互斥和替代关系选择项目。\n- 选好项目后调用 plan_create：传 vendorId、项目 ids 数组 itemIds、gender 和 marital，可选传 name、summary；女性必须传 marital（married/unmarried），男性可不传。服务端校验并保存方案，返回 planId、vendorId，能查到注意事项时同时返回 caution。校验失败时按返回的 issues 修改 itemIds 后重试。\n- caution.cautions[].duration 使用 startDaysBeforeExam 和 endDaysBeforeExam 表示体检前天数，0 表示体检当天；description 可直接展示。没有 duration 表示没有日期限制。服务端已过滤空条目；checkItems[].cautionids 与 cautions[].id 用于关联项目与注意事项。\n- 个人体检预约顺序：plan_create → 展示 caution 并确认用户已知晓 → 用户确认协议 → reservation_book。\n- plan_create 返回 caution 时，必须在调用 reservation_book 之前向用户展示与本次项目相关的注意事项，按 duration 从早到晚动态组织时间线展示。不要套固定天数分组，也不要直接贴全文；重点提示空腹、停药、禁忌时间窗。孕期、备孕、月经期这类禁忌单独强调，因为它们会直接影响项目能不能做。\n- reservation_book 返回 caution 时，如果预约前尚未展示过，需要补充展示。这是兜底，不能替代预约前的展示。\n- 预约把 planId 交给 reservation_book，由服务端校验并下发体检件；客户端不能自己提交体检项目。\n- 预约参数：已有体检人时传 planId、hospitalCode、vendorid、appointmentDate、contactId，不传 customerName、customerID、customerMobile；没有 contactId 时传 planId、hospitalCode、vendorid、appointmentDate，再根据返回的 contacts 选择或新建体检人。reservation_book 返回体检人信息不完整错误时，调用 contact_update 补齐后重试。\n- 客户端不支持 elicitation form 时，reservation_book 同时返回 contactMethodRequired、contacts 和 contactEntryUrl。contacts 是当前用户的常用体检人列表；让用户选择已有体检人、在对话中填写，或直接打开 contactEntryUrl，不要强制跳转 H5。选择已有体检人后把对应 contactid 作为 contactId 传回；选择对话填写后带 contactMethod:\"conversation\" 重新调用。\n- 用户选择在对话中填写时，reservation_book 返回 contactRequired、待填字段和 contactDraftId。按字段逐项询问，每次只问一项，用户确认后把各字段、contactDraftId 和 consent=true 一起传回。证件号会出现在当前对话中，可能被客户端记录；该隐私提示只提示一次，提交后不复述、不回显证件号，只引用 contactId。\n- 用户选择 H5 时，直接打开已返回的 contactEntryUrl。用户添加体检人后重新调用 reservation_book，读取返回的 data.contacts 选择本次体检人并传 contactId。\n- 不要主动要求用户发送身份证号；用户已选择在对话中填写时，可以继续询问证件号。\n- 客户端不支持 elicitation form 时，协议确认返回 consentRequired 和协议正文，用户确认后带 consentText 重新调用。\n\n## 联系人健康档案\n- 仅设计套餐时，不因套餐需求创建联系人或保存健康画像。\n- 用户明确要求保存长期画像时：本人不传 contactid；家人先 contact_list({relation,gender})，唯一候选使用其 contactid，多个候选请用户选择。\n- 家人无候选且用户明确要求保存时，可 contact_create({relation,gender}) 创建临时联系人，姓名、手机号、证件号后补；创建后重新 contact_list 获取 contactid。\n- 用户纠正以前误写到本人档案的家人信息时，调用 contact_profile_correct。只删除时 source 不传 contactid，entries 指定记录和匹配条件；迁移到家人时同时传 targetContactid。\n- 严禁把家人信息写入本人档案。\n\n## 长耗时任务（重要）\n- 方案/报价、报告解读等可能是长耗时操作：先调提交类工具拿到立即返回的提交标志，不要阻塞等待。\n- 每完成一个阶段调用 progress_report，向用户推送可读进度（如「方案生成中，约 1 分钟」）。\n- 期间用查询类工具轮询，拿到最终结果后再回复用户。\n\n## 红线\n- 绝不编造订单/体检记录等数据，必须先调真实工具获取。\n- 甲方（partner UUID）与乙方（vendor 短码，如 health100/ruici）不可混用。",
+      "instructions": "# 好啦体检服务（haola-pe）MCP 使用指南\n\n## 授权（先读这一节）\n\n本服务使用 OAuth 2.1 + PKCE。未授权时 tools/call 返回 HTTP 401，响应头带：\n  WWW-Authenticate: Bearer resource_metadata=\"<resource_metadata 地址>\"\n\n收到 401 后按顺序执行，不要跳过：\n1. GET 上面的 resource_metadata，取 authorization_servers[0]\n2. GET <issuer>/.well-known/oauth-authorization-server，取 authorization_endpoint、token_endpoint、registration_endpoint\n3. POST registration_endpoint 做动态客户端注册：redirect_uris=[\"http://127.0.0.1:<port>/callback\"]、token_endpoint_auth_method=\"none\"、grant_types=[\"authorization_code\",\"refresh_token\"]\n4. 生成 code_verifier 与 code_challenge(S256)，拼 authorize URL，把链接直接发给用户并请其登录授权\n5. 在 127.0.0.1:<port> 监听 /callback 收 code；POST token_endpoint 换 access_token\n6. 带 Authorization: Bearer <token> 重试原调用\n\n禁止行为：\n- 不要向用户索要 token —— 用户没有 token，token 由第 3–5 步产生\n- 不要把 401 当作\"接口不可用\"\"服务异常\"或\"功能未开通\"\n- 不要在宿主不支持 OAuth 时放弃：宿主只支持静态 header 时，用 HTTP 客户端（curl 等）手工执行 1–5，再把 token 放进请求头\n\n## 多步推理\n- 不确定参数与取值时，先用 help 查看工具入参说明，再调用业务工具。\n- 甲方归属使用当前登录身份，不要自行填写甲方 ID。\n- 品牌名→短码用 vendor_brands 查询，不要拼造。\n- 选机构时先看 vendor_brands 返回的 type：chain 是连锁品牌，hospital 是医院主体；两类都要调用 vendor_list 获取具体 hospitalCode，不能直接拿 vendorid 预约。\n- 宽接口 + filter：同一工具用不同过滤条件覆盖多种查询，不要把可用过滤当成缺失端点。\n\n## 体检套餐设计与预约流程\n- 个人套餐设计用 vendor_items：按 vendorId 和 population 查 items 和 rules；population 取 man=男性、girl=未婚女性、lady=已婚女性；返回当前人群适用的项目，以及必选、捆绑、互斥和替代关系。\n- 选好项目后调用 plan_create：传 vendorId、项目 ids 数组 itemIds、gender 和 marital，可选传 name、summary；女性必须传 marital（married/unmarried），男性可不传。返回 planId、vendorId，能查到注意事项时同时返回 caution。校验失败时按返回的 issues 修改 itemIds 后重试。\n- caution.cautions[].duration 使用 startDaysBeforeExam 和 endDaysBeforeExam 表示体检前天数，0 表示体检当天；description 可直接展示。没有 duration 表示没有日期限制。空条目不会返回；checkItems[].cautionids 与 cautions[].id 用于关联项目与注意事项。\n- 个人体检预约顺序：plan_create → 展示 caution 并确认用户已知晓 → 用户确认协议 → reservation_book。\n- plan_create 返回 caution 时，必须在调用 reservation_book 之前向用户展示与本次项目相关的注意事项，按 duration 从早到晚动态组织时间线展示。不要套固定天数分组，也不要直接贴全文；重点提示空腹、停药、禁忌时间窗。孕期、备孕、月经期这类禁忌单独强调，因为它们会直接影响项目能不能做。\n- reservation_book 返回 caution 时，如果预约前尚未展示过，需要补充展示。这是兜底，不能替代预约前的展示。\n- 预约只传 planId 和预约信息，不提交体检项目；体检件随预约结果下发。\n- 预约参数：已有体检人时传 planId、hospitalCode、vendorid、appointmentDate、contactId，不传 customerName、customerID、customerMobile；没有 contactId 时传 planId、hospitalCode、vendorid、appointmentDate，再根据返回的 contacts 选择或新建体检人。reservation_book 返回体检人信息不完整错误时，调用 contact_update 补齐后重试。\n- 客户端不支持 elicitation form 时，reservation_book 同时返回 contactMethodRequired、contacts 和 contactEntryUrl。contacts 是当前用户的常用体检人列表；让用户选择已有体检人、在对话中填写，或直接打开 contactEntryUrl，不要强制跳转 H5。选择已有体检人后把对应 contactid 作为 contactId 传回；选择对话填写后带 contactMethod:\"conversation\" 重新调用。\n- 用户选择在对话中填写时，reservation_book 返回 contactRequired、待填字段和 contactDraftId。按字段逐项询问，每次只问一项，用户确认后把各字段、contactDraftId 和 consent=true 一起传回。证件号会出现在当前对话中，可能被客户端记录；该隐私提示只提示一次，提交后不复述、不回显证件号，只引用 contactId。\n- 用户选择 H5 时，直接打开已返回的 contactEntryUrl。用户添加体检人后重新调用 reservation_book，读取返回的 data.contacts 选择本次体检人并传 contactId。\n- 不要主动要求用户发送身份证号；用户已选择在对话中填写时，可以继续询问证件号。\n- 客户端不支持 elicitation form 时，协议确认返回 consentRequired 和协议正文，用户确认后带 consentText 重新调用。\n\n## 联系人健康档案\n- 仅设计套餐时，不因套餐需求创建联系人或保存健康画像。\n- 用户明确要求保存长期画像时：本人不传 contactid；家人先 contact_list({relation,gender})，唯一候选使用其 contactid，多个候选请用户选择。\n- 家人无候选且用户明确要求保存时，可 contact_create({relation,gender}) 创建临时联系人，姓名、手机号、证件号后补；创建后重新 contact_list 获取 contactid。\n- 用户纠正以前误写到本人档案的家人信息时，调用 contact_profile_correct。只删除时 source 不传 contactid，entries 指定记录和匹配条件；迁移到家人时同时传 targetContactid。\n- 严禁把家人信息写入本人档案。\n\n## 长耗时任务（重要）\n- 方案/报价、报告解读等可能是长耗时操作：先调提交类工具拿到立即返回的提交标志，不要阻塞等待。\n- 每完成一个阶段调用 progress_report，向用户推送可读进度（如「方案生成中，约 1 分钟」）。\n- 期间用查询类工具轮询，拿到最终结果后再回复用户。\n\n## 红线\n- 绝不编造订单/体检记录等数据，必须先调真实工具获取。\n- 甲方（partner UUID）与乙方（vendor 短码，如 health100/ruici）不可混用。",
       "tools": [
         {
           "name": "card_list",
@@ -55,7 +55,7 @@
         {
           "name": "cautions",
           "title": "cautions",
-          "description": "[需要登录] 根据体检项目查询注意事项（饮食、用药、禁忌等）。返回已转换的 caution：checkItems 包含项目名称、关联注意事项 ID、疾病或症状、检查范围；cautions[].duration 明确标注体检前几天和可直接展示的日期说明，texts 为空且 tag 为空的条目已过滤，checkItems[].cautionids 与 cautions[].id 用于关联。需调用方用户标识（external_user_id 自动注入），partnerid 由服务端按用户标识解析，禁止客户端传。传 checkPackage 查套餐注意事项（必带 vendorid）；传 serviceid 仅允许查本人订单。本体: knowledge → Action: cautions\n\n鉴权：需要用户登录令牌，或已经绑定用户的云市场实例凭证。未登录调用返回 401；云市场实例未绑定用户时返回 code=40003 和 data.bindUrl。",
+          "description": "[需要登录] 根据体检项目查询注意事项（饮食、用药、禁忌等）。返回：checkItems 包含项目名称、关联注意事项 ID、疾病或症状、检查范围；cautions[].duration 明确标注体检前几天和可直接展示的日期说明，texts 为空且 tag 为空的条目不会返回，checkItems[].cautionids 与 cautions[].id 用于关联。传 checkPackage 查询套餐注意事项（必带 vendorid）；传 serviceid 查询本人订单的注意事项。本体: knowledge → Action: cautions\n\n鉴权：需要用户登录令牌，或已经绑定用户的云市场实例凭证。未登录调用返回 401；云市场实例未绑定用户时返回 code=40003 和 data.bindUrl。",
           "inputSchema": {
             "$schema": "https://json-schema.org/draft/2020-12/schema",
             "properties": {
@@ -81,7 +81,7 @@
             "openWorld": true,
             "readOnly": false
           },
-          "digest": "sha256:50e579f8012e0293204a4169098929cb9bbdc2c5f9b9c026df87f11a797e73d9"
+          "digest": "sha256:667f4f5b16524ffe70fc71c401d7d51f28b7dfe096772559c4d778b56881dc59"
         },
         {
           "name": "contact_create",
@@ -523,7 +523,7 @@
         {
           "name": "order_list",
           "title": "order.list",
-          "description": "[需要登录] 查订单。查询 userOrders 集合。调用方归属甲方由服务端身份解析，filter 中无需传 partnerid。支持 $gte/$lte 日期范围、$in/$or 多值匹配。本体: order → Action: list\n\n鉴权：需要用户登录令牌，或已经绑定用户的云市场实例凭证。未登录调用返回 401；云市场实例未绑定用户时返回 code=40003 和 data.bindUrl。",
+          "description": "[需要登录] 查订单。返回当前登录身份可访问的订单。filter 支持 $gte/$lte 日期范围、$in/$or 多值匹配。本体: order → Action: list\n\n鉴权：需要用户登录令牌，或已经绑定用户的云市场实例凭证。未登录调用返回 401；云市场实例未绑定用户时返回 code=40003 和 data.bindUrl。",
           "inputSchema": {
             "$schema": "https://json-schema.org/draft/2020-12/schema",
             "properties": {
@@ -549,7 +549,7 @@
             "openWorld": true,
             "readOnly": false
           },
-          "digest": "sha256:37947992cdea716ff07d7462dd016a22c7df7d0d7cbed2888fdb07b31f5e8df7"
+          "digest": "sha256:585b88c32eb4f4e71e76f26c717d8b63e8cc61b60cfdec17625b396e8734d67a"
         },
         {
           "name": "plan_create",
@@ -594,7 +594,7 @@
         {
           "name": "progress_report",
           "title": "progress.report",
-          "description": "[匿名可调用] 长耗时任务进度上报。agent 每完成一个阶段调用一次，text 为给用户看的可读进度，如「报告解析中，预计 10 秒」。不落地业务数据，仅用于向用户展示过程。",
+          "description": "[匿名可调用] 长耗时任务进度上报。agent 每完成一个阶段调用一次，text 为给用户看的可读进度，如「报告解析中，预计 10 秒」。",
           "inputSchema": {
             "$schema": "https://json-schema.org/draft/2020-12/schema",
             "properties": {
@@ -617,12 +617,12 @@
             "openWorld": true,
             "readOnly": false
           },
-          "digest": "sha256:abb682f2c241217184d7880230300101358cda567b472d275081448899863a2f"
+          "digest": "sha256:de20b145ebf3b8765cc6ce6df09bd168502509259189a88a50604d250a1691f5"
         },
         {
           "name": "reservation_book",
           "title": "reservation.book",
-          "description": "[需要登录] 体检预约：已有体检人时传 planId、hospitalCode、vendorid、appointmentDate、contactId，不传 customerName、customerID、customerMobile；没有 contactId 时传 planId、hospitalCode、vendorid、appointmentDate，再根据返回的 contacts 选择或新建体检人。reservation_book 返回体检人信息不完整错误时，调用 contact_update 补齐后重试。支持 elicitation form 的客户端返回 contactChoice 展示全部常用体检人和新建入口，不支持表单的客户端返回 data.contacts。选择新建时返回第二段表单填写姓名、手机号、与本人关系、证件类型、证件号、出生日期、性别、婚否和授权。出生日期和性别仅在非身份证时必填，服务端在提交后校验，提交后保存为常用体检人。选择在对话中填写后返回 contactRequired，包含待填字段和 contactDraftId；Agent 按字段逐项询问，每次只问一项，用户确认后把各字段、contactDraftId 和 consent=true 一起传回，服务端校验并保存联系人后继续预约。证件号会出现在当前对话中，可能被客户端记录；该隐私提示只向用户提示一次，提交后 Agent 不复述、不回显证件号，只引用 contactId。选择 H5 后返回 contactEntryUrl，用户添加体检人后重新调用 reservation_book，读取返回的 data.contacts 选择本次体检人并传 contactId。不要主动要求用户发送身份证号；用户已选择在对话中填写时，可以继续询问证件号。IDType 为 SFZ 时按身份证规则校验。体检项目只来自 planId，客户端不能提交项目。预约前会通过 input_required 展示本次需要的动态协议；非表单客户端返回 consentRequired，用户确认后把确认话术原文作为 consentText 传入。返回 caution 时，如果预约前尚未展示过，需要补充展示。这是兜底，不能替代预约前的展示。返回 contactId、serviceid 和 orderEntryUrl；保存联系人时同时返回 contactid 和 contactSaved，contactSaved=false 表示预约已成功但联系人保存失败。用户在 H5 用手机号登录后可看到自己的订单，并可支付、改期/取消、查看检前注意事项、查看体检报告。渠道需要用户支付时返回支付链接 payUrl 和支付提示；客户端支持 elicitation URL 时，服务端通过 URL 模式打开 payUrl，最终结果仍返回 orderEntryUrl，客户端不支持时直接返回 payUrl 和 orderEntryUrl。客户端可使用 payUrl 生成二维码展示给用户。payUrl 有效期为订单创建后 30 分钟。重复预约命中已有未支付订单时，返回原 serviceid 和该订单的 payUrl。status 表示支付状态，预约状态以 rsvStatus 为准。本体: reservation → Action: book\n\n鉴权：需要用户登录令牌，或已经绑定用户的云市场实例凭证。未登录调用返回 401；云市场实例未绑定用户时返回 code=40003 和 data.bindUrl。",
+          "description": "[需要登录] 体检预约：已有体检人时传 planId、hospitalCode、vendorid、appointmentDate、contactId，不传 customerName、customerID、customerMobile；没有 contactId 时根据返回的 contacts 选择或新建体检人。支持 elicitation form 的客户端返回 contactChoice，不支持表单时返回 data.contacts 或 contactRequired。收到 contactRequired 后按字段逐项询问，每次只问一项，用户确认后把字段、contactDraftId 和 consent=true 一起传回。证件号可能被客户端记录，提交后不要复述或回显，只引用 contactId。H5 方式返回 contactEntryUrl，用户添加体检人后重新调用。体检项目只来自 planId，客户端不提交项目。预约前通过 input_required 展示协议；非表单客户端返回 consentRequired，用户确认后把确认话术原文作为 consentText 传入。返回 caution 时补充展示。返回 contactId、serviceid 和 orderEntryUrl；需要支付时返回 payUrl。payUrl 有效期为 30 分钟。status 表示支付状态，预约状态以 rsvStatus 为准。本体: reservation → Action: book\n\n鉴权：需要用户登录令牌，或已经绑定用户的云市场实例凭证。未登录调用返回 401；云市场实例未绑定用户时返回 code=40003 和 data.bindUrl。",
           "inputSchema": {
             "$schema": "https://json-schema.org/draft/2020-12/schema",
             "properties": {
@@ -696,7 +696,7 @@
             "openWorld": true,
             "readOnly": false
           },
-          "digest": "sha256:c8ac2860e0eb52c7a250b88325ffb23681a4adc4b7959f0e194595dd1ccb9e23"
+          "digest": "sha256:d4d45c952b9ce0317501452cef1e388b9b35a5e1ec25f76ec371411d6d298552"
         },
         {
           "name": "reservation_cancel",
@@ -705,11 +705,11 @@
           "inputSchema": {
             "$schema": "https://json-schema.org/draft/2020-12/schema",
             "properties": {
-              "reservationId": {
+              "serviceid": {
                 "type": "string"
               }
             },
-            "required": ["reservationId"],
+            "required": ["serviceid"],
             "type": "object"
           },
           "behavior": {
@@ -718,7 +718,7 @@
             "openWorld": true,
             "readOnly": false
           },
-          "digest": "sha256:eebe448e71a2417a3abd21f3ad97601f75fce0e7f44bb14dafa49e9f14a489f7"
+          "digest": "sha256:36d6a0c67c6210cb667dabf8f23c60ef2f495f098bb7b4395e06bc76b49be88d"
         },
         {
           "name": "reservation_modify",
@@ -730,11 +730,11 @@
               "appointmentDate": {
                 "type": "string"
               },
-              "reservationId": {
+              "serviceid": {
                 "type": "string"
               }
             },
-            "required": ["appointmentDate", "reservationId"],
+            "required": ["appointmentDate", "serviceid"],
             "type": "object"
           },
           "behavior": {
@@ -743,12 +743,12 @@
             "openWorld": true,
             "readOnly": false
           },
-          "digest": "sha256:b7223ec5a9bc4fed395d42407b8fb37798dcdc369671e1cf7244fb5e37720183"
+          "digest": "sha256:aed2087bfb69c0722838e34df3ddd15a07592488d590b19f09655f386523db69"
         },
         {
           "name": "vendor_brands",
           "title": "vendor.brands",
-          "description": "[匿名可调用] 查各体检品牌覆盖的城市（品牌聚合摘要，不返回具体门店）。本体: vendor → Action: brands",
+          "description": "[匿名可调用] 查对外乙方及城市覆盖。type=chain 为连锁品牌，vendorid 用于 vendor.list 查询旗下门店；type=hospital 为医院主体，仍需通过 vendor.list 获取具体 hospitalCode 后再预约。本体: vendor → Action: brands",
           "inputSchema": {
             "$schema": "https://json-schema.org/draft/2020-12/schema",
             "properties": {},
@@ -760,12 +760,12 @@
             "openWorld": true,
             "readOnly": false
           },
-          "digest": "sha256:85e5618e107088ebae3417df4aae8f86461a90bbb8cb973e83568470ca3906c3"
+          "digest": "sha256:78983ed6eedb139c09d29f9f00318c9e9b4c0a84417bd1f018e4fe17d0da9587"
         },
         {
           "name": "vendor_items",
           "title": "vendor.items",
-          "description": "[匿名可调用] 个人体检按指定人群查询某体检机构在当前合同下的可下单项目、价格和下单规则。population 必填：man=男性、girl=未婚女性、lady=已婚女性；服务端组装为人群数组后过滤 items，再用过滤后的项目生成 rules，返回的 required 只包含当前人群适用项目。项目 id 用于后续方案设计，bundled、conflicts、eitherOr 和 restrictions 表示其余项目规则。本体: vendor → Action: items",
+          "description": "[匿名可调用] 个人体检按指定人群查询某体检机构在当前合同下的可下单项目、价格和下单规则。population 必填：man=男性、girl=未婚女性、lady=已婚女性；返回当前人群适用的 items 和 rules。项目 id 用于后续方案设计，bundled、conflicts、eitherOr 和 restrictions 表示其余项目规则。本体: vendor → Action: items",
           "inputSchema": {
             "$schema": "https://json-schema.org/draft/2020-12/schema",
             "properties": {
@@ -785,12 +785,12 @@
             "openWorld": true,
             "readOnly": false
           },
-          "digest": "sha256:621053a305ea2a6af3818e0043ce6d04c852c1066f6314d9c9505e2d6b335031"
+          "digest": "sha256:e8db13a042960b08548e99960b2d55e629184597684a07eb245d56fec2c6c8cc"
         },
         {
           "name": "vendor_list",
           "title": "vendor.list",
-          "description": "[匿名可调用] 查门店地址。支持三种方式，至少传一种：1) hospitalCode（可带 vendorids，按第一个品牌查）；2) longitude+latitude（可带 radius 米，默认 50000，可带 vendorids）；3) province/city/district（可带 vendorids）。外部调用仅支持 health100/haolaruici，partnerid 仅内部可用。不确定品牌和覆盖城市时先用 vendor.brands。本体: vendor → Action: list",
+          "description": "[匿名可调用] 查门店地址并获取具体 hospitalCode。支持三种方式，至少传一种：1) hospitalCode（可带 vendorids，按第一个品牌查）；2) longitude+latitude（可带 radius 米，默认 50000，可带 vendorids）；3) province/city/district（可带 vendorids）。外部调用仅支持 vendor.brands 返回的乙方；chain 和 hospital 两类主体都通过本工具获取 hospitalCode。不确定乙方和覆盖城市时先用 vendor.brands。本体: vendor → Action: list",
           "inputSchema": {
             "$schema": "https://json-schema.org/draft/2020-12/schema",
             "properties": {
@@ -830,7 +830,7 @@
             "openWorld": true,
             "readOnly": false
           },
-          "digest": "sha256:5f1e645398030a26ab9bf292267a4065b6edff2f31bdf14282929532aab05da9"
+          "digest": "sha256:0c7b4c09a65a9fedceb2bf8d32dbc8ad9c838813ebcd0cb6e282972b981dcd12"
         },
         {
           "name": "welfare_detail",
@@ -860,7 +860,7 @@
         {
           "name": "welfare_list",
           "title": "welfare.list",
-          "description": "[需要登录] 查当前登录用户的体检件。查询 userWelfare 集合。用户身份由服务端从登录会话获取。本体: welfare → Action: list\n\n鉴权：需要用户登录令牌，或已经绑定用户的云市场实例凭证。未登录调用返回 401；云市场实例未绑定用户时返回 code=40003 和 data.bindUrl。",
+          "description": "[需要登录] 查当前登录用户的体检件。本体: welfare → Action: list\n\n鉴权：需要用户登录令牌，或已经绑定用户的云市场实例凭证。未登录调用返回 401；云市场实例未绑定用户时返回 code=40003 和 data.bindUrl。",
           "inputSchema": {
             "$schema": "https://json-schema.org/draft/2020-12/schema",
             "properties": {
@@ -891,10 +891,10 @@
             "openWorld": true,
             "readOnly": false
           },
-          "digest": "sha256:6d527ea7862c0878cc751096a64e563db556094d4b38be06268cafe1fb7dc1de"
+          "digest": "sha256:071f012b68032dd4ba7903761478ce6698d74fc0bed27571acb341309c0849c1"
         }
       ],
-      "digest": "sha256:f310567a3ed3a9f156ad8de90d51722fc48ca7c1774dfde1230c7d78b8f6a585"
+      "digest": "sha256:f73e134719bdf791c33cc5388aad8c50b8d18a45b061a6ad1569cc2418fdb2ac"
     }
   }
 }
