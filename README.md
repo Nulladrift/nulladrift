@@ -400,9 +400,9 @@ These are read, never required, and set by the CI provider rather than by you:
 | Variable | What it is used for |
 | --- | --- |
 | `CI` | Marks a reading as made in CI rather than locally, and keeps telemetry from asking a question nobody is there to answer. `CI=false` counts as unset. |
-| `GITHUB_REPOSITORY`, `CI_PROJECT_PATH`, `BUILD_REPOSITORY_NAME` | The project name `push` reports under (GitHub, GitLab, Azure Pipelines), unless `--project` names one. Outside CI it is the directory's name. |
-| `GITHUB_REF_NAME`, `CI_COMMIT_REF_NAME` | The branch or tag `push` reports. |
-| `GITHUB_SHA`, `CI_COMMIT_SHA` | The commit `push` reports. |
+| `GITHUB_REPOSITORY`, `CI_PROJECT_PATH`, `BITBUCKET_REPO_FULL_NAME`, `BUILD_REPOSITORY_NAME`, `CIRCLE_PROJECT_USERNAME` with `CIRCLE_PROJECT_REPONAME`, `BUILDKITE_REPO` | The project `push` reports under, unless `--project` names one. Outside CI it comes from the git remote (`origin`), in the same `owner/repo` shape, so a laptop and its pipeline report to one project. Only with no remote is it the directory's name, and `push` says so. |
+| `GITHUB_REF_NAME`, `CI_COMMIT_REF_NAME`, `BUILD_SOURCEBRANCH`, `BITBUCKET_BRANCH`, `BITBUCKET_TAG`, `CIRCLE_BRANCH`, `CIRCLE_TAG`, `BUILDKITE_BRANCH` | The branch or tag `push` reports, unless `--ref` names one. Outside CI, the checked-out branch. |
+| `GITHUB_SHA`, `CI_COMMIT_SHA`, `BUILD_SOURCEVERSION`, `BITBUCKET_COMMIT`, `CIRCLE_SHA1`, `BUILDKITE_COMMIT` | The commit `push` reports, unless `--commit` names one. Outside CI, `HEAD`. The repository is read from `.git` directly; `git` is never run. |
 | `GITHUB_ACTIONS`, `ACTIONS_ID_TOKEN_REQUEST_URL`, `ACTIONS_ID_TOKEN_REQUEST_TOKEN` | How `push` asks GitHub for the job's identity token. The last two exist only when the job has `id-token: write`. |
 | `GITHUB_REF`, `GITHUB_API_URL` | Which pull request `check --comment` writes on, and the API to write through (GitHub Enterprise Server sets its own). |
 
