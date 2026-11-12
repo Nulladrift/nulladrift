@@ -10,7 +10,37 @@ telemetry). Renaming a change kind breaks every consumer that matched on it.
 
 ## [Unreleased]
 
-Nothing yet.
+Found by using the product end to end: a laptop, a pipeline and the control plane, against the
+official memory and filesystem servers.
+
+### Changed
+
+- **`push` names a project the way its CI does, from anywhere.** Outside CI the project came from
+  the folder's name, while GitHub Actions named the same repository `owner/repo`, so one
+  repository became two projects and, on a plan with room for one, the pipeline's push was
+  refused. Outside CI the name now comes from the git remote, in the same shape, and only with no
+  remote from the folder, which `push` now says. **A project pushed only from a laptop will
+  report under its `owner/repo` name from now on**; pass `--project` to keep the old one.
+- **`push` records the branch and commit from every common CI**, not only GitHub and GitLab:
+  Azure Pipelines, Bitbucket, CircleCI and Buildkite as well, and from the repository itself
+  outside CI. New `--ref` and `--commit` flags name them outright. The repository is read from
+  `.git` as files; `git` is never run, so a repository's git configuration cannot run code in
+  the collector. `push` prints the project, branch and commit it reported.
+- **Writing files needs a file.** The `file-write` capability fired on any of a dozen verbs or on
+  an argument called `content`, so the memory server -- `delete_entities`, and `add_observations`
+  with a `contents` field -- was labelled as writing files at high. A changing verb now counts
+  when the name says a file, directory or path, or the tool takes a path; content counts beside a
+  path. `write`, `unlink`, `chmod`, `mkdir` and the like count on their own, and the filesystem
+  server's writers are all still labelled. `file-read` had the same flaw at low severity
+  (`read_graph`, `open_nodes`): `read`, `open` and `load` now count with a file in the name, and
+  any tool taking a path still does.
+
+### Fixed
+
+- **A server that is not running says so.** An unreachable remote server was reported as
+  "Version negotiation probe failed: fetch failed". The network's own reason is now added --
+  connection refused, a host name that does not resolve, a timeout, a refused TLS certificate --
+  with the host and port, never the path.
 
 ## [0.9.0] - 2026-11-11
 

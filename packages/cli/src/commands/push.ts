@@ -14,6 +14,7 @@ import { describeRefusal } from "../report/push-error";
 import { redactedNotes } from "../report/redacted";
 import { acquireBuildToken, acquireReadingToken, BUILD_TOKEN_HEADER, READING_TOKEN_HEADER, readingAudience, readingAudienceBase } from "../lib/build-token";
 import { VERSION } from "../lib/version";
+import { readingOrigin } from "../lib/origin";
 import type { CommonOptions } from "./options";
 
 export interface PushOptions extends CommonOptions {
@@ -71,21 +72,6 @@ function describeIdentity(identity: IngestResponseBody["identity"], hint: string
   }
   if (identity?.rejected) return `${red("build token refused")} ${dim(shown(identity.rejected))}`;
   return hint ? dim(`unsigned: ${hint}`) : undefined;
-}
-
-/** CI providers all expose these; reading them means a pipeline needs no extra configuration. */
-function inferProject(projectRoot: string): string {
-  const fromCi = process.env["GITHUB_REPOSITORY"] ?? process.env["CI_PROJECT_PATH"] ?? process.env["BUILD_REPOSITORY_NAME"];
-  if (fromCi) return fromCi;
-  return projectRoot.split("/").filter(Boolean).pop() ?? "default";
-}
-
-function inferRef(): string | undefined {
-  return process.env["GITHUB_REF_NAME"] ?? process.env["CI_COMMIT_REF_NAME"] ?? undefined;
-}
-
-function inferCommit(): string | undefined {
-  return process.env["GITHUB_SHA"] ?? process.env["CI_COMMIT_SHA"] ?? undefined;
 }
 
 /** Why an API address cannot be trusted with a token, or nothing if it can. Never echoes the address. */
@@ -205,10 +191,32 @@ export async function runPush(options: PushOptions): Promise<ExitCode> {
     surface: entry,
   }));
 
+  // The control plane's own limits, checked here so a bad flag is named rather than answered with a 400.
+  for (const [flag, value, max] of [
+    ["--project", options.project, 200],
+    ["--ref", options.ref, 200],
+    ["--commit", options.commit, 100],
+  ] as const) {
+    const control = value !== undefined && [...value].some((character) => character.charCodeAt(0) < 0x20 || character.charCodeAt(0) === 0x7f);
+    if (value !== undefined && (value.trim() === "" || value.length > max || control)) {
+      process.stderr.write(`${red(`${flag} has to be 1 to ${max} characters, with no control characters.`)}\n`);
+      return EXIT_INCOMPLETE;
+    }
+  }
+  const origin = readingOrigin(options.projectRoot, { project: options.project, ref: options.ref, commit: options.commit });
+  /*
+   * Said before sending, because this is the case that made two projects of one repository: a
+   * laptop with no git remote named it after the folder, and CI named it after the repository.
+   */
+  if (origin.projectFrom === "folder") {
+    process.stderr.write(
+      `${yellow("note:")} reporting as project "${visibleControls(origin.project)}", this folder's name: no --project, CI variable or git remote names it. Pass --project so every push names it the same way.\n`,
+    );
+  }
   const body = {
-    project: options.project ?? inferProject(options.projectRoot),
-    ref: options.ref ?? inferRef(),
-    commit: options.commit ?? inferCommit(),
+    project: origin.project,
+    ref: origin.ref,
+    commit: origin.commit,
     context: options.watch
       ? "watch"
       : process.env["CI"] !== undefined && process.env["CI"] !== "false"
@@ -290,7 +298,9 @@ export async function runPush(options: PushOptions): Promise<ExitCode> {
    * plane did or did not do first.
    */
   const shown = (text: unknown) => visibleControls(String(text ?? ""));
-  lines.push(`${mark} ${bold(shown(verdict.verdict))} ${dim(`· ${servers.length} server(s) · reading ${shown(verdict.readingId).slice(0, 8)}`)}`);
+  lines.push(`${mark} ${bold(shown(verdict.verdict))} ${dim(`· ${shown(origin.project)} · ${servers.length} server(s) · reading ${shown(verdict.readingId).slice(0, 8)}`)}`);
+  // Where the record says this came from, so a reading with neither is noticed here and not in an audit.
+  if (origin.ref || origin.commit) lines.push(`  ${dim(`at ${shown(origin.ref ?? "a detached commit")}${origin.commit ? ` @ ${shown(origin.commit).slice(0, 7)}` : ""}`)}`);
   const identity = describeIdentity(verdict.identity, build && "hint" in build ? build.hint : undefined);
   if (identity) lines.push(`  ${identity}`);
 
