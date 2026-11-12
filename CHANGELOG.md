@@ -10,6 +10,10 @@ telemetry). Renaming a change kind breaks every consumer that matched on it.
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.10.0] - 2026-11-12
+
 Found by using the product end to end: a laptop, a pipeline and the control plane, against the
 official memory and filesystem servers.
 
@@ -41,7 +45,6 @@ official memory and filesystem servers.
   "Version negotiation probe failed: fetch failed". The network's own reason is now added --
   connection refused, a host name that does not resolve, a timeout, a refused TLS certificate --
   with the host and port, never the path.
-
 ## [0.9.0] - 2026-11-11
 
 ### Added
