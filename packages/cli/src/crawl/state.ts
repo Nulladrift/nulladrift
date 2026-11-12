@@ -1,16 +1,14 @@
 /**
  * Crawl state on disk.
  *
- * The pinned corpus is stored as an ordinary `mcp.lock` holding every server, which is the same
- * format and the same serializer the product ships -- the crawl is the largest thing that
- * exercises it. `history.json` carries what a lockfile deliberately does not: timestamps, and
- * per-server counters that turn a sequence of snapshots into a rate.
+ * The pinned corpus is one ordinary `mcp.lock` per server, under `corpus/`; see `corpus.ts` for
+ * why it is not one file. `history.json` carries what a lockfile deliberately does not:
+ * timestamps, and per-server counters that turn a sequence of snapshots into a rate.
  */
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import type { CorpusStats } from "./registry";
 
-export const CORPUS_LOCK = "corpus.lock";
 export const HISTORY_FILE = "history.json";
 
 /**

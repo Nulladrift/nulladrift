@@ -74,14 +74,21 @@ if (!values.quiet) process.stderr.write("\r".padEnd(80) + "\r");
 
 const stats = summarize(result.history);
 
+if (result.unreadable.length > 0) {
+  // An Actions annotation when it runs there, so the run page says so without opening the log.
+  const prefix = process.env["GITHUB_ACTIONS"] === "true" ? "::warning::" : "warning: ";
+  process.stderr.write(`${prefix}${result.unreadable.length} corpus file(s) could not be read; those servers start over: ${result.unreadable.slice(0, 5).join(", ")}${result.unreadable.length > 5 ? ", ..." : ""}\n`);
+}
 if (values.json) {
-  process.stdout.write(`${JSON.stringify({ run: result.run, stats }, null, 2)}\n`);
+  process.stdout.write(`${JSON.stringify({ run: result.run, stats, baselines: result.baselines, unreadable: result.unreadable }, null, 2)}\n`);
 } else {
   const { outcomes } = result.run;
   process.stdout.write(
     [
       "",
       bold(`Crawled ${result.run.targets} server(s)`),
+      // A run that started from nothing when it should not have is the failure that hid for a week.
+      dim(`  compared against ${result.baselines} pinned server(s) from the previous run`),
       `  ${green(String(outcomes.stable))} unchanged · ${yellow(String(outcomes.drifted))} drifted · ${dim(String(outcomes.baseline))} new baseline`,
       `  ${dim(`${outcomes["auth-required"]} need credentials · ${outcomes.unreachable} unreachable`)}`,
       ...(result.pruned.length > 0
