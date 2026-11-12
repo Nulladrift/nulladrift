@@ -10,6 +10,10 @@ telemetry). Renaming a change kind breaks every consumer that matched on it.
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.10.1] - 2026-11-12
+
 ### Fixed
 
 - **A tool's title change is reported when something else about the tool changed too.** The title,
@@ -33,7 +37,6 @@ telemetry). Renaming a change kind breaks every consumer that matched on it.
   a server's history is `git log` on one file. The old single file is read once and replaced. A
   state file that cannot be read now costs that one server its baseline and is reported, where an
   unreadable corpus used to pass for a first run.
-
 ## [0.10.0] - 2026-11-12
 
 Found by using the product end to end: a laptop, a pipeline and the control plane, against the
