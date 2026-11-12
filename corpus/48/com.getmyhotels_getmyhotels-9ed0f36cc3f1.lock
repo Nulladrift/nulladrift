@@ -1,0 +1,957 @@
+{
+  "lockfileVersion": 2,
+  "subjects": {
+    "com.getmyhotels/getmyhotels": {
+      "kind": "mcp-server",
+      "source": {
+        "client": "manual",
+        "file": "registry.modelcontextprotocol.io"
+      },
+      "transport": {
+        "type": "http",
+        "url": "https://mcp.getmyhotels.com/"
+      },
+      "protocol": {
+        "era": "legacy",
+        "version": "2025-11-25"
+      },
+      "serverInfo": {
+        "name": "getmyhotels",
+        "title": "GetMyHotels",
+        "version": "1.0.1"
+      },
+      "capabilities": {
+        "tools": {
+          "listChanged": false
+        }
+      },
+      "instructions": "GetMyHotels lets you search real hotels, price them live, and start a booking.\n\nBooking workflow:\n1. `search_hotels` (destination + checkIn/checkOut + guests) returns a price-sorted list in the\n   text as JSON. Each hotel has an opaque `ref` and an indicative stay price.\n2. To see all of one hotel's rooms (or refresh availability), call `get_rooms` with the hotel `ref`.\n3. `get_checkout_quote` (offerRef + ref + dates + totalPrice + currency) confirms the live price.\n4. `create_checkout` returns a getmyhotels.com link where the guest confirms and pays. It does NOT\n   charge a card — never claim a booking is paid or confirmed from this tool alone.\n\nRules:\n- Use the `ref` and `offerRef` strings EXACTLY as returned — do not reformat, uppercase, or invent them.\n- Present a few good options with name, star rating, price, and cancellation; don't dump the whole list.\n- Every price is the TOTAL for the whole stay (all nights), not a per-night rate. Say so when you\n  quote one. The live quote (step 3) is authoritative and is also a stay total.\n\nSign-in: search and creating a checkout link work for guests. Saving trips, viewing/cancelling/\nmodifying your bookings, listing saved cards, and one-click checkout require the user to sign in\n(the client runs an OAuth flow). Cancel/modify need a one-time code emailed via\n`request_booking_action_code` first.\n\nModifying a booking: special-request edits always apply. A DATE change is pushed to the hotel\nsupplier as a cancel-and-rebook at current availability — it only works for suppliers that\nsupport amendment and when a room is available for the new dates; otherwise the tool errors and\nthe user must cancel and rebook. Check the result's `supplierModifyStatus` before telling the\nuser a date change succeeded.\n\n`search` and `fetch` are the read-only tools for research-style clients.",
+      "tools": [
+        {
+          "name": "add_trip_item",
+          "title": "Add trip item",
+          "description": "Add an item (hotel, activity, meal, etc.) to a saved trip on a given day.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "day": {
+                "description": "Day number within the trip.",
+                "maximum": 365,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "description": {
+                "description": "Optional notes (≤2000 chars).",
+                "type": "string"
+              },
+              "itineraryPublicId": {
+                "description": "The trip's public id (from `list_trips`/`save_trip`).",
+                "type": "string"
+              },
+              "sortOrder": {
+                "description": "Order within the day (default 0).",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "title": {
+                "description": "Item title (1-255 chars).",
+                "type": "string"
+              },
+              "type": {
+                "description": "Item type.",
+                "enum": ["hotel", "experience", "transfer", "activity", "meal", "note"],
+                "type": "string"
+              }
+            },
+            "required": ["day", "itineraryPublicId", "title", "type"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "openWorldHint": false,
+            "readOnlyHint": false,
+            "title": "Add trip item"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": false,
+            "openWorld": false,
+            "readOnly": false
+          },
+          "digest": "sha256:abb32abf520a13eae20019a14be3b7ad54aa9633f7132c30686a427b913cf2cb"
+        },
+        {
+          "name": "cancel_booking",
+          "title": "Cancel booking",
+          "description": "Cancel one of the signed-in user's bookings. Requires the 6-digit `verificationCode` from `request_booking_action_code`. This may be irreversible and can trigger a refund per policy.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "publicId": {
+                "description": "The booking's public id.",
+                "type": "string"
+              },
+              "reason": {
+                "description": "Optional cancellation reason (≤1000 chars).",
+                "type": "string"
+              },
+              "verificationCode": {
+                "description": "6-digit code from `request_booking_action_code`.",
+                "type": "string"
+              }
+            },
+            "required": ["publicId", "verificationCode"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": false,
+            "title": "Cancel booking"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": false,
+            "readOnly": false
+          },
+          "digest": "sha256:c067d327b40504ccd3affcb9005ac2b3f90100befb253a3506e25413bdd08ebf"
+        },
+        {
+          "name": "create_checkout",
+          "title": "Create checkout",
+          "description": "Create a secure checkout for a chosen hotel room and return a getmyhotels.com URL where the guest completes payment. This does NOT charge the card — the guest pays on the hosted page. Confirm the hotel, room, dates, and price with the user before calling. Call `get_checkout_quote` first to confirm the live price.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "adults": {
+                "description": "Adults (default 2).",
+                "maximum": 10,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "checkIn": {
+                "description": "Check-in date, ISO 8601 (YYYY-MM-DD).",
+                "type": "string"
+              },
+              "checkOut": {
+                "description": "Check-out date, ISO 8601 (YYYY-MM-DD).",
+                "type": "string"
+              },
+              "children": {
+                "description": "Children (default 0).",
+                "maximum": 6,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "childrenAges": {
+                "description": "Age of each child.",
+                "items": {
+                  "maximum": 18,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              "currency": {
+                "description": "ISO 4217 currency of `price`/`totalPrice` (e.g. 'USD').",
+                "type": "string"
+              },
+              "hotelName": {
+                "description": "Hotel name (from `search_hotels`).",
+                "type": "string"
+              },
+              "offerRef": {
+                "description": "Opaque room offer from get_rooms.",
+                "type": "string"
+              },
+              "price": {
+                "description": "Total to charge for the WHOLE stay (use `grandTotal` from `get_checkout_quote` verbatim — do not multiply it by the number of nights).",
+                "type": "number"
+              },
+              "ref": {
+                "description": "Hotel `ref` from `search_hotels` (e.g. 'TBO:1402689'). Alternative to supplierCode + supplierHotelId.",
+                "type": "string"
+              },
+              "roomName": {
+                "description": "Room name (from the chosen room).",
+                "type": "string"
+              },
+              "rooms": {
+                "description": "Rooms (default 1).",
+                "maximum": 9,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "supplierCode": {
+                "description": "Supplier code (from `search_hotels`). Required if `ref` is omitted.",
+                "type": "string"
+              },
+              "supplierHotelId": {
+                "description": "Supplier hotel id (from `search_hotels`). Required if `ref` is omitted.",
+                "type": "string"
+              },
+              "supplierRoomId": {
+                "description": "Bookable room/rate id from the chosen room in `search_hotels`.",
+                "type": "string"
+              }
+            },
+            "required": ["checkIn", "checkOut", "currency", "hotelName", "price", "roomName"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": false,
+            "title": "Create checkout"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:79fc4b11e7c7b312c242ca1ccb4a41f746906be6495a2c854d5f47f5f206f3e6"
+        },
+        {
+          "name": "create_one_click_checkout",
+          "title": "Create one-click checkout",
+          "description": "Create a checkout for the signed-in user with a saved card pre-selected, and return a getmyhotels.com URL where they confirm + pay in one click. Does NOT charge the card — the user confirms on the hosted page. Get the `savedPaymentMethodPublicId` from `list_payment_methods`. Confirm the hotel, room, dates, and price with the user first.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "adults": {
+                "description": "Adults (default 2).",
+                "maximum": 10,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "checkIn": {
+                "description": "Check-in date, ISO 8601.",
+                "type": "string"
+              },
+              "checkOut": {
+                "description": "Check-out date, ISO 8601.",
+                "type": "string"
+              },
+              "children": {
+                "description": "Children (default 0).",
+                "maximum": 6,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "currency": {
+                "description": "ISO 4217 currency (e.g. 'USD').",
+                "type": "string"
+              },
+              "hotelName": {
+                "description": "Hotel name.",
+                "type": "string"
+              },
+              "offerRef": {
+                "description": "Opaque room offer from get_rooms.",
+                "type": "string"
+              },
+              "price": {
+                "description": "Total for the WHOLE stay (use `grandTotal` from `get_checkout_quote` verbatim — do not multiply it by the number of nights).",
+                "type": "number"
+              },
+              "ref": {
+                "description": "Hotel `ref` from `search_hotels` (e.g. 'TBO:1402689').",
+                "type": "string"
+              },
+              "roomName": {
+                "description": "Room name.",
+                "type": "string"
+              },
+              "rooms": {
+                "description": "Rooms (default 1).",
+                "maximum": 9,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "savedPaymentMethodPublicId": {
+                "description": "Saved card `publicId` from `list_payment_methods`.",
+                "type": "string"
+              },
+              "supplierCode": {
+                "description": "Supplier code (if `ref` omitted).",
+                "type": "string"
+              },
+              "supplierHotelId": {
+                "description": "Supplier hotel id (if `ref` omitted).",
+                "type": "string"
+              },
+              "supplierRoomId": {
+                "description": "Bookable room/rate id from `search_hotels`.",
+                "type": "string"
+              }
+            },
+            "required": ["checkIn", "checkOut", "currency", "hotelName", "price", "roomName", "savedPaymentMethodPublicId"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": false,
+            "title": "Create one-click checkout"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:8941510ff3a6ad68fc3a562b25b97dd8a12b687a738a99fcb63e3c5739ab6bf4"
+        },
+        {
+          "name": "fetch",
+          "title": "Fetch",
+          "description": "Fetch the full record for a result id returned by `search` (a hotel) or for a booking reference (prefixed 'bk_'). Returns a document with id, title, text, url, and metadata.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "description": "An id from `search` results, or a 'bk_'-prefixed booking ref.",
+                "type": "string"
+              }
+            },
+            "required": ["id"],
+            "type": "object"
+          },
+          "annotations": {
+            "openWorldHint": true,
+            "readOnlyHint": true,
+            "title": "Fetch"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:8be75fcea26cd05d9a05569ca72bdf4a241b73a36e4e9852cf9c1e4c11a964fb"
+        },
+        {
+          "name": "get_booking",
+          "title": "Get booking",
+          "description": "Look up a hotel booking by its management token (sent in the confirmation email). Returns the booking status, hotel, dates, and guest details.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "bookingToken": {
+                "description": "The booking management token from the confirmation email/URL.",
+                "type": "string"
+              }
+            },
+            "required": ["bookingToken"],
+            "type": "object"
+          },
+          "annotations": {
+            "readOnlyHint": true,
+            "title": "Get booking"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:e56bf9243df58c9b772a5f5fbe03862021ca67547b3cfe6ba2ea4349e09cb1cf"
+        },
+        {
+          "name": "get_checkout_quote",
+          "title": "Get checkout quote",
+          "description": "Re-price a specific room live against the supplier before checkout (no booking, no charge). Use the `offerRef` and price/currency from `get_rooms`. Returns the authoritative grand total, a `rateValidUntil` timestamp, and any taxes/fees.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "adults": {
+                "description": "Adults (default 2).",
+                "maximum": 10,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "checkIn": {
+                "description": "Check-in date, ISO 8601 (YYYY-MM-DD).",
+                "type": "string"
+              },
+              "checkOut": {
+                "description": "Check-out date, ISO 8601 (YYYY-MM-DD).",
+                "type": "string"
+              },
+              "children": {
+                "description": "Children (default 0).",
+                "maximum": 6,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "childrenAges": {
+                "description": "Age of each child.",
+                "items": {
+                  "maximum": 18,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              "currency": {
+                "description": "ISO 4217 currency of `price`/`totalPrice` (e.g. 'USD').",
+                "type": "string"
+              },
+              "offerRef": {
+                "description": "Opaque room offer from get_rooms.",
+                "type": "string"
+              },
+              "promoCode": {
+                "description": "Optional promo code.",
+                "type": "string"
+              },
+              "ref": {
+                "description": "Hotel `ref` from `search_hotels` (e.g. 'TBO:1402689'). Alternative to supplierCode + supplierHotelId.",
+                "type": "string"
+              },
+              "rooms": {
+                "description": "Rooms (default 1).",
+                "maximum": 9,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "supplierCode": {
+                "description": "Supplier code (from `search_hotels`). Required if `ref` is omitted.",
+                "type": "string"
+              },
+              "supplierHotelId": {
+                "description": "Supplier hotel id (from `search_hotels`). Required if `ref` is omitted.",
+                "type": "string"
+              },
+              "supplierRoomId": {
+                "description": "Bookable room/rate id from the chosen room in `search_hotels`.",
+                "type": "string"
+              },
+              "totalPrice": {
+                "description": "The room's price from `search_hotels` — the TOTAL for the whole stay, not a nightly rate (used to detect price changes).",
+                "type": "number"
+              }
+            },
+            "required": ["checkIn", "checkOut", "currency", "totalPrice"],
+            "type": "object"
+          },
+          "annotations": {
+            "openWorldHint": true,
+            "readOnlyHint": true,
+            "title": "Get checkout quote"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:c683b60df733e86227e5a7f9dd38f07bc352b356f81af13a68e79277fd18b34a"
+        },
+        {
+          "name": "get_hotel_details",
+          "title": "Get hotel details",
+          "description": "Get full property details (description, amenities, photos, policies, location) for a hotel, identified by its `ref` from `search_hotels` (or its supplierCode + supplierHotelId).",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "adults": {
+                "description": "Adults (default 2).",
+                "maximum": 10,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "checkIn": {
+                "description": "Check-in date, ISO 8601 (YYYY-MM-DD). Pass the guest's dates when known: some suppliers only return a hotel that has rooms for them.",
+                "type": "string"
+              },
+              "checkOut": {
+                "description": "Check-out date, ISO 8601 (YYYY-MM-DD).",
+                "type": "string"
+              },
+              "children": {
+                "description": "Children (default 0).",
+                "maximum": 6,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "ref": {
+                "description": "The hotel `ref` from search (e.g. 'tbo:1360717').",
+                "type": "string"
+              },
+              "rooms": {
+                "description": "Rooms (default 1).",
+                "maximum": 9,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "supplierCode": {
+                "description": "Alternative to `ref`: supplier code.",
+                "type": "string"
+              },
+              "supplierHotelId": {
+                "description": "Alternative to `ref`: supplier hotel id.",
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "annotations": {
+            "openWorldHint": true,
+            "readOnlyHint": true,
+            "title": "Get hotel details"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:260cc7f0ea7750b3e302324eabd0bf2a75b65b1598e7c4c564d733935152afdb"
+        },
+        {
+          "name": "get_my_booking",
+          "title": "Get my booking",
+          "description": "Get full details of one of the signed-in user's bookings by its public id.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "publicId": {
+                "description": "The booking's public id.",
+                "type": "string"
+              }
+            },
+            "required": ["publicId"],
+            "type": "object"
+          },
+          "annotations": {
+            "readOnlyHint": true,
+            "title": "Get my booking"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:ba4ab4c657a51050d4e0fb61c6a50d018d4e317d111e96d44a97037e5a66320b"
+        },
+        {
+          "name": "get_rooms",
+          "title": "Get hotel rooms",
+          "description": "List the bookable rooms for ONE hotel and date range. Each room's `offerRef` is what you pass to `get_checkout_quote` / `create_checkout`. Use the hotel `ref` from `search_hotels` or `search`. Call this to see all of a chosen hotel's rooms, or to refresh availability before checkout.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "adults": {
+                "description": "Adults (default 2).",
+                "maximum": 10,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "checkIn": {
+                "description": "Check-in date, ISO 8601 (YYYY-MM-DD).",
+                "type": "string"
+              },
+              "checkOut": {
+                "description": "Check-out date, ISO 8601 (YYYY-MM-DD).",
+                "type": "string"
+              },
+              "children": {
+                "description": "Children (default 0).",
+                "maximum": 6,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "ref": {
+                "description": "The hotel `ref` from search (e.g. 'tbo:1360717').",
+                "type": "string"
+              },
+              "rooms": {
+                "description": "Rooms (default 1).",
+                "maximum": 9,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "supplierCode": {
+                "description": "Alternative to `ref`: supplier code.",
+                "type": "string"
+              },
+              "supplierHotelId": {
+                "description": "Alternative to `ref`: supplier hotel id.",
+                "type": "string"
+              }
+            },
+            "required": ["checkIn", "checkOut"],
+            "type": "object"
+          },
+          "annotations": {
+            "openWorldHint": true,
+            "readOnlyHint": true,
+            "title": "Get hotel rooms"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:2efcd65bed1448345b07f4e1db53f2c4c6cb33cddb02a1a4b14e17153fded4e1"
+        },
+        {
+          "name": "list_my_bookings",
+          "title": "List my bookings",
+          "description": "List the signed-in user's hotel bookings.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "limit": {
+                "description": "Page size (default 20).",
+                "maximum": 100,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "page": {
+                "description": "Page number (default 1).",
+                "minimum": 1,
+                "type": "integer"
+              }
+            },
+            "type": "object"
+          },
+          "annotations": {
+            "readOnlyHint": true,
+            "title": "List my bookings"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:f06797202b4e0d66ffecaf0b68a194fa929662f90df0cf38d889c7dd89d68bf3"
+        },
+        {
+          "name": "list_payment_methods",
+          "title": "List saved cards",
+          "description": "List the signed-in user's saved payment cards (brand, last 4, expiry, default). Use the returned `publicId` with `create_one_click_checkout` to pre-select a card.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {},
+            "type": "object"
+          },
+          "annotations": {
+            "readOnlyHint": true,
+            "title": "List saved cards"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:c04838ee5650805d0f07339b831df4fbb0d395b81b93247238ec5893f7800f16"
+        },
+        {
+          "name": "list_trips",
+          "title": "List saved trips",
+          "description": "List the signed-in user's saved trips (itineraries).",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {},
+            "type": "object"
+          },
+          "annotations": {
+            "readOnlyHint": true,
+            "title": "List saved trips"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:e826cbb6c6dbffa72d7e8bc115df7d4b418e983f4dceb1da8d685cedfc30a5cc"
+        },
+        {
+          "name": "modify_booking",
+          "title": "Modify booking",
+          "description": "Change one of the signed-in user's bookings. Requires the 6-digit `verificationCode` from `request_booking_action_code`. Special-request edits always apply. A DATE change is pushed to the hotel supplier as a cancel-and-rebook at current availability, so it only works for suppliers that support amendment — for others (and when no room is available for the new dates) it returns an error asking you to cancel and rebook instead. A date change can shift the price and issue a new confirmation; the result's `supplierModifyStatus` says whether the supplier reservation was actually changed (`modified`), simulated (`simulated`), or the edit stayed local (`local_only`, e.g. special requests only). Never promise a date change went through unless `supplierModifyStatus` is `modified` or `simulated`.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "checkIn": {
+                "description": "New check-in date, ISO 8601 (optional).",
+                "type": "string"
+              },
+              "checkOut": {
+                "description": "New check-out date, ISO 8601 (optional).",
+                "type": "string"
+              },
+              "publicId": {
+                "description": "The booking's public id.",
+                "type": "string"
+              },
+              "specialRequests": {
+                "description": "New special requests (≤2000 chars, optional).",
+                "type": "string"
+              },
+              "verificationCode": {
+                "description": "6-digit code from `request_booking_action_code`.",
+                "type": "string"
+              }
+            },
+            "required": ["publicId", "verificationCode"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": false,
+            "title": "Modify booking"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": false,
+            "readOnly": false
+          },
+          "digest": "sha256:c901d7f871fcc8ab118ad41fee99cc2210f406255128cee71eb7a309131feba2"
+        },
+        {
+          "name": "request_booking_action_code",
+          "title": "Request booking action code",
+          "description": "Email a 6-digit verification code to the booking owner, required before cancelling or modifying a booking. Step 1 of 2 — then call `cancel_booking`/`modify_booking` with the code.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "action": {
+                "description": "Which action the code authorizes.",
+                "enum": ["cancel", "modify"],
+                "type": "string"
+              },
+              "publicId": {
+                "description": "The booking's public id.",
+                "type": "string"
+              }
+            },
+            "required": ["action", "publicId"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": false,
+            "title": "Request booking action code"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": false
+          },
+          "digest": "sha256:9c1d0df6e9b1b2dec58c6c9cc13c1566e0d688bb2050893f24f0f1003a9c5aa6"
+        },
+        {
+          "name": "save_trip",
+          "title": "Save a trip",
+          "description": "Create a new saved trip (itinerary) for the signed-in user.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "budget": {
+                "description": "Optional total budget.",
+                "type": "number"
+              },
+              "budgetCurrency": {
+                "description": "ISO 4217 currency for the budget (e.g. 'USD').",
+                "type": "string"
+              },
+              "description": {
+                "description": "Optional notes (≤4000 chars).",
+                "type": "string"
+              },
+              "endDate": {
+                "description": "Trip end, ISO 8601 (YYYY-MM-DD).",
+                "type": "string"
+              },
+              "startDate": {
+                "description": "Trip start, ISO 8601 (YYYY-MM-DD).",
+                "type": "string"
+              },
+              "title": {
+                "description": "Trip title (1-255 chars).",
+                "type": "string"
+              }
+            },
+            "required": ["endDate", "startDate", "title"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "openWorldHint": false,
+            "readOnlyHint": false,
+            "title": "Save a trip"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": false,
+            "openWorld": false,
+            "readOnly": false
+          },
+          "digest": "sha256:eda256a2dd5baf8ca5887a851bac00c30adffdfecc7b3374f66dac3601a1a58f"
+        },
+        {
+          "name": "search",
+          "title": "Search",
+          "description": "Search GetMyHotels for hotels matching a query. Returns a list of results with ids that can be passed to `fetch` for full details. Provide the destination and travel dates in the query.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "adults": {
+                "description": "Adults (1-10). Default 2.",
+                "maximum": 10,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "checkIn": {
+                "description": "Check-in date, ISO 8601 (YYYY-MM-DD).",
+                "type": "string"
+              },
+              "checkOut": {
+                "description": "Check-out date, ISO 8601 (YYYY-MM-DD). Must be after check-in.",
+                "type": "string"
+              },
+              "children": {
+                "description": "Children (0-6). Default 0.",
+                "maximum": 6,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "childrenAges": {
+                "description": "Age of each child at check-in. Length should equal `children`.",
+                "items": {
+                  "maximum": 17,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              "destination": {
+                "description": "City, region, or place to search (e.g. 'Paris', 'Goa', 'Lower Manhattan').",
+                "type": "string"
+              },
+              "guestNationality": {
+                "description": "ISO 3166-1 alpha-2 guest nationality (e.g. 'US', 'GB'). Affects supplier pricing.",
+                "type": "string"
+              },
+              "keywords": {
+                "description": "Optional free-text preferences, e.g. 'beachfront pool spa'.",
+                "type": "string"
+              },
+              "query": {
+                "description": "Natural-language search, e.g. 'hotels in Lisbon 2026-08-10 to 2026-08-14 for 2 adults'.",
+                "type": "string"
+              },
+              "rooms": {
+                "description": "Rooms (1-6). Default 1.",
+                "maximum": 6,
+                "minimum": 1,
+                "type": "integer"
+              }
+            },
+            "required": ["query"],
+            "type": "object"
+          },
+          "annotations": {
+            "openWorldHint": true,
+            "readOnlyHint": true,
+            "title": "Search"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:d9730210c6c14fb046212453af43edf68bdee27ecd4b77800e14caaf7ae5e564"
+        },
+        {
+          "name": "search_hotels",
+          "title": "Search hotels",
+          "description": "Search live hotel availability for a destination and date range. Returns a price-sorted list of hotels (JSON in the text), each with an opaque `ref` and an indicative stay price. To book: call `get_rooms` and pass the chosen room's `offerRef` to `get_checkout_quote` then `create_checkout`. For a hotel's other rooms (or a hotel not in the list), call `get_rooms`. Narrow with `keywords` (a hotel name, area, or amenities).",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "adults": {
+                "description": "Adults (1-10). Default 2.",
+                "maximum": 10,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "checkIn": {
+                "description": "Check-in date, ISO 8601 (YYYY-MM-DD).",
+                "type": "string"
+              },
+              "checkOut": {
+                "description": "Check-out date, ISO 8601 (YYYY-MM-DD). Must be after check-in.",
+                "type": "string"
+              },
+              "children": {
+                "description": "Children (0-6). Default 0.",
+                "maximum": 6,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "childrenAges": {
+                "description": "Age of each child at check-in. Length should equal `children`.",
+                "items": {
+                  "maximum": 17,
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              "destination": {
+                "description": "City, region, or place to search (e.g. 'Paris', 'Goa', 'Lower Manhattan').",
+                "type": "string"
+              },
+              "guestNationality": {
+                "description": "ISO 3166-1 alpha-2 guest nationality (e.g. 'US', 'GB'). Affects supplier pricing.",
+                "type": "string"
+              },
+              "keywords": {
+                "description": "Optional free-text preferences, e.g. 'beachfront pool spa'.",
+                "type": "string"
+              },
+              "rooms": {
+                "description": "Rooms (1-6). Default 1.",
+                "maximum": 6,
+                "minimum": 1,
+                "type": "integer"
+              }
+            },
+            "required": ["checkIn", "checkOut", "destination"],
+            "type": "object"
+          },
+          "annotations": {
+            "openWorldHint": true,
+            "readOnlyHint": true,
+            "title": "Search hotels"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:5759cb6dcbfe8971bfc64e3fd54d178a27667b3be3686802df9302d920322e36"
+        }
+      ],
+      "digest": "sha256:aa3fa9e27258125f9fee4a38819d36279ae70184f59449ee8444512359574c21"
+    }
+  }
+}

@@ -1,0 +1,2736 @@
+{
+  "lockfileVersion": 2,
+  "subjects": {
+    "com.gymflexa/gymflexa": {
+      "kind": "mcp-server",
+      "source": {
+        "client": "manual",
+        "file": "registry.modelcontextprotocol.io"
+      },
+      "transport": {
+        "type": "http",
+        "url": "https://mcp.gymflexa.com/mcp"
+      },
+      "protocol": {
+        "era": "modern",
+        "version": "2026-07-28",
+        "supportedVersions": ["2026-07-28"]
+      },
+      "serverInfo": {
+        "name": "gymflexa-mcp",
+        "title": "GymFlexa",
+        "version": "0.2.0"
+      },
+      "capabilities": {
+        "extensions": {
+          "io.modelcontextprotocol/skills": {}
+        },
+        "resources": {
+          "listChanged": false
+        },
+        "tools": {
+          "listChanged": false
+        }
+      },
+      "instructions": "# Safe gym operations with GymFlexa\n\nThis skill drives the GymFlexa MCP connector. The user must connect GymFlexa\nand authorize an account with live access to the intended organization. If\nauthorization fails, ask the user to connect GymFlexa. Never request, embed, or\nrepeat an API key, password, OAuth token, payment credential, or webhook\nsecret.\n\n## What the connector changes\n\nThe read tools change nothing. Six tools write, as the signed-in team member:\n`book_appointment`, `reschedule_appointment`, `cancel_appointment`,\n`create_member`, `update_member` and `set_inventory_quantity`. GymFlexa's own\nrules apply to every write: the signed-in account must still be on the gym's\nteam, and the plan's monthly session limit counts bookings made here.\n\nIf those six tools are missing, the connection was authorized to read only\n(every connection made before November 2026 was). Ask the user to disconnect\nGymFlexa and connect it again, allowing GymFlexa to create and update data.\n\nConfirm every write with the user before calling it: which member, which gym,\nwhen, and what will change. Booking, moving and cancelling reach the member:\na booking schedules the gym's reminder messages, a move moves them, and\ndeclining a session the member requested sends the gym's cancellation message\nwhen the gym set one up. Cancelling a booked session sends the member\nnothing. Say so when you ask.\n\nThe connector cannot delete anything, take, charge, refund, retry, settle,\ntransfer or otherwise move funds, send a message of its own, change reminder\nor template settings, create a repeating series of sessions, change services,\nprices, staff or roles, or touch expenses. It cannot provide workout,\nnutrition, medical, insurance, employment, credit, eligibility, or another\nindividualized or high-impact recommendation. Direct the user to the GymFlexa\napp for those.\n\n## Resource identifiers and tenant checks\n\nEvery id is an exact lowercase 24-character hex id returned by a tool. Keep\nthem distinct:\n\n- `gymId` selects one gym owned by the signed-in user's organization, from\n  `list_gyms`. A write may leave it out when the account has one gym.\n- `memberId` names one member, from `list_members` or `create_member`;\n  `appointmentId` one session, from `list_appointments`; `inventoryItemId`\n  one stock item, from `list_inventory_items`.\n- `providerIds` are the trainer ids `list_trainers` returns; `serviceIds` the\n  service ids `list_services` returns.\n- `lastEditTime` is a record's version. Moving or cancelling a session,\n  updating a member and setting a stock quantity take it as\n  `expectedLastEditTime` and are refused with `conflict` when the record\n  changed since it was read.\n- `requestId` is a unique id you choose for each new booking or member, such\n  as a UUID. Calling again with the same `requestId` returns the first result\n  instead of booking or adding twice.\n\nResolve a name with a list tool, then reuse the exact returned id. Never guess\nan id, treat an opaque id as authority, or reuse one from another\norganization. Malformed and cross-tenant ids fail closed.\n\nThe availability API is also used by GymFlexa's public booking page. The\nconnector must finish its tenant-owned gym lookup before calling that route.\nIf ownership cannot be proved, stop; never use public availability as a\ncross-tenant fallback.\n\n## Available tools\n\n| Tool                       | Use it when someone asks…                                                                    |\n| -------------------------- | -------------------------------------------------------------------------------------------- |\n| `list_gyms`                | which gyms they run; also resolves the gym id every other tool needs                         |\n| `get_gym`                  | for a gym's opening hours, timezone, currency or session length                              |\n| `get_gym_availability`     | when there are free session slots, or which coming days are fully booked (up to 14 days)     |\n| `get_gym_schedule_summary` | how busy each UTC day is, past or upcoming (booking counts, at most 31 days)                 |\n| `get_gym_payment_summary`  | how much was taken in, by status and currency (at most 31 days)                              |\n| `list_services`            | what a class, personal training session or other service costs, with the ids a booking takes |\n| `list_trainers`            | which trainers can be booked, with the ids a booking takes                                   |\n| `list_members`             | who the members are, or for a member's id by name (up to 100)                                |\n| `list_appointments`        | when a member is booked, which sessions a trainer has, or what is booked on a day            |\n| `list_inventory_items`     | how much of a product or supply is in stock, or what is running low                          |\n| `show_gym_overview`        | for a one-card overview of one gym                                                           |\n| `book_appointment`         | to book a member into a session                                                              |\n| `reschedule_appointment`   | to move a session to another day or time                                                     |\n| `cancel_appointment`       | to cancel a session, or decline one a member requested                                       |\n| `create_member`            | to add a new member                                                                          |\n| `update_member`            | to change a member's name, phone, email or language                                          |\n| `set_inventory_quantity`   | to correct or update a stock count                                                           |\n\n`list_gyms` and `list_services` use opaque cursors and accept a maximum page of 100. Report `hasMore` and reuse `nextCursor`; never claim completeness when\nmore pages exist. A cursor is query-bound and must not be reused for another\ngym. `list_members`, `list_appointments` and `list_inventory_items` accept a\nmaximum result limit of 100 and return `hasMore`; members and sessions default\nto 20, stock to 50. `list_trainers` is capped at 100.\n\nBoth summary tools inspect at most 101 source records, return at most 100, and\nmark `recordCountIsLowerBound` when more exist. Their default range starts now\nand runs seven days forward, and their maximum is 31 days; pass explicit past\ndates for past payments or past workload. The overview counts at most 100 scheduled\nrecords, previews 12 services, and examines at most 14 availability days. A\ndisplayed `+` count is a lower bound, not an estimate of the total.\n\n## Booking workflow\n\n1. Find the member with `list_members` and its `search` (any words of their\n   name, ignoring case and accents). If they are not there, offer to add them\n   with `create_member`, then use the id it returns.\n2. Use `get_gym` for the gym's timezone and usual session length, and\n   `get_gym_availability` when the user has no time in mind.\n3. Use `list_services` for the services asked for, and `list_trainers` when\n   the gym has several trainers and the user named one or must choose.\n4. Confirm the member, gym, local day and time, services and trainer with the\n   user, then call `book_appointment` with a new `requestId`. Give\n   `startTime` with the gym's UTC offset. Leave `durationMinutes` out for the\n   gym's usual length.\n5. Report the booked time in the gym's timezone, and that the gym's reminders\n   will reach the member.\n\n`book_appointment` books only a member of the same gym and only trainers: the\nteam members with the trainer role, or the founder of a gym they run alone.\nWithout `providerIds` it books the only trainer, or the user when they are a\ntrainer; with several trainers it answers `provider_required`: ask which one.\n`plan_limit_reached` means the gym's monthly session limit is used up; the\nowner can upgrade in the app.\n\n## Moving or cancelling a session\n\n1. Find the session with `list_appointments` (by member, gym and day) and\n   keep its `id` and `lastEditTime`. A trainer's sessions are those whose\n   `providerIds` hold the trainer's id from `list_trainers`; move or cancel\n   them one at a time, each confirmed.\n2. Confirm the change with the user, then call `reschedule_appointment` (the\n   member, trainer, services and length stay the same unless a new\n   `durationMinutes` is given) or `cancel_appointment`. Cancelling keeps the\n   session as canceled; it never deletes it.\n3. On `conflict`, read the session again, tell the user what changed, and ask\n   again before retrying with the new `lastEditTime`.\n\nOnly requested and booked sessions can be moved or canceled. One the member\nattended or missed stays as it is.\n\n## Members\n\n`create_member` needs a name; phone, email and language are optional. The\nphone and email are saved for the gym's messages but never returned. Use\n`update_member` with the member's `lastEditTime` to change a name, phone,\nemail or language; only the fields given change.\n\n## Stock\n\n`list_inventory_items` shows each item's unit, quantity, minimum and whether\nit is at or below its minimum. `set_inventory_quantity` replaces the stored\nquantity with the number given: when the user reports a change (\"we sold\ntwo\"), work out the new total from the quantity you read, confirm it, and send\nthat total with the item's `lastEditTime`.\n\n## When the answer is lost\n\n`delivery_unknown` means the connection dropped after the request was sent,\nso the change may have been saved. For a booking or a new member, retry with\nthe same `requestId`: a record already saved is returned instead of written\ntwice. For anything else, read the record again before deciding to retry.\n\n## Privacy boundary\n\nMember display names and pseudonymous member and session ids are personal\ndata. Use them only when the requested workflow needs to resolve a member or\nchange their sessions, and do not repeat more names or identifiers than\nneeded in the answer.\n\nSafe results may include:\n\n- owned gym ids and display metadata; safe locale, currency, timezone and\n  opening hours; public bookable-capacity summaries;\n- service ids, names and prices;\n- trainer ids and display names;\n- member display names and ids, gym link, language and edit time;\n- session ids, member, gym and trainer ids, times, status, edit time and\n  bounded service summaries;\n- stock item ids, names, units, quantities and minimums; and\n- UTC-day aggregate schedule counts and aggregate recorded payment\n  statuses/totals.\n\nThe connector intentionally never returns:\n\n- member email, phone, address, date of birth or other profile fields,\n  notes, attendance, workout, service or payment history, even right after\n  you sent them;\n- session, member or stock free-text notes, or reminder contents;\n- trainer contact details, working hours, commission or performance data;\n- individual payment ids or amounts, services, discounts, notes, decline\n  reasons, processor/customer ids, cardholder data, credentials or errors;\n- gym contact/address, organization internals, billing/trial state,\n  integrations, reminders, webhooks or arbitrary upstream documents; or\n- raw upstream errors, secrets, logs, files or conversation history.\n\nDo not infer, reconstruct, request, or ask the user to paste excluded fields.\nAsk for a member's phone or email only to add or update that member, never to\nanswer a question. The overview never queries member records. Schedule and\npayment summaries request only minimum fields for immediate aggregation and\nexpose no person-linked record, identifier, exact booked time, or individual\npayment.\n\n## Configuration and capacity audit\n\n1. Use `list_gyms` unless the exact owned gym id is already available.\n2. Call `get_gym` for timezone, opening hours and configured duration.\n3. Call `get_gym_availability`. It follows the gym's own online-booking window\n   (by default from two hours ahead to six months ahead) and returns the first\n   14 days that have openings.\n4. Compare configured hours with daily slot counts and first/last bookable\n   times. Do not extrapolate beyond the days it returns or infer why time is\n   unavailable.\n\nBookable availability times are administrative capacity, not an individual's\nbooked session.\n\n## Schedule audit\n\nUse `get_gym_schedule_summary` with an explicit bounded range when the user's\ndates matter. It groups source `startTime` values by UTC calendar day, then\ndiscards each value. State that the day basis is UTC, that canceled bookings\nare counted, and that the count may be a lower bound. Never infer member\nidentity, attendance, trainer assignment, service, status, or workload cause\nfrom a count; use `list_appointments` when the user needs the sessions\nthemselves.\n\n`show_gym_overview` uses a fixed seven-day schedule range and renders safe\naggregate metrics without querying members. Avoid restating every number if a\nconcise operational observation or next safe check answers the user.\n\n## Catalog and recorded-payment audit\n\nUse `list_services` for catalog names and prices. A catalog price is\nconfiguration, not proof of a final charge or member purchase.\n\nUse `get_gym_payment_summary` only for aggregate administrative status. It\nreturns status counts and amount totals by currency, never an individual row.\nThe currency totals add every status, FAILED and CANCELED included, so they\nare not the amount actually collected; say so, and use the status counts to\nshow how many payments succeeded.\nWhen `totalsArePartial` is true, say that totals cover only the bounded source\nrecords and must not be treated as the gym's full total. Recorded status is not\nindependent proof of bank settlement. The connector cannot charge, refund,\nretry, settle, transfer, or otherwise move funds.\n",
+      "tools": [
+        {
+          "name": "book_appointment",
+          "title": "Book a gym session",
+          "description": "Use this when someone asks to book a member into a session, class or personal training at their gym. Returns the new session with its time, trainer and services; it takes the gym's usual session length and reminders, so the gym's reminder messages go to the member. Not for finding free slots.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "durationMinutes": {
+                "description": "Length in minutes. Leave it out for the gym's usual session length.",
+                "maximum": 480,
+                "minimum": 5,
+                "type": "integer"
+              },
+              "gymId": {
+                "description": "Id of the gym, from list_gyms. Leave it out when the user has one gym.",
+                "maxLength": 24,
+                "minLength": 24,
+                "pattern": "^[0-9a-f]{24}$",
+                "type": "string"
+              },
+              "memberId": {
+                "description": "Id of the member, from list_members or create_member.",
+                "maxLength": 24,
+                "minLength": 24,
+                "pattern": "^[0-9a-f]{24}$",
+                "type": "string"
+              },
+              "note": {
+                "description": "A note for the gym team.",
+                "maxLength": 2000,
+                "type": "string"
+              },
+              "providerIds": {
+                "description": "Ids of the trainers who take it, from list_trainers. Leave it out when the gym has one trainer or the user is the trainer.",
+                "items": {
+                  "maxLength": 24,
+                  "minLength": 24,
+                  "pattern": "^[0-9a-f]{24}$",
+                  "type": "string"
+                },
+                "maxItems": 5,
+                "type": "array"
+              },
+              "requestId": {
+                "description": "A unique id you choose for this booking, such as a UUID. Calling again with the same requestId returns the first booking instead of booking twice.",
+                "maxLength": 64,
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9_-]{1,64}$",
+                "type": "string"
+              },
+              "serviceIds": {
+                "description": "Ids of the services booked, from list_services.",
+                "items": {
+                  "maxLength": 24,
+                  "minLength": 24,
+                  "pattern": "^[0-9a-f]{24}$",
+                  "type": "string"
+                },
+                "maxItems": 20,
+                "type": "array"
+              },
+              "startTime": {
+                "description": "Start as an ISO 8601 time with the gym's UTC offset, such as 2026-11-20T10:00:00+01:00.",
+                "format": "date-time",
+                "maxLength": 40,
+                "type": "string"
+              }
+            },
+            "required": ["memberId", "requestId", "startTime"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "appointment": {
+                "additionalProperties": false,
+                "properties": {
+                  "endTime": {
+                    "anyOf": [
+                      {
+                        "maxLength": 40,
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "gymId": {
+                    "anyOf": [
+                      {
+                        "maxLength": 24,
+                        "minLength": 24,
+                        "pattern": "^[0-9a-f]{24}$",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "id": {
+                    "anyOf": [
+                      {
+                        "maxLength": 24,
+                        "minLength": 24,
+                        "pattern": "^[0-9a-f]{24}$",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "lastEditTime": {
+                    "anyOf": [
+                      {
+                        "maxLength": 40,
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "memberId": {
+                    "anyOf": [
+                      {
+                        "maxLength": 24,
+                        "minLength": 24,
+                        "pattern": "^[0-9a-f]{24}$",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "providerIds": {
+                    "items": {
+                      "maxLength": 24,
+                      "minLength": 24,
+                      "pattern": "^[0-9a-f]{24}$",
+                      "type": "string"
+                    },
+                    "maxItems": 10,
+                    "type": "array"
+                  },
+                  "reminderCount": {
+                    "maximum": 100000,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "serviceCount": {
+                    "maximum": 100000,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "services": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "id": {
+                          "anyOf": [
+                            {
+                              "maxLength": 24,
+                              "minLength": 24,
+                              "pattern": "^[0-9a-f]{24}$",
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "name": {
+                          "maxLength": 200,
+                          "type": "string"
+                        },
+                        "price": {
+                          "anyOf": [
+                            {
+                              "maximum": 1000000000,
+                              "minimum": -1000000000,
+                              "type": "number"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      },
+                      "required": ["id", "name", "price"],
+                      "type": "object"
+                    },
+                    "maxItems": 20,
+                    "type": "array"
+                  },
+                  "startTime": {
+                    "anyOf": [
+                      {
+                        "maxLength": 40,
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "status": {
+                    "anyOf": [
+                      {
+                        "enum": ["REQUESTED", "SCHEDULED", "MEMBER_ARRIVED", "NO_SHOW", "CANCELED"],
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": ["endTime", "gymId", "id", "lastEditTime", "memberId", "providerIds", "reminderCount", "serviceCount", "services", "startTime", "status"],
+                "type": "object"
+              },
+              "status": {
+                "enum": ["booked", "already_booked"],
+                "type": "string"
+              }
+            },
+            "required": ["appointment", "status"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": true,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": false,
+            "title": "Book a gym session"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "meta": {
+            "securitySchemes": [
+              {
+                "scopes": ["gymflexa:write"],
+                "type": "oauth2"
+              }
+            ]
+          },
+          "digest": "sha256:134a4a2c89041725079a5133f66df692d9d78b56cb150dea683663e180751dc3"
+        },
+        {
+          "name": "cancel_appointment",
+          "title": "Cancel a gym session",
+          "description": "Use this when someone asks to cancel a member's session or decline one the member requested. Returns the session as canceled, kept rather than deleted, and whether the gym's cancellation message goes to the member. Not for moving a session to another time.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "appointmentId": {
+                "description": "Id of the session, from list_appointments.",
+                "maxLength": 24,
+                "minLength": 24,
+                "pattern": "^[0-9a-f]{24}$",
+                "type": "string"
+              },
+              "expectedLastEditTime": {
+                "description": "The lastEditTime from list_appointments. A session changed since then is refused.",
+                "format": "date-time",
+                "maxLength": 40,
+                "type": "string"
+              }
+            },
+            "required": ["appointmentId", "expectedLastEditTime"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "appointment": {
+                "additionalProperties": false,
+                "properties": {
+                  "endTime": {
+                    "anyOf": [
+                      {
+                        "maxLength": 40,
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "gymId": {
+                    "anyOf": [
+                      {
+                        "maxLength": 24,
+                        "minLength": 24,
+                        "pattern": "^[0-9a-f]{24}$",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "id": {
+                    "anyOf": [
+                      {
+                        "maxLength": 24,
+                        "minLength": 24,
+                        "pattern": "^[0-9a-f]{24}$",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "lastEditTime": {
+                    "anyOf": [
+                      {
+                        "maxLength": 40,
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "memberId": {
+                    "anyOf": [
+                      {
+                        "maxLength": 24,
+                        "minLength": 24,
+                        "pattern": "^[0-9a-f]{24}$",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "providerIds": {
+                    "items": {
+                      "maxLength": 24,
+                      "minLength": 24,
+                      "pattern": "^[0-9a-f]{24}$",
+                      "type": "string"
+                    },
+                    "maxItems": 10,
+                    "type": "array"
+                  },
+                  "reminderCount": {
+                    "maximum": 100000,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "serviceCount": {
+                    "maximum": 100000,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "services": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "id": {
+                          "anyOf": [
+                            {
+                              "maxLength": 24,
+                              "minLength": 24,
+                              "pattern": "^[0-9a-f]{24}$",
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "name": {
+                          "maxLength": 200,
+                          "type": "string"
+                        },
+                        "price": {
+                          "anyOf": [
+                            {
+                              "maximum": 1000000000,
+                              "minimum": -1000000000,
+                              "type": "number"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      },
+                      "required": ["id", "name", "price"],
+                      "type": "object"
+                    },
+                    "maxItems": 20,
+                    "type": "array"
+                  },
+                  "startTime": {
+                    "anyOf": [
+                      {
+                        "maxLength": 40,
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "status": {
+                    "anyOf": [
+                      {
+                        "enum": ["REQUESTED", "SCHEDULED", "MEMBER_ARRIVED", "NO_SHOW", "CANCELED"],
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": ["endTime", "gymId", "id", "lastEditTime", "memberId", "providerIds", "reminderCount", "serviceCount", "services", "startTime", "status"],
+                "type": "object"
+              },
+              "clientNotification": {
+                "enum": ["configured", "not_configured", "unknown"],
+                "type": "string"
+              },
+              "status": {
+                "enum": ["canceled", "already_canceled"],
+                "type": "string"
+              }
+            },
+            "required": ["appointment", "clientNotification", "status"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": true,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": false,
+            "title": "Cancel a gym session"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "meta": {
+            "securitySchemes": [
+              {
+                "scopes": ["gymflexa:write"],
+                "type": "oauth2"
+              }
+            ]
+          },
+          "digest": "sha256:02df6648e1431acda2ea7cbe4bb3b1f8cbbf6de7eb93707fe265c4410d5c6967"
+        },
+        {
+          "name": "create_member",
+          "title": "Add a gym member",
+          "description": "Use this when someone asks to add a new member to a gym. Returns the member's id, name, gym and language; the phone and email given are saved but never returned. Not for changing an existing member.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "email": {
+                "description": "Email address.",
+                "maxLength": 254,
+                "type": "string"
+              },
+              "gymId": {
+                "description": "Id of the gym, from list_gyms. Leave it out when the user has one gym.",
+                "maxLength": 24,
+                "minLength": 24,
+                "pattern": "^[0-9a-f]{24}$",
+                "type": "string"
+              },
+              "language": {
+                "description": "Language for their messages, as a code such as en, it or pt-BR. Defaults to the gym language.",
+                "maxLength": 10,
+                "type": "string"
+              },
+              "name": {
+                "description": "The member's full name.",
+                "maxLength": 160,
+                "minLength": 1,
+                "type": "string"
+              },
+              "phone": {
+                "description": "Mobile number, with the country code when known.",
+                "maxLength": 40,
+                "type": "string"
+              },
+              "requestId": {
+                "description": "A unique id you choose for this member, such as a UUID. Calling again with the same requestId returns the first member instead of adding a second one.",
+                "maxLength": 64,
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9_-]{1,64}$",
+                "type": "string"
+              }
+            },
+            "required": ["name", "requestId"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "member": {
+                "additionalProperties": false,
+                "properties": {
+                  "gymId": {
+                    "anyOf": [
+                      {
+                        "maxLength": 24,
+                        "minLength": 24,
+                        "pattern": "^[0-9a-f]{24}$",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "id": {
+                    "anyOf": [
+                      {
+                        "maxLength": 24,
+                        "minLength": 24,
+                        "pattern": "^[0-9a-f]{24}$",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "language": {
+                    "anyOf": [
+                      {
+                        "maxLength": 16,
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "lastEditTime": {
+                    "anyOf": [
+                      {
+                        "maxLength": 40,
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "name": {
+                    "maxLength": 200,
+                    "type": "string"
+                  }
+                },
+                "required": ["gymId", "id", "language", "lastEditTime", "name"],
+                "type": "object"
+              },
+              "status": {
+                "enum": ["created", "already_created"],
+                "type": "string"
+              }
+            },
+            "required": ["member", "status"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": true,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": false,
+            "title": "Add a gym member"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": false
+          },
+          "meta": {
+            "securitySchemes": [
+              {
+                "scopes": ["gymflexa:write"],
+                "type": "oauth2"
+              }
+            ]
+          },
+          "digest": "sha256:6b7a3c087595b7d0d576828926f8dce9d7952a7f3dc5a323ccff5bbe4ce48e66"
+        },
+        {
+          "name": "get_gym",
+          "title": "Get gym opening hours and settings",
+          "description": "Use this when someone asks for one gym's opening hours, timezone, currency or default session length. Returns the gym's scheduling settings with up to 14 opening-hour rows, Monday first; an id outside the organization returns not-found. Not for free session slots.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "gymId": {
+                "description": "Id of one of the user's gyms, as the gym list returns it (24 lowercase hex characters)",
+                "pattern": "^[0-9a-f]{24}$",
+                "type": "string"
+              }
+            },
+            "required": ["gymId"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "gym": {
+                "anyOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "appointmentDuration": {
+                        "description": "Default session length in minutes",
+                        "type": ["number", "null"]
+                      },
+                      "countryCode": {
+                        "anyOf": [
+                          {
+                            "pattern": "^[A-Z]{2}$",
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "currency": {
+                        "anyOf": [
+                          {
+                            "pattern": "^[A-Z]{3}$",
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "defaultLocale": {
+                        "anyOf": [
+                          {
+                            "maxLength": 16,
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "firstDayOfTheWeek": {
+                        "anyOf": [
+                          {
+                            "enum": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"],
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "id": {
+                        "pattern": "^[0-9a-f]{24}$",
+                        "type": "string"
+                      },
+                      "lastEditTime": {
+                        "anyOf": [
+                          {
+                            "maxLength": 32,
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "name": {
+                        "maxLength": 200,
+                        "type": "string"
+                      },
+                      "openingHours": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "close": {
+                              "anyOf": [
+                                {
+                                  "pattern": "^\\d{2}:\\d{2}$",
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "day": {
+                              "enum": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"],
+                              "type": "string"
+                            },
+                            "open": {
+                              "anyOf": [
+                                {
+                                  "pattern": "^\\d{2}:\\d{2}$",
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            }
+                          },
+                          "required": ["close", "day", "open"],
+                          "type": "object"
+                        },
+                        "maxItems": 14,
+                        "type": "array"
+                      },
+                      "timezone": {
+                        "anyOf": [
+                          {
+                            "maxLength": 64,
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      }
+                    },
+                    "required": ["appointmentDuration", "countryCode", "currency", "defaultLocale", "firstDayOfTheWeek", "id", "lastEditTime", "name", "openingHours", "timezone"],
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Scheduling settings of the gym; null when not found. Address, phone, website, organization, billing, integrations, reminders, members and arbitrary metadata are excluded."
+              },
+              "status": {
+                "enum": ["found", "not-found"],
+                "type": "string"
+              }
+            },
+            "required": ["gym", "status"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Get gym opening hours and settings"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "securitySchemes": [
+              {
+                "scopes": ["gymflexa:read"],
+                "type": "oauth2"
+              }
+            ]
+          },
+          "digest": "sha256:5011b3b91ce85e78a3c869056de16667ca23b4b1582c01aac7d13ae80efa37e0"
+        },
+        {
+          "name": "get_gym_availability",
+          "title": "Find free session slots",
+          "description": "Use this when someone asks when their gym has free slots or openings for a class or session, or which coming days are fully booked. Returns, per day, how many online-booking slots are open plus the first start and last end time, for the next 14 days that have openings, so a skipped day has none (no member or trainer names). Not for booking a session.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "gymId": {
+                "description": "Id of one of the user's gyms, as the gym list returns it (24 lowercase hex characters)",
+                "pattern": "^[0-9a-f]{24}$",
+                "type": "string"
+              }
+            },
+            "required": ["gymId"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "availableDayCount": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "availableSlotCount": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "days": {
+                "description": "One row per day with open online-booking slots inside the gym's booking window, in date order. Slot counts and times only; members, appointments, trainers and the reason a time is unavailable are never exposed.",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "day": {
+                      "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+                      "type": "string"
+                    },
+                    "firstStartTime": {
+                      "anyOf": [
+                        {
+                          "maxLength": 32,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "lastEndTime": {
+                      "anyOf": [
+                        {
+                          "maxLength": 32,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "slotCount": {
+                      "minimum": 0,
+                      "type": "integer"
+                    }
+                  },
+                  "required": ["day", "firstStartTime", "lastEndTime", "slotCount"],
+                  "type": "object"
+                },
+                "maxItems": 14,
+                "type": "array"
+              },
+              "timezone": {
+                "anyOf": [
+                  {
+                    "maxLength": 64,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": ["availableDayCount", "availableSlotCount", "days", "timezone"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Find free session slots"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "securitySchemes": [
+              {
+                "scopes": ["gymflexa:read"],
+                "type": "oauth2"
+              }
+            ]
+          },
+          "digest": "sha256:70d7315d1e85140bfe73fc5d2503918a25ed231dab9e96b277927e5b58c71a34"
+        },
+        {
+          "name": "get_gym_payment_summary",
+          "title": "Summarize gym takings",
+          "description": "Use this when someone asks how much their gym took in, or how many payments succeeded, failed or were canceled. Returns payment counts by status and totals by currency; totals include every status. Covers up to 31 days and 100 payments and defaults to the next 7 days, which hold no payments yet. Not for moving money: it cannot charge, refund or transfer.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "endTime": {
+                "description": "End of the range as an ISO 8601 date-time, after startTime and at most 31 days later; defaults to 7 days after the start",
+                "maxLength": 32,
+                "type": "string"
+              },
+              "gymId": {
+                "description": "Id of one of the user's gyms, as the gym list returns it (24 lowercase hex characters)",
+                "pattern": "^[0-9a-f]{24}$",
+                "type": "string"
+              },
+              "startTime": {
+                "description": "Start of the range as an ISO 8601 date-time, matched against when each payment was recorded; defaults to now, so pass a past date for past takings",
+                "maxLength": 32,
+                "type": "string"
+              }
+            },
+            "required": ["gymId"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "range": {
+                "additionalProperties": false,
+                "properties": {
+                  "endTime": {
+                    "maxLength": 32,
+                    "type": "string"
+                  },
+                  "startTime": {
+                    "maxLength": 32,
+                    "type": "string"
+                  }
+                },
+                "required": ["endTime", "startTime"],
+                "type": "object"
+              },
+              "recordCount": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "recordCountIsLowerBound": {
+                "type": "boolean"
+              },
+              "statuses": {
+                "description": "Payment counts per status, such as SUCCEEDED, FAILED, CANCELED or OTHER",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "count": {
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "status": {
+                      "pattern": "^[A-Z0-9_-]{1,48}$",
+                      "type": "string"
+                    }
+                  },
+                  "required": ["count", "status"],
+                  "type": "object"
+                },
+                "maxItems": 100,
+                "type": "array"
+              },
+              "totals": {
+                "description": "Amount totals per currency, summed over every status including FAILED and CANCELED payments. Payment and member ids, processor or card data, contacts, notes, discounts, decline reasons, services and individual transactions are never returned.",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "amount": {
+                      "type": "number"
+                    },
+                    "currency": {
+                      "pattern": "^(?:[A-Z]{3}|UNSPECIFIED)$",
+                      "type": "string"
+                    }
+                  },
+                  "required": ["amount", "currency"],
+                  "type": "object"
+                },
+                "maxItems": 100,
+                "type": "array"
+              },
+              "totalsArePartial": {
+                "description": "True when more than 100 payments fall in the range or any returned amount is missing or invalid",
+                "type": "boolean"
+              }
+            },
+            "required": ["range", "recordCount", "recordCountIsLowerBound", "statuses", "totals", "totalsArePartial"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Summarize gym takings"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "securitySchemes": [
+              {
+                "scopes": ["gymflexa:read"],
+                "type": "oauth2"
+              }
+            ]
+          },
+          "digest": "sha256:5e585f1fcc9b7c1596c45d4eaba9703f30a01f3f0b92383aafab62b0432f4fd6"
+        },
+        {
+          "name": "get_gym_schedule_summary",
+          "title": "Count bookings per day",
+          "description": "Use this when someone asks how busy their gym is or how many appointments or sessions are booked each day, past or upcoming. Returns booking counts per UTC day for one gym, whatever their status, for any window of at most 31 days (the next 7 by default); counting stops at 100. Not for counting cancellations or seeing which members are booked.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "endTime": {
+                "description": "End of the range as an ISO 8601 date-time, after startTime and at most 31 days later; defaults to 7 days after the start",
+                "maxLength": 32,
+                "type": "string"
+              },
+              "gymId": {
+                "description": "Id of one of the user's gyms, as the gym list returns it (24 lowercase hex characters)",
+                "pattern": "^[0-9a-f]{24}$",
+                "type": "string"
+              },
+              "startTime": {
+                "description": "Start of the range as an ISO 8601 date-time; defaults to now",
+                "maxLength": 32,
+                "type": "string"
+              }
+            },
+            "required": ["gymId"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "days": {
+                "description": "One row per UTC day that has bookings, canceled ones included. Aggregate counts only: appointment ids and times, member information, services, notes, trainer data and attendance history are never returned.",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "count": {
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "day": {
+                      "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+                      "type": "string"
+                    }
+                  },
+                  "required": ["count", "day"],
+                  "type": "object"
+                },
+                "maxItems": 100,
+                "type": "array"
+              },
+              "range": {
+                "additionalProperties": false,
+                "properties": {
+                  "endTime": {
+                    "maxLength": 32,
+                    "type": "string"
+                  },
+                  "startTime": {
+                    "maxLength": 32,
+                    "type": "string"
+                  }
+                },
+                "required": ["endTime", "startTime"],
+                "type": "object"
+              },
+              "recordCount": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "recordCountIsLowerBound": {
+                "description": "True when more than 100 bookings fall in the range",
+                "type": "boolean"
+              }
+            },
+            "required": ["days", "range", "recordCount", "recordCountIsLowerBound"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Count bookings per day"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "openai/outputTemplate": "ui://gymflexa/schedule-summary-v1.html",
+            "openai/toolInvocation/invoked": "GymFlexa schedule summary ready.",
+            "openai/toolInvocation/invoking": "Counting GymFlexa schedule…",
+            "securitySchemes": [
+              {
+                "scopes": ["gymflexa:read"],
+                "type": "oauth2"
+              }
+            ],
+            "ui": {
+              "resourceUri": "ui://gymflexa/schedule-summary-v1.html"
+            },
+            "ui/resourceUri": "ui://gymflexa/schedule-summary-v1.html"
+          },
+          "digest": "sha256:971ba9a5e1a8ba8406297f38332cddff8a7806123087c88831fb6c874b164df8"
+        },
+        {
+          "name": "list_appointments",
+          "title": "List gym sessions",
+          "description": "Use this when someone asks when a member is booked, which sessions a trainer has, or what is booked on a day, including to move or cancel one. Returns sessions across all the user's gyms or one, with id, member, gym and trainer ids, times, status and edit time for any date window, latest first, up to 100. Not for counting how busy each day is.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "endTime": {
+                "description": "Only sessions ending before this ISO 8601 time",
+                "format": "date-time",
+                "maxLength": 32,
+                "type": "string"
+              },
+              "gymId": {
+                "description": "Only sessions at this gym, by an id from the user's gym list; every gym when absent",
+                "pattern": "^[0-9a-f]{24}$",
+                "type": "string"
+              },
+              "limit": {
+                "description": "Maximum number of sessions to return (default 20, maximum 100)",
+                "exclusiveMinimum": 0,
+                "maximum": 100,
+                "type": "integer"
+              },
+              "memberId": {
+                "description": "Only sessions of this member, by an id from list_members",
+                "pattern": "^[0-9a-f]{24}$",
+                "type": "string"
+              },
+              "startTime": {
+                "description": "Only sessions starting at or after this ISO 8601 time",
+                "format": "date-time",
+                "maxLength": 32,
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "appointments": {
+                "description": "Sessions, latest start first. Notes, services, reminders, contact details, organization data and payment details are excluded.",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "endTime": {
+                      "anyOf": [
+                        {
+                          "maxLength": 32,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "gymId": {
+                      "anyOf": [
+                        {
+                          "pattern": "^[0-9a-f]{24}$",
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "id": {
+                      "pattern": "^[0-9a-f]{24}$",
+                      "type": "string"
+                    },
+                    "lastEditTime": {
+                      "anyOf": [
+                        {
+                          "maxLength": 32,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "Version to pass as expectedLastEditTime when moving or cancelling it"
+                    },
+                    "memberId": {
+                      "anyOf": [
+                        {
+                          "pattern": "^[0-9a-f]{24}$",
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "providerIds": {
+                      "description": "Trainers booked on it, as list_trainers ids",
+                      "items": {
+                        "pattern": "^[0-9a-f]{24}$",
+                        "type": "string"
+                      },
+                      "maxItems": 10,
+                      "type": "array"
+                    },
+                    "startTime": {
+                      "anyOf": [
+                        {
+                          "maxLength": 32,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "status": {
+                      "anyOf": [
+                        {
+                          "enum": ["REQUESTED", "SCHEDULED", "MEMBER_ARRIVED", "NO_SHOW", "CANCELED"],
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": ["endTime", "gymId", "id", "lastEditTime", "memberId", "providerIds", "startTime", "status"],
+                  "type": "object"
+                },
+                "maxItems": 100,
+                "type": "array"
+              },
+              "count": {
+                "maximum": 100,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "hasMore": {
+                "type": "boolean"
+              }
+            },
+            "required": ["appointments", "count", "hasMore"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "List gym sessions"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "securitySchemes": [
+              {
+                "scopes": ["gymflexa:read"],
+                "type": "oauth2"
+              }
+            ]
+          },
+          "digest": "sha256:cc547a0172d062a613ea3e56c7fe9e3ee4c5e5dcb393e5694166414b8c611188"
+        },
+        {
+          "name": "list_gyms",
+          "title": "List your gyms",
+          "description": "Use this when someone asks which gyms or studios they run in GymFlexa, or a gym's id is needed. Returns gyms with id, name, currency, default language and last edit time, alphabetical, 25 per page by default. Not for finding a member.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "cursor": {
+                "description": "The nextCursor of the previous page of this listing; absent for the first page",
+                "maxLength": 4096,
+                "type": "string"
+              },
+              "limit": {
+                "description": "Maximum number of gyms to return (default 25, maximum 100)",
+                "exclusiveMinimum": 0,
+                "maximum": 100,
+                "type": "integer"
+              }
+            },
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "gyms": {
+                "description": "Gyms in the signed-in organization, alphabetical. Organization, address, contact, billing, integration and member data are never returned.",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "currency": {
+                      "anyOf": [
+                        {
+                          "pattern": "^[A-Z]{3}$",
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "defaultLocale": {
+                      "anyOf": [
+                        {
+                          "maxLength": 16,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "id": {
+                      "pattern": "^[0-9a-f]{24}$",
+                      "type": "string"
+                    },
+                    "lastEditTime": {
+                      "anyOf": [
+                        {
+                          "maxLength": 32,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "name": {
+                      "maxLength": 200,
+                      "type": "string"
+                    }
+                  },
+                  "required": ["currency", "defaultLocale", "id", "lastEditTime", "name"],
+                  "type": "object"
+                },
+                "maxItems": 100,
+                "type": "array"
+              },
+              "hasMore": {
+                "type": "boolean"
+              },
+              "nextCursor": {
+                "anyOf": [
+                  {
+                    "maxLength": 4096,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Cursor for the next page; null on the last page"
+              }
+            },
+            "required": ["gyms", "hasMore", "nextCursor"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "List your gyms"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "securitySchemes": [
+              {
+                "scopes": ["gymflexa:read"],
+                "type": "oauth2"
+              }
+            ]
+          },
+          "digest": "sha256:12875fbdc51c0e2a5146e16d99807818bb71cb541bf452fa95bcb7fe9764567b"
+        },
+        {
+          "name": "list_inventory_items",
+          "title": "Check gym stock",
+          "description": "Use this when someone asks how much of a product or supply is left in the gym's stock or what is running low. Returns up to 100 stock items with unit, quantity, minimum and a low-stock flag. Not for retail prices.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "gymId": {
+                "description": "Id of the gym, from list_gyms. Leave it out when the user has one gym.",
+                "maxLength": 24,
+                "minLength": 24,
+                "pattern": "^[0-9a-f]{24}$",
+                "type": "string"
+              },
+              "limit": {
+                "description": "Maximum number of items (default 50, maximum 100).",
+                "maximum": 100,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "lowStockOnly": {
+                "description": "Only items at or below their minimum quantity.",
+                "type": "boolean"
+              },
+              "search": {
+                "description": "Only items whose name contains these words.",
+                "maxLength": 100,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "count": {
+                "maximum": 100000,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "gymId": {
+                "maxLength": 24,
+                "minLength": 24,
+                "pattern": "^[0-9a-f]{24}$",
+                "type": "string"
+              },
+              "hasMore": {
+                "type": "boolean"
+              },
+              "items": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "gymId": {
+                      "anyOf": [
+                        {
+                          "maxLength": 24,
+                          "minLength": 24,
+                          "pattern": "^[0-9a-f]{24}$",
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "id": {
+                      "anyOf": [
+                        {
+                          "maxLength": 24,
+                          "minLength": 24,
+                          "pattern": "^[0-9a-f]{24}$",
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "lastEditTime": {
+                      "anyOf": [
+                        {
+                          "maxLength": 40,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "lowStock": {
+                      "type": "boolean"
+                    },
+                    "minimumQuantity": {
+                      "anyOf": [
+                        {
+                          "maximum": 1000000000,
+                          "minimum": 0,
+                          "type": "number"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "name": {
+                      "maxLength": 200,
+                      "type": "string"
+                    },
+                    "quantity": {
+                      "anyOf": [
+                        {
+                          "maximum": 1000000000,
+                          "minimum": 0,
+                          "type": "number"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "unit": {
+                      "anyOf": [
+                        {
+                          "maxLength": 40,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": ["gymId", "id", "lastEditTime", "lowStock", "minimumQuantity", "name", "quantity", "unit"],
+                  "type": "object"
+                },
+                "maxItems": 100,
+                "type": "array"
+              }
+            },
+            "required": ["count", "gymId", "hasMore", "items"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Check gym stock"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "securitySchemes": [
+              {
+                "scopes": ["gymflexa:read"],
+                "type": "oauth2"
+              }
+            ]
+          },
+          "digest": "sha256:415d4d76cdf400de30365de52cc72fb40548869fa754c11c3a90cd7456ab4cd1"
+        },
+        {
+          "name": "list_members",
+          "title": "Look up gym members",
+          "description": "Use this when someone asks who their members are, or needs a member's id to book them, update their details or look up their sessions. Returns up to 100 members (20 by default) across all the user's gyms or one, with id, name, gym and last edit time, optionally only those whose name matches. Not for a member's email, phone or notes.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "gymId": {
+                "description": "Only members of this gym, by an id from the user's gym list; every gym when absent",
+                "pattern": "^[0-9a-f]{24}$",
+                "type": "string"
+              },
+              "limit": {
+                "description": "Maximum number of members to return (default 20, maximum 100)",
+                "exclusiveMinimum": 0,
+                "maximum": 100,
+                "type": "integer"
+              },
+              "search": {
+                "description": "Only members whose name contains these words, in any order, ignoring case and accents",
+                "maxLength": 100,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "count": {
+                "maximum": 100,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "hasMore": {
+                "type": "boolean"
+              },
+              "members": {
+                "description": "Members with the ids needed to book them or look up their sessions. Email, phone, address, date of birth, notes, attendance and payment history, organization data and other profile fields are excluded.",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "gymId": {
+                      "anyOf": [
+                        {
+                          "pattern": "^[0-9a-f]{24}$",
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "id": {
+                      "pattern": "^[0-9a-f]{24}$",
+                      "type": "string"
+                    },
+                    "lastEditTime": {
+                      "anyOf": [
+                        {
+                          "maxLength": 32,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "Version to pass as expectedLastEditTime when updating the member's details"
+                    },
+                    "name": {
+                      "maxLength": 200,
+                      "type": "string"
+                    }
+                  },
+                  "required": ["gymId", "id", "lastEditTime", "name"],
+                  "type": "object"
+                },
+                "maxItems": 100,
+                "type": "array"
+              }
+            },
+            "required": ["count", "hasMore", "members"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Look up gym members"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "securitySchemes": [
+              {
+                "scopes": ["gymflexa:read"],
+                "type": "oauth2"
+              }
+            ]
+          },
+          "digest": "sha256:18e8a6880c13e30eef1fd21547bd0f25a53783bcec5718d99d86898bc696da5c"
+        },
+        {
+          "name": "list_services",
+          "title": "Look up class and service prices",
+          "description": "Use this when someone asks what their gym charges for a class, personal training session or other service, or needs a service id to book it. Returns catalog service ids, names, prices and last edit times for one gym, alphabetical, 25 per page by default. Not for what a particular member bought or attended.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "cursor": {
+                "description": "The nextCursor of the previous page of this listing; absent for the first page",
+                "maxLength": 4096,
+                "type": "string"
+              },
+              "gymId": {
+                "description": "Id of one of the user's gyms, as the gym list returns it (24 lowercase hex characters)",
+                "pattern": "^[0-9a-f]{24}$",
+                "type": "string"
+              },
+              "limit": {
+                "description": "Maximum services to return (default 25, maximum 100)",
+                "exclusiveMinimum": 0,
+                "maximum": 100,
+                "type": "integer"
+              }
+            },
+            "required": ["gymId"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "hasMore": {
+                "type": "boolean"
+              },
+              "nextCursor": {
+                "anyOf": [
+                  {
+                    "maxLength": 4096,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Cursor for the next page; null on the last page"
+              },
+              "services": {
+                "description": "Service catalog entries, alphabetical. Member history, notes, staff commissions, organization ids and arbitrary metadata are excluded.",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "id": {
+                      "anyOf": [
+                        {
+                          "pattern": "^[0-9a-f]{24}$",
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "The id book_appointment takes in serviceIds"
+                    },
+                    "lastEditTime": {
+                      "anyOf": [
+                        {
+                          "maxLength": 32,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "name": {
+                      "maxLength": 200,
+                      "type": "string"
+                    },
+                    "price": {
+                      "description": "Price in the gym's currency",
+                      "type": ["number", "null"]
+                    }
+                  },
+                  "required": ["id", "lastEditTime", "name", "price"],
+                  "type": "object"
+                },
+                "maxItems": 100,
+                "type": "array"
+              }
+            },
+            "required": ["hasMore", "nextCursor", "services"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Look up class and service prices"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "securitySchemes": [
+              {
+                "scopes": ["gymflexa:read"],
+                "type": "oauth2"
+              }
+            ]
+          },
+          "digest": "sha256:0fa418e9136753422d1de0b5dc7afd17a0cb33b31717c4463c455368a22f329a"
+        },
+        {
+          "name": "list_trainers",
+          "title": "List trainers who take sessions",
+          "description": "Use this when someone asks which trainers can be booked, or needs a trainer's id to book a member with them or to find their sessions. Returns up to 100 trainer ids and display names from the user's organization; a gym run by one person lists that person. Not for trainers' working hours.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {},
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "count": {
+                "maximum": 100,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "hasMore": {
+                "type": "boolean"
+              },
+              "trainers": {
+                "description": "Ids and display names of the team members with the trainer role, or of the gym's only team member when nobody has it. Roles are organization-wide, not per gym. Contact details, avatars, role records, schedules and organization data are excluded.",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "displayName": {
+                      "maxLength": 200,
+                      "type": "string"
+                    },
+                    "id": {
+                      "description": "The id book_appointment takes in providerIds",
+                      "pattern": "^[0-9a-f]{24}$",
+                      "type": "string"
+                    }
+                  },
+                  "required": ["displayName", "id"],
+                  "type": "object"
+                },
+                "maxItems": 100,
+                "type": "array"
+              }
+            },
+            "required": ["count", "hasMore", "trainers"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "List trainers who take sessions"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "securitySchemes": [
+              {
+                "scopes": ["gymflexa:read"],
+                "type": "oauth2"
+              }
+            ]
+          },
+          "digest": "sha256:da34f4e842d7c51cf1eb81bc378dd3938e497cef8c7f6203c2253edd64436ec6"
+        },
+        {
+          "name": "reschedule_appointment",
+          "title": "Move a gym session",
+          "description": "Use this when someone asks to move a member's session to another day or time. Returns the moved session; its member, trainer, services and length stay the same and the member's reminders move with it. Not for cancelling a session.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "appointmentId": {
+                "description": "Id of the session, from list_appointments.",
+                "maxLength": 24,
+                "minLength": 24,
+                "pattern": "^[0-9a-f]{24}$",
+                "type": "string"
+              },
+              "durationMinutes": {
+                "description": "New length in minutes. Leave it out to keep the current length.",
+                "maximum": 480,
+                "minimum": 5,
+                "type": "integer"
+              },
+              "expectedLastEditTime": {
+                "description": "The lastEditTime from list_appointments. A session changed since then is refused.",
+                "format": "date-time",
+                "maxLength": 40,
+                "type": "string"
+              },
+              "startTime": {
+                "description": "New start as an ISO 8601 time with the gym's UTC offset, such as 2026-11-20T15:30:00+01:00.",
+                "format": "date-time",
+                "maxLength": 40,
+                "type": "string"
+              }
+            },
+            "required": ["appointmentId", "expectedLastEditTime", "startTime"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "appointment": {
+                "additionalProperties": false,
+                "properties": {
+                  "endTime": {
+                    "anyOf": [
+                      {
+                        "maxLength": 40,
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "gymId": {
+                    "anyOf": [
+                      {
+                        "maxLength": 24,
+                        "minLength": 24,
+                        "pattern": "^[0-9a-f]{24}$",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "id": {
+                    "anyOf": [
+                      {
+                        "maxLength": 24,
+                        "minLength": 24,
+                        "pattern": "^[0-9a-f]{24}$",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "lastEditTime": {
+                    "anyOf": [
+                      {
+                        "maxLength": 40,
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "memberId": {
+                    "anyOf": [
+                      {
+                        "maxLength": 24,
+                        "minLength": 24,
+                        "pattern": "^[0-9a-f]{24}$",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "providerIds": {
+                    "items": {
+                      "maxLength": 24,
+                      "minLength": 24,
+                      "pattern": "^[0-9a-f]{24}$",
+                      "type": "string"
+                    },
+                    "maxItems": 10,
+                    "type": "array"
+                  },
+                  "reminderCount": {
+                    "maximum": 100000,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "serviceCount": {
+                    "maximum": 100000,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "services": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "id": {
+                          "anyOf": [
+                            {
+                              "maxLength": 24,
+                              "minLength": 24,
+                              "pattern": "^[0-9a-f]{24}$",
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "name": {
+                          "maxLength": 200,
+                          "type": "string"
+                        },
+                        "price": {
+                          "anyOf": [
+                            {
+                              "maximum": 1000000000,
+                              "minimum": -1000000000,
+                              "type": "number"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      },
+                      "required": ["id", "name", "price"],
+                      "type": "object"
+                    },
+                    "maxItems": 20,
+                    "type": "array"
+                  },
+                  "startTime": {
+                    "anyOf": [
+                      {
+                        "maxLength": 40,
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "status": {
+                    "anyOf": [
+                      {
+                        "enum": ["REQUESTED", "SCHEDULED", "MEMBER_ARRIVED", "NO_SHOW", "CANCELED"],
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": ["endTime", "gymId", "id", "lastEditTime", "memberId", "providerIds", "reminderCount", "serviceCount", "services", "startTime", "status"],
+                "type": "object"
+              },
+              "previousStartTime": {
+                "anyOf": [
+                  {
+                    "maxLength": 40,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "status": {
+                "enum": ["rescheduled"],
+                "type": "string"
+              }
+            },
+            "required": ["appointment", "previousStartTime", "status"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": true,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": false,
+            "title": "Move a gym session"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "meta": {
+            "securitySchemes": [
+              {
+                "scopes": ["gymflexa:write"],
+                "type": "oauth2"
+              }
+            ]
+          },
+          "digest": "sha256:42a2a7c86b19aed33f0fe3891675a612e917de785c94ac7ace787feb6b6664d7"
+        },
+        {
+          "name": "set_inventory_quantity",
+          "title": "Update a stock quantity",
+          "description": "Use this when someone asks to correct or update how much of a stock item the gym has. Returns the item with its previous and new quantity; the number given replaces the stored one. Not for adding a new stock item.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "expectedLastEditTime": {
+                "description": "The lastEditTime from list_inventory_items. An item changed since then is refused.",
+                "format": "date-time",
+                "maxLength": 40,
+                "type": "string"
+              },
+              "inventoryItemId": {
+                "description": "Id of the stock item, from list_inventory_items.",
+                "maxLength": 24,
+                "minLength": 24,
+                "pattern": "^[0-9a-f]{24}$",
+                "type": "string"
+              },
+              "quantity": {
+                "description": "The quantity now in stock, in the item unit. It replaces the stored quantity; work out the total first when the user gives a change.",
+                "maximum": 1000000000,
+                "minimum": 0,
+                "type": "number"
+              }
+            },
+            "required": ["expectedLastEditTime", "inventoryItemId", "quantity"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "item": {
+                "additionalProperties": false,
+                "properties": {
+                  "gymId": {
+                    "anyOf": [
+                      {
+                        "maxLength": 24,
+                        "minLength": 24,
+                        "pattern": "^[0-9a-f]{24}$",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "id": {
+                    "anyOf": [
+                      {
+                        "maxLength": 24,
+                        "minLength": 24,
+                        "pattern": "^[0-9a-f]{24}$",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "lastEditTime": {
+                    "anyOf": [
+                      {
+                        "maxLength": 40,
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "lowStock": {
+                    "type": "boolean"
+                  },
+                  "minimumQuantity": {
+                    "anyOf": [
+                      {
+                        "maximum": 1000000000,
+                        "minimum": 0,
+                        "type": "number"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "name": {
+                    "maxLength": 200,
+                    "type": "string"
+                  },
+                  "quantity": {
+                    "anyOf": [
+                      {
+                        "maximum": 1000000000,
+                        "minimum": 0,
+                        "type": "number"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "unit": {
+                    "anyOf": [
+                      {
+                        "maxLength": 40,
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": ["gymId", "id", "lastEditTime", "lowStock", "minimumQuantity", "name", "quantity", "unit"],
+                "type": "object"
+              },
+              "previousQuantity": {
+                "anyOf": [
+                  {
+                    "maximum": 1000000000,
+                    "minimum": 0,
+                    "type": "number"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "status": {
+                "enum": ["updated"],
+                "type": "string"
+              }
+            },
+            "required": ["item", "previousQuantity", "status"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": true,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": false,
+            "title": "Update a stock quantity"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": false
+          },
+          "meta": {
+            "securitySchemes": [
+              {
+                "scopes": ["gymflexa:write"],
+                "type": "oauth2"
+              }
+            ]
+          },
+          "digest": "sha256:a2e8c21f7e3a60a75e8d5666a1f44b9370cc15d838a687b8d0bb5ca96ed2e70f"
+        },
+        {
+          "name": "show_gym_overview",
+          "title": "Show gym overview",
+          "description": "Use this when someone wants a quick overview or dashboard of one gym. Returns an overview card with the gym's details, booking counts for the next 7 days, open online-booking slots across up to 14 days with openings and up to 12 services with prices (no member, trainer or payment data). Not for a single member or booking.",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "gymId": {
+                "description": "Id of one of the user's gyms, as the gym list returns it (24 lowercase hex characters)",
+                "pattern": "^[0-9a-f]{24}$",
+                "type": "string"
+              }
+            },
+            "required": ["gymId"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "additionalProperties": false,
+            "properties": {
+              "appointmentCount": {
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "appointmentCountIsLowerBound": {
+                "type": "boolean"
+              },
+              "availabilityDays": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "count": {
+                      "maximum": 9007199254740991,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "day": {
+                      "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+                      "type": "string"
+                    }
+                  },
+                  "required": ["count", "day"],
+                  "type": "object"
+                },
+                "maxItems": 14,
+                "type": "array"
+              },
+              "availableDayCount": {
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "availableSlotCount": {
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "gym": {
+                "anyOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "currency": {
+                        "anyOf": [
+                          {
+                            "pattern": "^[A-Z]{3}$",
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "defaultLocale": {
+                        "anyOf": [
+                          {
+                            "maxLength": 16,
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "id": {
+                        "pattern": "^[0-9a-f]{24}$",
+                        "type": "string"
+                      },
+                      "name": {
+                        "maxLength": 200,
+                        "type": "string"
+                      },
+                      "timezone": {
+                        "anyOf": [
+                          {
+                            "maxLength": 64,
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      }
+                    },
+                    "required": ["currency", "defaultLocale", "id", "name", "timezone"],
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Gym metadata; null when not found. The overview never reads or returns member records, individual appointments or payments, attendance or service history, trainers, notes or health and fitness details."
+              },
+              "scheduleDays": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "count": {
+                      "maximum": 9007199254740991,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "day": {
+                      "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+                      "type": "string"
+                    }
+                  },
+                  "required": ["count", "day"],
+                  "type": "object"
+                },
+                "maxItems": 100,
+                "type": "array"
+              },
+              "scheduleRange": {
+                "additionalProperties": false,
+                "properties": {
+                  "endTime": {
+                    "maxLength": 32,
+                    "type": "string"
+                  },
+                  "startTime": {
+                    "maxLength": 32,
+                    "type": "string"
+                  }
+                },
+                "required": ["endTime", "startTime"],
+                "type": "object"
+              },
+              "serviceCount": {
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "serviceCountIsLowerBound": {
+                "type": "boolean"
+              },
+              "services": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "lastEditTime": {
+                      "anyOf": [
+                        {
+                          "maxLength": 32,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "name": {
+                      "maxLength": 200,
+                      "type": "string"
+                    },
+                    "price": {
+                      "anyOf": [
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": ["lastEditTime", "name", "price"],
+                  "type": "object"
+                },
+                "maxItems": 12,
+                "type": "array"
+              }
+            },
+            "required": ["appointmentCount", "appointmentCountIsLowerBound", "availabilityDays", "availableDayCount", "availableSlotCount", "gym", "scheduleDays", "scheduleRange", "serviceCount", "serviceCountIsLowerBound", "services"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Show gym overview"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "openai/outputTemplate": "ui://gymflexa/gym-overview-v1.html",
+            "openai/toolInvocation/invoked": "GymFlexa gym overview ready.",
+            "openai/toolInvocation/invoking": "Loading GymFlexa gym…",
+            "securitySchemes": [
+              {
+                "scopes": ["gymflexa:read"],
+                "type": "oauth2"
+              }
+            ],
+            "ui": {
+              "resourceUri": "ui://gymflexa/gym-overview-v1.html"
+            },
+            "ui/resourceUri": "ui://gymflexa/gym-overview-v1.html"
+          },
+          "digest": "sha256:95d23cc6b7c04b28146d8b76fa430635965a70516e40250cf95f36822ef2c1d5"
+        },
+        {
+          "name": "update_member",
+          "title": "Update a member's details",
+          "description": "Use this when someone asks to change a member's name, phone, email or language. Returns the member's id, name, gym and which fields changed; contact details are never returned. Not for adding a new member.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "email": {
+                "description": "New email address.",
+                "maxLength": 254,
+                "type": "string"
+              },
+              "expectedLastEditTime": {
+                "description": "The lastEditTime from list_members. A member changed since then is refused.",
+                "format": "date-time",
+                "maxLength": 40,
+                "type": "string"
+              },
+              "language": {
+                "description": "New language for their messages, as a code such as en or it.",
+                "maxLength": 10,
+                "type": "string"
+              },
+              "memberId": {
+                "description": "Id of the member, from list_members.",
+                "maxLength": 24,
+                "minLength": 24,
+                "pattern": "^[0-9a-f]{24}$",
+                "type": "string"
+              },
+              "name": {
+                "description": "New full name.",
+                "maxLength": 160,
+                "minLength": 1,
+                "type": "string"
+              },
+              "phone": {
+                "description": "New mobile number, with the country code when known.",
+                "maxLength": 40,
+                "type": "string"
+              }
+            },
+            "required": ["expectedLastEditTime", "memberId"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "changedFields": {
+                "items": {
+                  "enum": ["name", "phone", "email", "language", "dateOfBirth", "address", "color"],
+                  "type": "string"
+                },
+                "maxItems": 7,
+                "type": "array"
+              },
+              "member": {
+                "additionalProperties": false,
+                "properties": {
+                  "gymId": {
+                    "anyOf": [
+                      {
+                        "maxLength": 24,
+                        "minLength": 24,
+                        "pattern": "^[0-9a-f]{24}$",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "id": {
+                    "anyOf": [
+                      {
+                        "maxLength": 24,
+                        "minLength": 24,
+                        "pattern": "^[0-9a-f]{24}$",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "language": {
+                    "anyOf": [
+                      {
+                        "maxLength": 16,
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "lastEditTime": {
+                    "anyOf": [
+                      {
+                        "maxLength": 40,
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "name": {
+                    "maxLength": 200,
+                    "type": "string"
+                  }
+                },
+                "required": ["gymId", "id", "language", "lastEditTime", "name"],
+                "type": "object"
+              },
+              "status": {
+                "enum": ["updated"],
+                "type": "string"
+              }
+            },
+            "required": ["changedFields", "member", "status"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": true,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": false,
+            "title": "Update a member's details"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": false
+          },
+          "meta": {
+            "securitySchemes": [
+              {
+                "scopes": ["gymflexa:write"],
+                "type": "oauth2"
+              }
+            ]
+          },
+          "digest": "sha256:aaa45404412a954138c2bab9df43a7adaf0681277d4ddd7e408f0d363e355457"
+        }
+      ],
+      "resources": [
+        {
+          "uri": "skill://gymflexa/gym-operations/SKILL.md",
+          "name": "gym-operations",
+          "title": "gym-operations skill",
+          "description": "Run a GymFlexa gym through its connector — read opening hours, free session slots, how busy each day is, trainers, members, sessions, services, stock and payment totals, and book, move or cancel sessions, add or update members and correct stock counts. Use when a gym owner or manager asks about free slots, sessions, trainers, members, class prices, stock or takings, or asks to book, reschedule or cancel a member's session, add or change a member, or update a stock count — never member profiling or advice.",
+          "mimeType": "text/markdown",
+          "digest": "sha256:e48a70c119d81032bd9fa99032c6459399483c4c67499705d5acd099046c828b"
+        },
+        {
+          "uri": "skill://gymflexa/gymflexa/SKILL.md",
+          "name": "gymflexa",
+          "title": "gymflexa skill",
+          "description": "Read and manage gym data with the `gymflexa` CLI — the gyms of an organization, the members enrolled in them, the services they sell, the appointments on their calendars, and the payments they record, through the GymFlexa REST API. Use when asked to look up or edit gym members, book or reschedule appointments, inspect a service catalogue or price, review recorded payments, or work with anything involving the `gymflexa` command or app.gymflexa.com data.",
+          "mimeType": "text/markdown",
+          "digest": "sha256:00283e0fd63943fb2d886537d83d7677e32745a9b56b527adc30e7cee05497cb"
+        },
+        {
+          "uri": "ui://gymflexa/gym-overview-v1.html",
+          "name": "gymflexa-gym-overview",
+          "description": "An inline GymFlexa view that presents a tenant-scoped, non-identifying administrative overview.",
+          "mimeType": "text/html;profile=mcp-app",
+          "digest": "sha256:49791f1894b5c7a464516836067b850d2ce381a27268e8c3dcd5910eadc8a951"
+        },
+        {
+          "uri": "ui://gymflexa/schedule-summary-v1.html",
+          "name": "gymflexa-schedule-summary",
+          "description": "An inline GymFlexa view that presents non-identifying, tenant-scoped administrative schedule counts.",
+          "mimeType": "text/html;profile=mcp-app",
+          "digest": "sha256:6e7e0f1e3e5eeac4ae236cbcc457765d3f782b58636016b8bd9083ba844c138e"
+        }
+      ],
+      "digest": "sha256:740a5f60b68a3fc1691fe50cf9e21f8ae558d1e65f4af0133b04357e6a6e8092"
+    }
+  }
+}

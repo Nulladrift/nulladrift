@@ -1,0 +1,1860 @@
+{
+  "lockfileVersion": 2,
+  "subjects": {
+    "com.imagelato/imagelato": {
+      "kind": "mcp-server",
+      "source": {
+        "client": "manual",
+        "file": "registry.modelcontextprotocol.io"
+      },
+      "transport": {
+        "type": "http",
+        "url": "https://mcp.imagelato.com/mcp"
+      },
+      "protocol": {
+        "era": "modern",
+        "version": "2026-07-28",
+        "supportedVersions": ["2026-07-28"]
+      },
+      "serverInfo": {
+        "name": "imagelato-mcp",
+        "title": "Imagelato",
+        "version": "0.1.1"
+      },
+      "capabilities": {
+        "extensions": {
+          "io.modelcontextprotocol/skills": {}
+        },
+        "resources": {
+          "listChanged": false
+        },
+        "tools": {
+          "listChanged": false
+        }
+      },
+      "instructions": "# Image asset workflows with Imagelato\n\nThis skill drives the Imagelato MCP connector. The user must connect Imagelato\nand authorize an account with access to an organization. If authorization\nfails, ask them to connect or reauthorize Imagelato; never request an API key\nor token in chat.\n\n## Media boundary\n\nImagelato's product API uses deterministic resizing and reformatting, with no\nAI model. The public connector does not upload, process, transform or generate\nimages. It reviews safe asset metadata, manages projects/presets and deletes\none exact processed batch. Do not imply that creating or updating a preset\ncreates media.\n\nThere is no arbitrary object-bucket tool. If asked to discover every stored\nobject, explain that project/batch reads are the supported tenant-safe\nworkflow.\n\n## Start with identifiers\n\nDo not guess ids.\n\n- Use `list_projects` before project-specific work. It returns project ids and\n  names.\n- Use `list_templates` before `get_template` or `update_template`.\n- Use `list_batches` before `get_batch` or `delete_batch`.\n- `add_template` requires the exact project id returned by\n  `list_projects`; a project name is deliberately refused.\n\nAll identifiers are at most 200 characters and names at most 120. Lists return\n25 rows by default, never more than 100, and provide an opaque cursor. Pass the\ncursor unchanged. Do not decode, construct or modify it.\n\n## Available tools\n\nReading:\n\n| Tool                         | Use it when someone asks…                                                         |\n| ---------------------------- | --------------------------------------------------------------------------------- |\n| `list_projects`              | which projects they have; also resolves the project id other tools need           |\n| `get_project`                | about one project by exact id or name                                             |\n| `show_project_overview`      | for a quick card of one project and at most eight of its newest processed batches |\n| `list_batches`               | which batches exist, optionally in one project (storage order, not newest first)  |\n| `get_batch`                  | for one processed image's resized or converted versions (at most 20 variants)     |\n| `list_templates`             | which resize and format presets exist, optionally in one project                  |\n| `get_template`               | about one preset by exact id or name                                              |\n| `list_webhook_subscriptions` | whether webhooks are working, failing or disabled                                 |\n| `list_team_members`          | who is on the team and their roles                                                |\n\nWriting:\n\n| Tool              | Use it when the user wants…                                      |\n| ----------------- | ---------------------------------------------------------------- |\n| `add_project`     | a new named project                                              |\n| `add_template`    | a new resize and format preset in an exact project               |\n| `update_template` | to rename a preset or replace its formats or widths              |\n| `delete_batch`    | one exact batch and every file it produced deleted, with no undo |\n\n## Presets\n\nA preset holds future output formats and pixel widths. Supported format values\nare exactly:\n\n`jpg` · `png` · `webp` · `gif` · `svg`\n\nA preset has one to five formats and one to ten width strings. Each width is\nfrom 1 to 9999 pixels. `add_template` defaults to formats `jpg, webp` and\nwidths `512, 256, 128, 64` only when the user accepts those defaults.\n\nBefore `add_template`, show the exact project, name, formats and widths.\nCreation is not idempotent: repeating it can create a duplicate.\n\nBefore `update_template`, call `get_template`, show the current and replacement\nvalues, and confirm the change. Identical replacements are idempotent. A\ntemplate cannot be moved to another project.\n\n## Batch inspection and deletion\n\n`get_batch` can show a batch-detail card in MCP App hosts. It returns no more\nthan 20 variants and only first-party `www.imagelato.com/images/` URLs without\nquery strings. Do not treat the displayed count as every object ever stored.\n\n`list_batches` returns batches in storage order, not newest first. For the\nmost recent processing activity, use `show_project_overview`, which shows the\neight most recently created batches of one project.\n\n`delete_batch` permanently removes the database row, original, primary output\nand resized/reformatted files, then fires a `batch.deleted` webhook. Always:\n\n1. call `get_batch` on the exact candidate;\n2. describe what will be removed;\n3. ask for confirmation for that exact batch id; and\n4. invoke one deletion only.\n\nDeletion is idempotent when the record is already absent, but it is not\nrecoverable. Never turn a broad request into a loop. Ask the user to choose one\nrecord or use `list_batches` to narrow the set.\n\n## Privacy-aware audits\n\n`list_webhook_subscriptions` intentionally exposes only HTTPS origins, not\nfull paths, queries or signing secrets. `list_team_members` exposes only\ndisplay names and roles, not emails, phones or user ids. If asked for excluded\nfields, explain the boundary and offer the safe summary; do not try another\ntool to reconstruct them.\n\nFor a routine delivery audit:\n\n1. `list_projects` to resolve the project;\n2. `show_project_overview` for recent processing activity;\n3. `list_templates` to check configured formats and widths;\n4. `list_webhook_subscriptions` to find inactive or repeatedly failing\n   endpoints; and\n5. `get_batch` only for a specifically relevant processed item.\n\nWhen an interactive card renders, avoid repeating every field. Explain the\nimportant gap, anomaly or next action.\n\n## Project sidebar\n\nUse `open_imagelato` when asked to open Imagelato or browse projects. The sidebar lists up to 100 owned projects and supports recent batches, bounded first-party variants and paginated resize presets. Selecting a project, batch or preset supplies context to the assistant. The sidebar itself is read-only; any separate mutation still requires the exact confirmation described above.\n",
+      "tools": [
+        {
+          "name": "add_project",
+          "title": "Create an image project",
+          "description": "Use this when the user wants to create one Imagelato image project to group processed batches and resize presets. Returns the new project's id, name and creation time and fires the project.created webhook. Each call creates another project. Not for adding a resize preset.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "name": {
+                "description": "Project name, from 1 to 120 characters",
+                "maxLength": 120,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": ["name"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "project": {
+                "additionalProperties": false,
+                "properties": {
+                  "created": {
+                    "anyOf": [
+                      {
+                        "maxLength": 100,
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "id": {
+                    "anyOf": [
+                      {
+                        "maxLength": 200,
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "name": {
+                    "anyOf": [
+                      {
+                        "maxLength": 120,
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": ["created", "id", "name"],
+                "type": "object"
+              },
+              "status": {
+                "const": "created",
+                "type": "string"
+              }
+            },
+            "required": ["project", "status"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": true,
+            "idempotentHint": false,
+            "openWorldHint": true,
+            "readOnlyHint": false,
+            "title": "Create an image project"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "meta": {
+            "securitySchemes": [
+              {
+                "scopes": ["imagelato:write"],
+                "type": "oauth2"
+              }
+            ]
+          },
+          "digest": "sha256:719cb35432e3e9443c0ba2260379c0aa981426e4faf09f55637ff59351dc99f4"
+        },
+        {
+          "name": "add_template",
+          "title": "Create a resize preset",
+          "description": "Use this when the user wants to create one Imagelato preset that specifies widths and formats for future image processing. Returns the new template; formats default to jpg and webp and widths to 512, 256, 128 and 64 pixels. Each call creates another preset and emits template.created to configured webhooks; it does not process an image. Not for editing a preset.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "formats": {
+                "description": "Output formats, one to five of jpg, png, webp, gif or svg; defaults to jpg and webp",
+                "items": {
+                  "enum": ["jpg", "png", "webp", "gif", "svg"],
+                  "type": "string"
+                },
+                "maxItems": 5,
+                "minItems": 1,
+                "type": "array"
+              },
+              "name": {
+                "description": "Template name, from 1 to 120 characters",
+                "maxLength": 120,
+                "minLength": 1,
+                "type": "string"
+              },
+              "projectId": {
+                "description": "Exact project id",
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              },
+              "sizes": {
+                "description": "Output widths in pixels, one to ten strings from 1 to 9999; defaults to 512, 256, 128 and 64",
+                "items": {
+                  "description": "Positive pixel width from 1 to 9999, written as a string",
+                  "pattern": "^[1-9]\\d{0,3}$",
+                  "type": "string"
+                },
+                "maxItems": 10,
+                "minItems": 1,
+                "type": "array"
+              }
+            },
+            "required": ["name", "projectId"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "status": {
+                "enum": ["created", "project-not-found", "project-id-mismatch"],
+                "type": "string"
+              },
+              "template": {
+                "anyOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "created": {
+                        "anyOf": [
+                          {
+                            "maxLength": 100,
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "edited": {
+                        "$ref": "#/properties/template/anyOf/0/properties/created"
+                      },
+                      "formats": {
+                        "items": {
+                          "maxLength": 20,
+                          "type": "string"
+                        },
+                        "maxItems": 5,
+                        "type": "array"
+                      },
+                      "id": {
+                        "anyOf": [
+                          {
+                            "maxLength": 200,
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "name": {
+                        "anyOf": [
+                          {
+                            "maxLength": 120,
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "projectId": {
+                        "$ref": "#/properties/template/anyOf/0/properties/id"
+                      },
+                      "sizes": {
+                        "items": {
+                          "maxLength": 20,
+                          "type": "string"
+                        },
+                        "maxItems": 10,
+                        "type": "array"
+                      }
+                    },
+                    "required": ["created", "edited", "formats", "id", "name", "projectId", "sizes"],
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": ["status", "template"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": true,
+            "idempotentHint": false,
+            "openWorldHint": true,
+            "readOnlyHint": false,
+            "title": "Create a resize preset"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "meta": {
+            "securitySchemes": [
+              {
+                "scopes": ["imagelato:write"],
+                "type": "oauth2"
+              }
+            ]
+          },
+          "digest": "sha256:32b370f2c6e06a4671d7f96bdc390c9903a894bb4b01b092e2db313b93ffc227"
+        },
+        {
+          "name": "delete_batch",
+          "title": "Delete a processed image batch",
+          "description": "Use this when the user wants to permanently delete one Imagelato processed-image batch and its associated files. Returns the deleted batch's id, slug and project. Its original, main output and every resized or converted file are erased and the batch.deleted webhook fires, with no undo. Not for removing a resize preset.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "batchId": {
+                "description": "Exact batch id to permanently delete; obtain it",
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": ["batchId"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "batch": {
+                "anyOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "id": {
+                        "anyOf": [
+                          {
+                            "maxLength": 200,
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "projectId": {
+                        "$ref": "#/properties/batch/anyOf/0/properties/id"
+                      },
+                      "slug": {
+                        "$ref": "#/properties/batch/anyOf/0/properties/id"
+                      }
+                    },
+                    "required": ["id", "projectId", "slug"],
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "status": {
+                "enum": ["deleted", "not-found"],
+                "type": "string"
+              }
+            },
+            "required": ["batch", "status"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": true,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": false,
+            "title": "Delete a processed image batch"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "meta": {
+            "securitySchemes": [
+              {
+                "scopes": ["imagelato:write"],
+                "type": "oauth2"
+              }
+            ]
+          },
+          "digest": "sha256:ef69062a17823b513f3c675fed4456f07aae5ac9d7498e996762180dc44ef213"
+        },
+        {
+          "name": "get_batch",
+          "title": "Get a processed image and its variants",
+          "description": "Use this when the user wants to read the output metadata and first-party file links for one existing Imagelato processed-image batch. Returns the batch's project, template, main URL, formats and sizes plus up to 20 variants with format, size and first-party URL. Not for resizing or converting a new image.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "batchId": {
+                "description": "Exact batch id",
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": ["batchId"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "batch": {
+                "anyOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "created": {
+                        "anyOf": [
+                          {
+                            "maxLength": 100,
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "edited": {
+                        "$ref": "#/properties/batch/anyOf/0/properties/created"
+                      },
+                      "format": {
+                        "anyOf": [
+                          {
+                            "maxLength": 20,
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "formats": {
+                        "items": {
+                          "maxLength": 20,
+                          "type": "string"
+                        },
+                        "maxItems": 10,
+                        "type": "array"
+                      },
+                      "id": {
+                        "maxLength": 200,
+                        "type": "string"
+                      },
+                      "projectId": {
+                        "$ref": "#/properties/batch/anyOf/0/properties/slug"
+                      },
+                      "size": {
+                        "$ref": "#/properties/batch/anyOf/0/properties/format"
+                      },
+                      "sizes": {
+                        "items": {
+                          "maxLength": 20,
+                          "type": "string"
+                        },
+                        "maxItems": 10,
+                        "type": "array"
+                      },
+                      "slug": {
+                        "anyOf": [
+                          {
+                            "maxLength": 200,
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "templateId": {
+                        "$ref": "#/properties/batch/anyOf/0/properties/slug"
+                      },
+                      "url": {
+                        "anyOf": [
+                          {
+                            "maxLength": 2048,
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "variants": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "format": {
+                              "$ref": "#/properties/batch/anyOf/0/properties/format"
+                            },
+                            "size": {
+                              "$ref": "#/properties/batch/anyOf/0/properties/format"
+                            },
+                            "url": {
+                              "$ref": "#/properties/batch/anyOf/0/properties/url"
+                            }
+                          },
+                          "required": ["format", "size", "url"],
+                          "type": "object"
+                        },
+                        "maxItems": 20,
+                        "type": "array"
+                      }
+                    },
+                    "required": ["created", "edited", "format", "formats", "id", "projectId", "size", "sizes", "slug", "templateId", "url", "variants"],
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Allowlisted batch metadata; asset URLs are kept only on https://www.imagelato.com/images/. Null when not found."
+              },
+              "status": {
+                "enum": ["found", "not-found"],
+                "type": "string"
+              }
+            },
+            "required": ["batch", "status"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Get a processed image and its variants"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "openai/outputTemplate": "ui://imagelato/batch-detail-v1.html",
+            "openai/toolInvocation/invoked": "Imagelato image batch ready.",
+            "openai/toolInvocation/invoking": "Loading Imagelato image batch…",
+            "securitySchemes": [
+              {
+                "scopes": ["imagelato:read"],
+                "type": "oauth2"
+              }
+            ],
+            "ui": {
+              "resourceUri": "ui://imagelato/batch-detail-v1.html"
+            },
+            "ui/resourceUri": "ui://imagelato/batch-detail-v1.html"
+          },
+          "digest": "sha256:1e150516bf02f7e8f98d2bdac902d054b3b0d282ec524492b7392dc38676e064"
+        },
+        {
+          "name": "get_project",
+          "title": "Get image project details",
+          "description": "Use this when the user wants to read metadata for one Imagelato image project selected by its exact name or identifier. Returns its id, name, logo URL and created and edited times, or not-found. Not for a quick look at its latest processed images.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "projectIdOrName": {
+                "description": "Exact project id or name",
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": ["projectIdOrName"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "project": {
+                "anyOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "created": {
+                        "anyOf": [
+                          {
+                            "maxLength": 100,
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "edited": {
+                        "$ref": "#/properties/project/anyOf/0/properties/created"
+                      },
+                      "id": {
+                        "maxLength": 200,
+                        "type": "string"
+                      },
+                      "logo": {
+                        "anyOf": [
+                          {
+                            "maxLength": 2048,
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "name": {
+                        "anyOf": [
+                          {
+                            "maxLength": 120,
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      }
+                    },
+                    "required": ["created", "edited", "id", "logo", "name"],
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "status": {
+                "enum": ["found", "not-found"],
+                "type": "string"
+              }
+            },
+            "required": ["project", "status"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Get image project details"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "securitySchemes": [
+              {
+                "scopes": ["imagelato:read"],
+                "type": "oauth2"
+              }
+            ]
+          },
+          "digest": "sha256:be46deeb024f1732e05295c7b9bd5b044b55d3e26b6bea1af6c541b37cd1cdef"
+        },
+        {
+          "name": "get_template",
+          "title": "Get a resize preset",
+          "description": "Use this when the user wants to read one Imagelato resize preset selected by its exact name or identifier. Returns its project, output formats, pixel widths and created and edited times, or not-found. Not for changing it.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "templateIdOrName": {
+                "description": "Exact template id or name",
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": ["templateIdOrName"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "status": {
+                "enum": ["found", "not-found"],
+                "type": "string"
+              },
+              "template": {
+                "anyOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "created": {
+                        "anyOf": [
+                          {
+                            "maxLength": 100,
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "edited": {
+                        "$ref": "#/properties/template/anyOf/0/properties/created"
+                      },
+                      "formats": {
+                        "items": {
+                          "maxLength": 20,
+                          "type": "string"
+                        },
+                        "maxItems": 5,
+                        "type": "array"
+                      },
+                      "id": {
+                        "anyOf": [
+                          {
+                            "maxLength": 200,
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "name": {
+                        "anyOf": [
+                          {
+                            "maxLength": 120,
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "projectId": {
+                        "$ref": "#/properties/template/anyOf/0/properties/id"
+                      },
+                      "sizes": {
+                        "items": {
+                          "maxLength": 20,
+                          "type": "string"
+                        },
+                        "maxItems": 10,
+                        "type": "array"
+                      }
+                    },
+                    "required": ["created", "edited", "formats", "id", "name", "projectId", "sizes"],
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": ["status", "template"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Get a resize preset"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "securitySchemes": [
+              {
+                "scopes": ["imagelato:read"],
+                "type": "oauth2"
+              }
+            ]
+          },
+          "digest": "sha256:3d13e1961f026c110dc72fb376f6ed1db0573163e2fb1b1f3be394fc8ade070e"
+        },
+        {
+          "name": "list_batches",
+          "title": "List processed image batches",
+          "description": "Use this when the user wants to list existing processed-image batch metadata in Imagelato, optionally scoped to a project. Returns each batch's id, slug, output format and template id, 25 per page by default. Not for one batch's variant files and links.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "cursor": {
+                "description": "The nextCursor of the previous page with the same filters; absent for the first page",
+                "maxLength": 1024,
+                "pattern": "^[A-Za-z0-9_-]+$",
+                "type": "string"
+              },
+              "limit": {
+                "description": "Results per page, from 1 to 100; defaults to 25",
+                "maximum": 100,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "projectId": {
+                "description": "Only batches in this project; every project when absent",
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "hasMore": {
+                "type": "boolean"
+              },
+              "items": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "format": {
+                      "anyOf": [
+                        {
+                          "maxLength": 20,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "id": {
+                      "anyOf": [
+                        {
+                          "maxLength": 200,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "slug": {
+                      "$ref": "#/properties/items/items/properties/id"
+                    },
+                    "templateId": {
+                      "$ref": "#/properties/items/items/properties/id"
+                    }
+                  },
+                  "required": ["format", "id", "slug", "templateId"],
+                  "type": "object"
+                },
+                "maxItems": 100,
+                "type": "array"
+              },
+              "nextCursor": {
+                "anyOf": [
+                  {
+                    "maxLength": 1024,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Cursor for the next page; null on the last page"
+              },
+              "total": {
+                "description": "Matching records across all pages",
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": ["hasMore", "items", "nextCursor", "total"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "List processed image batches"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "securitySchemes": [
+              {
+                "scopes": ["imagelato:read"],
+                "type": "oauth2"
+              }
+            ]
+          },
+          "digest": "sha256:ba64c268caed1562ffeeabe5bd86197bb0a07202586f6a29dab735087ad165a7"
+        },
+        {
+          "name": "list_projects",
+          "title": "List your image projects",
+          "description": "Use this when the user wants to list image projects accessible to the connected Imagelato account and retrieve identifiers for subsequent project operations. Returns each project's id and name, 25 per page by default. Not for a project's processed images.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "cursor": {
+                "description": "The nextCursor of the previous page with the same filters; absent for the first page",
+                "maxLength": 1024,
+                "pattern": "^[A-Za-z0-9_-]+$",
+                "type": "string"
+              },
+              "limit": {
+                "description": "Results per page, from 1 to 100; defaults to 25",
+                "maximum": 100,
+                "minimum": 1,
+                "type": "integer"
+              }
+            },
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "hasMore": {
+                "type": "boolean"
+              },
+              "items": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "id": {
+                      "anyOf": [
+                        {
+                          "maxLength": 200,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "name": {
+                      "anyOf": [
+                        {
+                          "maxLength": 120,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": ["id", "name"],
+                  "type": "object"
+                },
+                "maxItems": 100,
+                "type": "array"
+              },
+              "nextCursor": {
+                "anyOf": [
+                  {
+                    "maxLength": 1024,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Cursor for the next page; null on the last page"
+              },
+              "total": {
+                "description": "Matching records across all pages",
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": ["hasMore", "items", "nextCursor", "total"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "List your image projects"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "securitySchemes": [
+              {
+                "scopes": ["imagelato:read"],
+                "type": "oauth2"
+              }
+            ]
+          },
+          "digest": "sha256:4f64a3f81a4987c47ee24576c814186b9815e313b139a1dad6bf07c7dbadf4ad"
+        },
+        {
+          "name": "list_team_members",
+          "title": "List team members and roles",
+          "description": "Use this when the user wants to list the display names and assigned roles of members in the connected Imagelato organization. Returns each member's display name and roles, 25 per page by default (no emails, phone numbers or user ids). Not for inviting or removing members.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "cursor": {
+                "description": "The nextCursor of the previous page with the same filters; absent for the first page",
+                "maxLength": 1024,
+                "pattern": "^[A-Za-z0-9_-]+$",
+                "type": "string"
+              },
+              "limit": {
+                "description": "Results per page, from 1 to 100; defaults to 25",
+                "maximum": 100,
+                "minimum": 1,
+                "type": "integer"
+              }
+            },
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "hasMore": {
+                "type": "boolean"
+              },
+              "items": {
+                "items": {
+                  "additionalProperties": false,
+                  "description": "Display name and roles only. Email addresses, user ids, phone numbers, location, avatars, device provenance and ownership fields are excluded.",
+                  "properties": {
+                    "fullName": {
+                      "maxLength": 160,
+                      "type": "string"
+                    },
+                    "roles": {
+                      "items": {
+                        "maxLength": 60,
+                        "type": "string"
+                      },
+                      "maxItems": 10,
+                      "type": "array"
+                    }
+                  },
+                  "required": ["fullName", "roles"],
+                  "type": "object"
+                },
+                "maxItems": 100,
+                "type": "array"
+              },
+              "nextCursor": {
+                "anyOf": [
+                  {
+                    "maxLength": 1024,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Cursor for the next page; null on the last page"
+              },
+              "total": {
+                "description": "Matching records across all pages",
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": ["hasMore", "items", "nextCursor", "total"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "List team members and roles"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "securitySchemes": [
+              {
+                "scopes": ["imagelato:read"],
+                "type": "oauth2"
+              }
+            ]
+          },
+          "digest": "sha256:b84711b2a266a897e258d0caed6d1b7bb02bc41cbcd529ccff073df218d9824d"
+        },
+        {
+          "name": "list_templates",
+          "title": "List resize presets",
+          "description": "Use this when the user wants to list existing Imagelato resize and format presets, optionally scoped to one project. Returns each template's id, name, project, output formats and pixel widths, 25 per page by default. Not for the images processed with them.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "cursor": {
+                "description": "The nextCursor of the previous page with the same filters; absent for the first page",
+                "maxLength": 1024,
+                "pattern": "^[A-Za-z0-9_-]+$",
+                "type": "string"
+              },
+              "limit": {
+                "description": "Results per page, from 1 to 100; defaults to 25",
+                "maximum": 100,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "projectId": {
+                "description": "Only presets in this project; every project when absent",
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "hasMore": {
+                "type": "boolean"
+              },
+              "items": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "formats": {
+                      "items": {
+                        "maxLength": 20,
+                        "type": "string"
+                      },
+                      "maxItems": 5,
+                      "type": "array"
+                    },
+                    "id": {
+                      "anyOf": [
+                        {
+                          "maxLength": 200,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "name": {
+                      "anyOf": [
+                        {
+                          "maxLength": 120,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "projectId": {
+                      "$ref": "#/properties/items/items/properties/id"
+                    },
+                    "sizes": {
+                      "items": {
+                        "maxLength": 20,
+                        "type": "string"
+                      },
+                      "maxItems": 10,
+                      "type": "array"
+                    }
+                  },
+                  "required": ["formats", "id", "name", "projectId", "sizes"],
+                  "type": "object"
+                },
+                "maxItems": 100,
+                "type": "array"
+              },
+              "nextCursor": {
+                "anyOf": [
+                  {
+                    "maxLength": 1024,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Cursor for the next page; null on the last page"
+              },
+              "total": {
+                "description": "Matching records across all pages",
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": ["hasMore", "items", "nextCursor", "total"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "List resize presets"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "securitySchemes": [
+              {
+                "scopes": ["imagelato:read"],
+                "type": "oauth2"
+              }
+            ]
+          },
+          "digest": "sha256:daf780e547095cdf460e23c1279ad89c474867b47799d60c8ab9dc9c0ae80781"
+        },
+        {
+          "name": "list_webhook_subscriptions",
+          "title": "Check webhook delivery health",
+          "description": "Use this when the user wants to read Imagelato webhook subscription configuration and consecutive delivery-failure counts. Returns each endpoint's origin, subscribed events, active flag and consecutive failures, 25 per page by default; an endpoint is disabled after 20 failures in a row. Not for adding or editing a webhook.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "cursor": {
+                "description": "The nextCursor of the previous page with the same filters; absent for the first page",
+                "maxLength": 1024,
+                "pattern": "^[A-Za-z0-9_-]+$",
+                "type": "string"
+              },
+              "limit": {
+                "description": "Results per page, from 1 to 100; defaults to 25",
+                "maximum": 100,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "projectId": {
+                "description": "Only webhooks of this project; every project when absent",
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "hasMore": {
+                "type": "boolean"
+              },
+              "items": {
+                "items": {
+                  "additionalProperties": false,
+                  "description": "Delivery health for one endpoint origin; an endpoint is disabled after 20 consecutive failures. Full endpoint URLs, signing secrets and ownership fields are excluded.",
+                  "properties": {
+                    "active": {
+                      "type": "boolean"
+                    },
+                    "allEvents": {
+                      "type": "boolean"
+                    },
+                    "consecutiveFailures": {
+                      "maximum": 999999,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "edited": {
+                      "anyOf": [
+                        {
+                          "maxLength": 100,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "events": {
+                      "items": {
+                        "maxLength": 80,
+                        "type": "string"
+                      },
+                      "maxItems": 10,
+                      "type": "array"
+                    },
+                    "origin": {
+                      "maxLength": 300,
+                      "type": "string"
+                    }
+                  },
+                  "required": ["active", "allEvents", "consecutiveFailures", "edited", "events", "origin"],
+                  "type": "object"
+                },
+                "maxItems": 100,
+                "type": "array"
+              },
+              "nextCursor": {
+                "anyOf": [
+                  {
+                    "maxLength": 1024,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Cursor for the next page; null on the last page"
+              },
+              "total": {
+                "description": "Matching records across all pages",
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": ["hasMore", "items", "nextCursor", "total"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Check webhook delivery health"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "securitySchemes": [
+              {
+                "scopes": ["imagelato:read"],
+                "type": "oauth2"
+              }
+            ]
+          },
+          "digest": "sha256:46c401f038a8f1b9a011423d631a7222eb7115b607ce197007afa8681130db75"
+        },
+        {
+          "name": "open_imagelato",
+          "title": "Imagelato Image Optimization",
+          "description": "Use this when the user wants to open the Imagelato project-selection sidebar when the user requests an interactive browser for projects, processed batches and presets. Returns up to 100 projects to start from (no ownership data or credentials). Not for uploading, processing or generating images.",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {},
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "additionalProperties": false,
+            "properties": {
+              "items": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "defaultLocale": {
+                      "anyOf": [
+                        {
+                          "maxLength": 32,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "id": {
+                      "anyOf": [
+                        {
+                          "maxLength": 200,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "locales": {
+                      "items": {
+                        "maxLength": 32,
+                        "type": "string"
+                      },
+                      "maxItems": 100,
+                      "type": "array"
+                    },
+                    "logoUrl": {
+                      "anyOf": [
+                        {
+                          "maxLength": 2048,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "name": {
+                      "maxLength": 200,
+                      "type": "string"
+                    },
+                    "subtitle": {
+                      "maxLength": 300,
+                      "type": "string"
+                    }
+                  },
+                  "required": ["defaultLocale", "id", "locales", "logoUrl", "name", "subtitle"],
+                  "type": "object"
+                },
+                "maxItems": 100,
+                "type": "array"
+              },
+              "truncated": {
+                "type": "boolean"
+              }
+            },
+            "required": ["items", "truncated"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "icons": [
+            {
+              "src": "data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20100%20100%22%3E%3Cpath%20fill%3D%22currentColor%22%20d%3D%22M53.65%2040.69V79.2c-.9.43-2.01.64-3.33.64-2.58%200-3.87-1.08-3.87-3.25v-38.6c1.02-.42%202.16-.63%203.42-.63%202.52%200%203.78%201.11%203.78%203.33Zm-8.28-16.02c0-2.7%201.56-4.5%204.68-4.5%203.06%200%204.59%201.5%204.59%204.5%200%202.7-1.53%204.5-4.59%204.5-3.12%200-4.68-1.5-4.68-4.5Z%22%2F%3E%3C%2Fsvg%3E",
+              "mimeType": "image/svg+xml"
+            }
+          ],
+          "meta": {
+            "openai/outputTemplate": "ui://imagelato/workspace-v2.html",
+            "openai/ui": {
+              "entrypoints": [
+                {
+                  "type": "global"
+                }
+              ]
+            },
+            "openai/widgetAccessible": true,
+            "securitySchemes": [
+              {
+                "scopes": ["imagelato:read"],
+                "type": "oauth2"
+              }
+            ],
+            "ui": {
+              "resourceUri": "ui://imagelato/workspace-v2.html"
+            }
+          },
+          "digest": "sha256:d622241ccbae29bb33d77c21b2d609ef148b2f9fb25b9ea9d8c1b8df52f4db53"
+        },
+        {
+          "name": "show_project_overview",
+          "title": "Show image project overview",
+          "description": "Use this when the user wants to render a read-only overview of one Imagelato project with up to eight recent processed-image batches. Returns a card with the project's name, logo and dates plus its 8 most recently processed batches with format, size and first-party links. Not for every batch in the project.",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "projectIdOrName": {
+                "description": "Exact project id or name, at most 200 characters",
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": ["projectIdOrName"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "additionalProperties": false,
+            "properties": {
+              "batchCount": {
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "batchCountIsLowerBound": {
+                "type": "boolean"
+              },
+              "batches": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "created": {
+                      "anyOf": [
+                        {
+                          "maxLength": 2048,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "format": {
+                      "anyOf": [
+                        {
+                          "maxLength": 2048,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "id": {
+                      "maxLength": 200,
+                      "type": "string"
+                    },
+                    "size": {
+                      "anyOf": [
+                        {
+                          "maxLength": 2048,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "slug": {
+                      "anyOf": [
+                        {
+                          "maxLength": 2048,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "templateId": {
+                      "anyOf": [
+                        {
+                          "maxLength": 2048,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "url": {
+                      "anyOf": [
+                        {
+                          "maxLength": 2048,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": ["created", "format", "id", "size", "slug", "templateId", "url"],
+                  "type": "object"
+                },
+                "maxItems": 8,
+                "type": "array"
+              },
+              "project": {
+                "anyOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "created": {
+                        "anyOf": [
+                          {
+                            "maxLength": 2048,
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "edited": {
+                        "anyOf": [
+                          {
+                            "maxLength": 2048,
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "id": {
+                        "maxLength": 200,
+                        "type": "string"
+                      },
+                      "logo": {
+                        "anyOf": [
+                          {
+                            "maxLength": 2048,
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "name": {
+                        "maxLength": 200,
+                        "type": "string"
+                      }
+                    },
+                    "required": ["created", "edited", "id", "logo", "name"],
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": ["batchCount", "batchCountIsLowerBound", "batches", "project"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Show image project overview"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "openai/outputTemplate": "ui://imagelato/project-overview-v1.html",
+            "openai/toolInvocation/invoked": "Imagelato project overview ready.",
+            "openai/toolInvocation/invoking": "Loading Imagelato project…",
+            "ui": {
+              "resourceUri": "ui://imagelato/project-overview-v1.html"
+            },
+            "ui/resourceUri": "ui://imagelato/project-overview-v1.html"
+          },
+          "digest": "sha256:f2225d28c6a31bf79ab731abc88c4cf48a0ab10e1590050e122e4d68f9af0344"
+        },
+        {
+          "name": "update_template",
+          "title": "Change a resize preset",
+          "description": "Use this when the user wants to update selected name, output-format or width fields on one existing Imagelato resize preset. Returns the updated template after replacing only the fields given, and fires the template.updated webhook; it cannot move the preset to another project. Not for creating a preset.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "formats": {
+                "description": "New output formats, one to five of jpg, png, webp, gif or svg; replaces the current list",
+                "items": {
+                  "enum": ["jpg", "png", "webp", "gif", "svg"],
+                  "type": "string"
+                },
+                "maxItems": 5,
+                "minItems": 1,
+                "type": "array"
+              },
+              "name": {
+                "description": "New preset name, from 1 to 120 characters",
+                "maxLength": 120,
+                "minLength": 1,
+                "type": "string"
+              },
+              "sizes": {
+                "description": "New output widths in pixels, one to ten strings from 1 to 9999; replaces the current list",
+                "items": {
+                  "description": "Positive pixel width from 1 to 9999, written as a string",
+                  "pattern": "^[1-9]\\d{0,3}$",
+                  "type": "string"
+                },
+                "maxItems": 10,
+                "minItems": 1,
+                "type": "array"
+              },
+              "templateIdOrName": {
+                "description": "Exact template id or name",
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": ["templateIdOrName"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "status": {
+                "enum": ["updated", "not-found"],
+                "type": "string"
+              },
+              "template": {
+                "anyOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "created": {
+                        "anyOf": [
+                          {
+                            "maxLength": 100,
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "edited": {
+                        "$ref": "#/properties/template/anyOf/0/properties/created"
+                      },
+                      "formats": {
+                        "items": {
+                          "maxLength": 20,
+                          "type": "string"
+                        },
+                        "maxItems": 5,
+                        "type": "array"
+                      },
+                      "id": {
+                        "anyOf": [
+                          {
+                            "maxLength": 200,
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "name": {
+                        "anyOf": [
+                          {
+                            "maxLength": 120,
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "projectId": {
+                        "$ref": "#/properties/template/anyOf/0/properties/id"
+                      },
+                      "sizes": {
+                        "items": {
+                          "maxLength": 20,
+                          "type": "string"
+                        },
+                        "maxItems": 10,
+                        "type": "array"
+                      }
+                    },
+                    "required": ["created", "edited", "formats", "id", "name", "projectId", "sizes"],
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": ["status", "template"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": true,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": false,
+            "title": "Change a resize preset"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "meta": {
+            "securitySchemes": [
+              {
+                "scopes": ["imagelato:write"],
+                "type": "oauth2"
+              }
+            ]
+          },
+          "digest": "sha256:da307f6eca8dc4a2bcc3eee7cf100e387749cdc2dfa13dfc9367a3d2b3803297"
+        }
+      ],
+      "resources": [
+        {
+          "uri": "skill://imagelato/image-asset-workflow/SKILL.md",
+          "name": "image-asset-workflow",
+          "title": "image-asset-workflow skill",
+          "description": "Review and maintain an organization's image delivery workflow with Imagelato — projects, deterministic resize/reformat presets, processed batches and variants, webhook delivery health, and minimized team roles. Use when asked to audit image assets, compare resize and format presets, find the resized or converted versions of a processed image, investigate a processed batch, diagnose webhook health, create a project or preset, update a preset, or delete one explicitly identified obsolete batch.",
+          "mimeType": "text/markdown",
+          "digest": "sha256:e63628afd3e9f0e936aa9a1635772f325257403ece0bdea053006c1b66c3c319"
+        },
+        {
+          "uri": "skill://imagelato/imagelato/SKILL.md",
+          "name": "imagelato",
+          "title": "imagelato skill",
+          "description": "Query and manage Imagelato image-delivery data with the `imagelato` CLI — list an organization's image projects, inspect processed batches and their resized or reformatted variants with CDN URLs, create or update the deterministic resize/reformat templates that drive processing, and create or revoke a project's API keys. Use when asked about Imagelato projects, image batches, image variants, resize or reformat templates and presets, API keys, or anything involving the `imagelato` command or app.imagelato.com data.",
+          "mimeType": "text/markdown",
+          "digest": "sha256:eb235ac373c19972a049c3f987ecc97c6d4f01da7c96c321a6674341b94d4e73"
+        },
+        {
+          "uri": "ui://imagelato/batch-detail-v1.html",
+          "name": "imagelato-batch-detail",
+          "description": "An inline Imagelato view for a tenant-scoped processed image batch and its resized or reformatted variants.",
+          "mimeType": "text/html;profile=mcp-app",
+          "digest": "sha256:62b1d0e53adcf6e962a1b1249fd8257e7f5507bdaa485a7b438e4850a7b29c14"
+        },
+        {
+          "uri": "ui://imagelato/project-overview-v1.html",
+          "name": "imagelato-project-overview",
+          "description": "An inline Imagelato view with tenant-scoped project metadata and recent processed batches.",
+          "mimeType": "text/html;profile=mcp-app",
+          "digest": "sha256:6728001df32910ad5d546dc1c0483a1a23a13154ba229440e647c43d0f6dc700"
+        },
+        {
+          "uri": "ui://imagelato/workspace-v2.html",
+          "name": "imagelato-workspace",
+          "mimeType": "text/html;profile=mcp-app",
+          "digest": "sha256:7081793c76aa02070de39e434b54f8cc05e19948afbcf04c7fcdcb8870dba886"
+        },
+        {
+          "uri": "ui://imagelato/workspace-v1.html",
+          "name": "imagelato-workspace-v1",
+          "mimeType": "text/html;profile=mcp-app",
+          "digest": "sha256:239c73661564dc6c009a38e71909cf4179a35ecf8a5aa19b7862e65c4a55c42c"
+        }
+      ],
+      "digest": "sha256:16e9b47deb63537272841714a1dfb9b66853051d44fb0087e1fab863a11bfb12"
+    }
+  }
+}

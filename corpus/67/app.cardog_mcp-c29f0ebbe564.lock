@@ -1,0 +1,471 @@
+{
+  "lockfileVersion": 2,
+  "subjects": {
+    "app.cardog/mcp": {
+      "kind": "mcp-server",
+      "source": {
+        "client": "manual",
+        "file": "registry.modelcontextprotocol.io"
+      },
+      "transport": {
+        "type": "http",
+        "url": "https://mcp.cardog.io/mcp"
+      },
+      "protocol": {
+        "era": "legacy",
+        "version": "2025-11-25"
+      },
+      "serverInfo": {
+        "name": "Cardog Public MCP",
+        "version": "2.0.0"
+      },
+      "capabilities": {
+        "tools": {
+          "listChanged": true
+        }
+      },
+      "tools": [
+        {
+          "name": "carrier_lookup",
+          "description": "Find a motor carrier and read its record: name → US DOT number → every unit observed under it. Guide: https://cardog.app/docs/carriers.\n\nPass `q`: a carrier name or part of one (\"bison transport\"), a US DOT number (\"245330\"), or a 17-character VIN (the carriers that unit was observed under). Optional `state` and `country` (two letters) narrow a name match; `limit` caps matches (default 5, max 50).\n\nThe result lists matches, best first, each with `dotNumber`, `legalName`, `dbaName`, `domicile` (city, state, country), `operation` and declared `powerUnits`. When exactly one carrier matches, or `q` was a DOT number, the result also carries `carrier`: the full read with `declared` (what it filed about itself, dated by `filedOn`, self-reported) and `observed` (what roadside inspections and crash reports recorded: distinct units, inspections, crashes, first and last seen). Declared and observed never mix. The carrier's ref is `org:usdot/{dotNumber}`, the `{domain}:{key}` grammar every Cardog ref uses. Pass `vehicles: true` to also return the first page of units observed under that carrier, most recently seen first, each with a link to every carrier it ran under. A DOT number the road record names but the register does not still reads: `legalName` and every `declared` field null, `observed` filled.\n\nCOVERAGE: the US federal register and roadside record: US DOT-regulated carriers, including Canadian and Mexican carriers that cross the border. A fleet that only runs inside one province is absent. Fleet rows are observed associations on dated rows, not a confirmed current fleet and not ownership. COST: the tool chains the calls. The search is 1 credit. When it narrows to one carrier (a DOT number, or exactly one name match) the tool also reads the carrier, 5 more, so that call is 6; with `vehicles: true` it also fetches the first fleet page, 5 more, so up to 11. A name search with several matches is 1.\n\nErrors are instructions: every failure returns {code, message, hint, suggestions} — follow `hint` for the next call; `suggestions` lists nearest valid refs for a bad ref. Unknown-but-well-formed refs are a 400 naming the ref, NEVER a silent fuzzy match.\n\nNext: vehicle_operators({ vin }) for every carrier a unit in the fleet ran under.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "properties": {
+              "context": {
+                "description": "Explain why you are calling this tool and how it fits into the user's overall goal. This parameter is used for analytics and user intent tracking. YOU MUST provide 15-25 words (count carefully). NEVER use first person ('I', 'we', 'you') - maintain third-person perspective. NEVER include sensitive information such as credentials, passwords, or personal data. Example (20 words): \"Searching across the organization's repositories to find all open issues related to performance complaints and latency issues for team prioritization.\"",
+                "type": "string"
+              },
+              "country": {
+                "description": "US, CA or MX",
+                "maxLength": 2,
+                "minLength": 2,
+                "type": "string"
+              },
+              "limit": {
+                "description": "Match cap, default 5",
+                "maximum": 50,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "q": {
+                "description": "Carrier name, US DOT number, or 17-character VIN",
+                "type": "string"
+              },
+              "state": {
+                "description": "State or province, two letters",
+                "maxLength": 2,
+                "minLength": 2,
+                "type": "string"
+              },
+              "vehicles": {
+                "description": "Also return the first page of units under the one matched carrier",
+                "type": "boolean"
+              }
+            },
+            "required": ["context", "q"],
+            "type": "object"
+          },
+          "annotations": {
+            "readOnlyHint": true,
+            "title": "Carrier Lookup"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:69ad4ad52db71af306a58b73c74e91848582a35c55c7404535b1b7a571ec930d"
+        },
+        {
+          "name": "check_recalls",
+          "description": "Recall campaigns LISTED for a vehicle's model year in its market of sale, ref-keyed, one record per authority, never merged. Default market CA: Transport Canada safety recalls and ECCC emissions notices (each row carries `regime`; never call an emissions notice a safety recall). Pass `market` when the user's market is known (US, AU, …), `include_other: true` to see other markets' records (NHTSA for a Canadian car) uncounted, `authority` to pick authorities. This is a possible-recall list, not a VIN-level determination: campaigns match by model year, not by the campaign's VIN range, and Cardog does not see remedy status. Every result carries `applicability: \"listed_for_model_year\"`. When you tell a user about these, say they MAY apply and that the manufacturer's own VIN recall lookup (in Canada) or a dealer confirms; never say \"open\", \"outstanding\" or \"critical\", and never say \"no recalls\" as a clearance. Compliance guide: https://cardog.app/docs/compliance.\n\nPass EXACTLY ONE of:\n- `vin` (17 characters) — resolves the VIN to its model year, then lists that model year's campaigns. In the result, `resolved: false` means the VIN is not bridged into the graph yet; `resolved: true, total: 0` means none are listed for the model year (not that the vehicle is clear).\n- `ref` — an entity ref scoping campaigns: \"make:honda\", \"model:honda/cr-v\", or \"model-year:honda/cr-v/2026\". A ref is `{domain}:{key}`, lowercase, with `/` separating composite key segments: \"make:tesla\", \"model:mini/hardtop\", \"model-year:honda/cr-v/2026\", \"fuel-type:electric\". (Exception: nano/squish keys are uppercase VIN charset — machine-derived, never typed from text.) Get refs from resolve_entity or identify_vehicle — never construct them from guessed names.\n\nEach campaign carries: authority (tc, eccc, nhtsa, au, …), market and regime + campaign number, component, defect/consequence summaries, the corrective action, recall date, units affected, and `affects` — the affected model-years as refs. `asOf` (VIN checks) is when the recall data was last updated, citable.\n\nErrors are instructions: every failure returns {code, message, hint, suggestions} — follow `hint` for the next call; `suggestions` lists nearest valid refs for a bad ref. Unknown-but-well-formed refs are a 400 naming the ref, NEVER a silent fuzzy match.\n\nNext: identify_vehicle({ vin }) for the vehicle's full identity; market_quote({ ref: \"model-year:…\" }); GET /v2/recalls/{recall-ref} for one campaign; GET /v2/recalls/feed for the newest campaigns.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "properties": {
+              "authority": {
+                "description": "Authority codes to pick, e.g. [\"nhtsa\"]. Without `market`, picks across every market.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "context": {
+                "description": "Explain why you are calling this tool and how it fits into the user's overall goal. This parameter is used for analytics and user intent tracking. YOU MUST provide 15-25 words (count carefully). NEVER use first person ('I', 'we', 'you') - maintain third-person perspective. NEVER include sensitive information such as credentials, passwords, or personal data. Example (20 words): \"Searching across the organization's repositories to find all open issues related to performance complaints and latency issues for team prioritization.\"",
+                "type": "string"
+              },
+              "include_other": {
+                "description": "Also return `otherRecalls`: the records of other markets (e.g. NHTSA for a Canadian car), never counted.",
+                "type": "boolean"
+              },
+              "limit": {
+                "description": "Max campaigns for a ref-scoped query (default 25, max 100)",
+                "maximum": 100,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "market": {
+                "description": "Where the vehicle was sold. Default CA (Transport Canada recalls and ECCC emissions notices). Pass the user's market when known; never guess it from the VIN.",
+                "enum": ["CA", "US", "AU", "GB", "JP", "KR", "CN", "IL", "all"],
+                "type": "string"
+              },
+              "ref": {
+                "description": "Entity ref scope: \"make:honda\", \"model:honda/cr-v\", or \"model-year:honda/cr-v/2026\". Exclusive with `vin`.",
+                "type": "string"
+              },
+              "regime": {
+                "description": "`safety` recalls, `emissions` notices, or `all` (default).",
+                "enum": ["safety", "emissions", "all"],
+                "type": "string"
+              },
+              "vin": {
+                "description": "17-character VIN — resolved to its model year; campaigns listed for that model year are returned. Exclusive with `ref`.",
+                "type": "string"
+              }
+            },
+            "required": ["context"],
+            "type": "object"
+          },
+          "annotations": {
+            "readOnlyHint": true,
+            "title": "Check Recalls"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:2fca9ed65ebaaa12e27fb4405cc545eb43a89dc589d0c84993e1250140ab2170"
+        },
+        {
+          "name": "identify_vehicle",
+          "description": "Decode a 17-character VIN into its full Cardog identity: canonical entity refs, the market grains (nano/squish), spec highlights, and links to adjacent resources.\n\nVIN ONLY — this tool never fuzzy-matches. If you hold free text (\"2021 Civic\", a make or model name), do NOT call this: call resolve_entity — free text enters the platform in exactly one tool. A non-VIN input returns a redirect hint, not a decode.\n\nA ref is `{domain}:{key}`, lowercase, with `/` separating composite key segments: \"make:tesla\", \"model:mini/hardtop\", \"model-year:honda/cr-v/2026\", \"fuel-type:electric\". (Exception: nano/squish keys are uppercase VIN charset — machine-derived, never typed from text.)\n\nThe result's `refs` block (make/model/modelYear/fuelType/…) contains the join keys for every other tool; a null ref means \"not derivable for this VIN\", never \"unknown ref\". `squish` (WMI+VDS+year) is always derivable and is a valid market_quote instrument; `nano` is the fungible build grain for dedup/comparables. `specHighlights` is a best-effort skim of the spec sheet (horsepower, economy, range, seating…), each value with its unit; a highlight the trims of the model year do not share is absent. The full sheet lives at GET /v2/specs/{refs.modelYear}.\n\nErrors are instructions: every failure returns {code, message, hint, suggestions} — follow `hint` for the next call; `suggestions` lists nearest valid refs for a bad ref. Unknown-but-well-formed refs are a 400 naming the ref, NEVER a silent fuzzy match.\n\nNext: check_recalls({ vin }) — recalls listed for the model year; market_quote({ ref: refs.modelYear ?? squish }); search_inventory({ models: [refs.model] }).",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "properties": {
+              "context": {
+                "description": "Explain why you are calling this tool and how it fits into the user's overall goal. This parameter is used for analytics and user intent tracking. YOU MUST provide 15-25 words (count carefully). NEVER use first person ('I', 'we', 'you') - maintain third-person perspective. NEVER include sensitive information such as credentials, passwords, or personal data. Example (20 words): \"Searching across the organization's repositories to find all open issues related to performance complaints and latency issues for team prioritization.\"",
+                "type": "string"
+              },
+              "vin": {
+                "description": "The 17-character VIN. Free text is NOT accepted here — use resolve_entity for text.",
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": ["context", "vin"],
+            "type": "object"
+          },
+          "annotations": {
+            "readOnlyHint": true,
+            "title": "Identify Vehicle (VIN Decode)"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:bc53afde2e1db5ec614efb484ac8cc2ce3da8342dcaf3e16891210af309b22cb"
+        },
+        {
+          "name": "market_quote",
+          "description": "The live market card for one instrument: quote (live listing count, best/p25/median/p75 price, average days-on-market, 30-day price cuts), a daily-bar history summary, and a bounded sample of the live listings behind the numbers.\n\n`ref` must be an INSTRUMENT ref — one of two grains:\n- \"model-year:{make}/{model}/{year}\" (e.g. \"model-year:honda/cr-v/2026\") — lowercase, /-separated; get it from resolve_entity (domain \"model-year\") or identify_vehicle's refs.modelYear.\n- \"squish:{9 uppercase VIN chars}\" (e.g. \"squish:5TDGSKFCS\") — the exact-config grain; get it from identify_vehicle. (squish/nano keys are the ONLY uppercase refs; every other domain is lowercase.)\n\nNo other ref domain quotes. Errors are instructions: every failure returns {code, message, hint, suggestions} — follow `hint` for the next call; `suggestions` lists nearest valid refs for a bad ref. Unknown-but-well-formed refs are a 400 naming the ref, NEVER a silent fuzzy match.\n\nOptional `window` picks the history span: 1w, 1m, 3m, 6m, ytd, 1y, 3y, 5y, 10y, all. Next: search_inventory with the model's refs to walk the full book; check_recalls({ ref }) on a model-year ref; GET /v2/tape/history/{ref} for every daily bar.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "properties": {
+              "context": {
+                "description": "Explain why you are calling this tool and how it fits into the user's overall goal. This parameter is used for analytics and user intent tracking. YOU MUST provide 15-25 words (count carefully). NEVER use first person ('I', 'we', 'you') - maintain third-person perspective. NEVER include sensitive information such as credentials, passwords, or personal data. Example (20 words): \"Searching across the organization's repositories to find all open issues related to performance complaints and latency issues for team prioritization.\"",
+                "type": "string"
+              },
+              "ref": {
+                "description": "Instrument ref: \"model-year:honda/cr-v/2026\" or \"squish:5TDGSKFCS\". Free text never quotes — resolve_entity first.",
+                "minLength": 1,
+                "type": "string"
+              },
+              "window": {
+                "description": "History window (server default when omitted)",
+                "enum": ["1w", "1m", "3m", "6m", "ytd", "1y", "3y", "5y", "10y", "all"],
+                "type": "string"
+              }
+            },
+            "required": ["context", "ref"],
+            "type": "object"
+          },
+          "annotations": {
+            "readOnlyHint": true,
+            "title": "Market Quote"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:a249636ede52aab9826db00fca05f6d577de6c9f1f3eff409533b5d81e2da6c8"
+        },
+        {
+          "name": "resolve_entity",
+          "description": "Turn free text into canonical Cardog entity refs — THE text entry point for every other tool.\n\nA ref is `{domain}:{key}`, lowercase, with `/` separating composite key segments: \"make:tesla\", \"model:mini/hardtop\", \"model-year:honda/cr-v/2026\", \"fuel-type:electric\". (Exception: nano/squish keys are uppercase VIN charset — machine-derived, never typed from text.)\n\nEvery other tool takes refs, never names. Call this FIRST whenever you hold text — \"Civic\", \"2024 Model Y\", a misspelling like \"teslla\" — then reuse the refs for the rest of the session. Returns candidates with confidence, best-first. `best` is the top candidate ONLY when it clears the confidence floor; otherwise it is null and YOU choose from `candidates` (or ask the user) — the API never guesses. Pass `domain` to constrain the search (use domain \"model-year\" when you need a market_quote instrument).\n\nErrors are instructions: every failure returns {code, message, hint, suggestions} — follow `hint` for the next call; `suggestions` lists nearest valid refs for a bad ref. Unknown-but-well-formed refs are a 400 naming the ref, NEVER a silent fuzzy match.\n\nNext steps (also echoed in each result's `next` block): search_inventory with make/model refs; market_quote with a model-year: ref; check_recalls with any make/model/model-year ref; dereference a ref (parents, children, counts) at GET /v2/entities/{ref}.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "properties": {
+              "context": {
+                "description": "Explain why you are calling this tool and how it fits into the user's overall goal. This parameter is used for analytics and user intent tracking. YOU MUST provide 15-25 words (count carefully). NEVER use first person ('I', 'we', 'you') - maintain third-person perspective. NEVER include sensitive information such as credentials, passwords, or personal data. Example (20 words): \"Searching across the organization's repositories to find all open issues related to performance complaints and latency issues for team prioritization.\"",
+                "type": "string"
+              },
+              "domain": {
+                "description": "Constrain candidates to one domain: \"make\", \"model\", \"model-year\", \"body-style\", \"fuel-type\", \"drive-type\", \"transmission\", \"electrification-level\", \"vehicle-type\". Omit to search across domains.",
+                "type": "string"
+              },
+              "limit": {
+                "description": "Max candidates (default 5)",
+                "maximum": 10,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "query": {
+                "description": "Free text to resolve, e.g. \"2021 Civic\", \"teslla\", \"plug-in hybrid\"",
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": ["context", "query"],
+            "type": "object"
+          },
+          "annotations": {
+            "readOnlyHint": true,
+            "title": "Resolve Entity"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:15a01155fb85da7cf5fc5d2435e78418b2e320a6c8f9c63257910f4cdd98ab0d"
+        },
+        {
+          "name": "search_inventory",
+          "description": "Search live vehicle listings — ref-native. One call returns listings + facets + the total count. The market defaults to Canada, which is the only inventory market today: prices are in each listing's own currency (CAD for Canadian listings) and odometers in km.\n\nFilters take entity REFS from resolve_entity / identify_vehicle, never free-text names: makes: [\"make:mini\"], models: [\"model:mini/hardtop\"], fuelTypes: [\"fuel-type:electric\"] — plus year/price/odometer ranges and canonical spec filters, e.g. spec: {\"fuelEconomyCombined\": {\"min\": 35}, \"heatedSeatsFront\": [\"standard\"]} (numeric attrs take {min,max}; equipment attrs take [\"standard\"|\"optional\"|\"unavailable\"]).\n\nA ref is `{domain}:{key}`, lowercase, with `/` separating composite key segments: \"make:tesla\", \"model:mini/hardtop\", \"model-year:honda/cr-v/2026\", \"fuel-type:electric\". (Exception: nano/squish keys are uppercase VIN charset — machine-derived, never typed from text.)\n\nErrors are instructions: every failure returns {code, message, hint, suggestions} — follow `hint` for the next call; `suggestions` lists nearest valid refs for a bad ref. Unknown-but-well-formed refs are a 400 naming the ref, NEVER a silent fuzzy match. A typo'd or unknown ref 400s with code \"unknown_entity_refs\" naming it, with nearest-ref suggestions — correct the ref (usually via resolve_entity) and retry.\n\nFacets in the result are (ref, name, count) buckets over the MATCHING set — they double as the valid filter vocabulary for your next, narrower call. Every listing row carries its refs (makeRef/modelRef/nano). Next: market_quote({ ref: \"model-year:…\" }) for pricing context; check_recalls({ vin }) per listing; GET /v2/listings/vin/{vin} for the full canonical spec.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "properties": {
+              "bodyStyles": {
+                "description": "Entity refs in the \"body-style\" domain, e.g. [\"body-style:sport-utility-vehicle-suv\"]",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "context": {
+                "description": "Explain why you are calling this tool and how it fits into the user's overall goal. This parameter is used for analytics and user intent tracking. YOU MUST provide 15-25 words (count carefully). NEVER use first person ('I', 'we', 'you') - maintain third-person perspective. NEVER include sensitive information such as credentials, passwords, or personal data. Example (20 words): \"Searching across the organization's repositories to find all open issues related to performance complaints and latency issues for team prioritization.\"",
+                "type": "string"
+              },
+              "driveTypes": {
+                "description": "Entity refs in the \"drive-type\" domain, e.g. [\"drive-type:awd-all-wheel-drive\"]",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "electrificationLevels": {
+                "description": "Entity refs in the \"electrification-level\" domain, e.g. [\"electrification-level:bev-battery-electric-vehicle\"]",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "fuelTypes": {
+                "description": "Entity refs in the \"fuel-type\" domain, e.g. [\"fuel-type:electric\"]",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "limit": {
+                "description": "Rows per page (default 10, max 50)",
+                "maximum": 50,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "makes": {
+                "description": "Entity refs in the \"make\" domain, e.g. [\"make:mini\"]",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "models": {
+                "description": "Entity refs in the \"model\" domain, e.g. [\"model:mini/hardtop\"]",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "nanos": {
+                "description": "Entity refs in the \"nano\" domain, e.g. [\"nano:5TDGSKFCRS\"]",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "odometer": {
+                "additionalProperties": false,
+                "description": "Odometer, in km range",
+                "properties": {
+                  "max": {
+                    "type": "number"
+                  },
+                  "min": {
+                    "type": "number"
+                  }
+                },
+                "type": "object"
+              },
+              "page": {
+                "description": "Page number (default 1)",
+                "minimum": 1,
+                "type": "integer"
+              },
+              "price": {
+                "additionalProperties": false,
+                "description": "Price, in the listing currency (CAD in the default Canadian market) range",
+                "properties": {
+                  "max": {
+                    "type": "number"
+                  },
+                  "min": {
+                    "type": "number"
+                  }
+                },
+                "type": "object"
+              },
+              "sort": {
+                "additionalProperties": false,
+                "properties": {
+                  "direction": {
+                    "enum": ["asc", "desc"],
+                    "type": "string"
+                  },
+                  "field": {
+                    "enum": ["price", "year", "odometer", "createdAt", "score"],
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              },
+              "spec": {
+                "additionalProperties": {},
+                "description": "Canonical spec filters keyed by SpecAttributeId: numeric → {\"min\",\"max\"}, equipment → [\"standard\"|\"optional\"|\"unavailable\"]. Example: {\"fuelEconomyCombined\": {\"min\": 35}, \"heatedSeatsFront\": [\"standard\"]}. Bare scalars are invalid — \"standard\" must be [\"standard\"]; a wrong-shaped value errors with code \"invalid_spec_filter\". Unknown keys 400 with code \"unknown_spec_attributes\".",
+                "type": "object"
+              },
+              "transmissions": {
+                "description": "Entity refs in the \"transmission\" domain, e.g. [\"transmission:automatic\"]",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "vehicleTypes": {
+                "description": "Entity refs in the \"vehicle-type\" domain, e.g. [\"vehicle-type:passenger-car\"]",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "year": {
+                "additionalProperties": false,
+                "description": "Model year range",
+                "properties": {
+                  "max": {
+                    "type": "number"
+                  },
+                  "min": {
+                    "type": "number"
+                  }
+                },
+                "type": "object"
+              }
+            },
+            "required": ["context"],
+            "type": "object"
+          },
+          "annotations": {
+            "readOnlyHint": true,
+            "title": "Search Inventory"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:9d01ce89143ccda0e532288d1994af6e494f989bc5505989fb86918190a984a1"
+        },
+        {
+          "name": "vehicle_operators",
+          "description": "Every motor carrier a commercial vehicle was observed running under, from the US federal roadside record. Guide: https://cardog.app/docs/carriers.\n\nPass `vin` (17 characters). The result is one item per day a roadside inspection or crash report put a carrier on the unit, most recent first. Each item has `observedAt`, `source` and `value` (`dotNumber`, and `ref` in the `{domain}:{key}` grammar every Cardog ref uses: `org:usdot/{dotNumber}`). The tool always asks for `detail` (which record it was, an inspection or a crash, and the carrier as it stands on the register: legal name, domicile, declared power units). These are observed associations on dated records, not ownership: a leased unit is run by a carrier that does not own it.\n\nCovers the power unit (tractor or straight truck). A trailer's carriers come from carrier_lookup({ q: vin }). A consumer car returns no items; that is not evidence of anything. Costs 3 credits when there is at least one item, 0 when there is none.\n\nErrors are instructions: every failure returns {code, message, hint, suggestions} — follow `hint` for the next call; `suggestions` lists nearest valid refs for a bad ref. Unknown-but-well-formed refs are a 400 naming the ref, NEVER a silent fuzzy match.\n\nNext: carrier_lookup({ q: \"<dotNumber>\" }) for the carrier and everything else it ran; identify_vehicle({ vin }) for what the unit is.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "properties": {
+              "context": {
+                "description": "Explain why you are calling this tool and how it fits into the user's overall goal. This parameter is used for analytics and user intent tracking. YOU MUST provide 15-25 words (count carefully). NEVER use first person ('I', 'we', 'you') - maintain third-person perspective. NEVER include sensitive information such as credentials, passwords, or personal data. Example (20 words): \"Searching across the organization's repositories to find all open issues related to performance complaints and latency issues for team prioritization.\"",
+                "type": "string"
+              },
+              "vin": {
+                "description": "17-character VIN",
+                "type": "string"
+              }
+            },
+            "required": ["context", "vin"],
+            "type": "object"
+          },
+          "annotations": {
+            "readOnlyHint": true,
+            "title": "Vehicle Operators"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:1fc920fee10ccc266d376665b9afe67baf0377206a712f8e54990d54a278e0b3"
+        },
+        {
+          "name": "window_sticker",
+          "description": "The factory window sticker (Monroney label) we hold for a VIN, or why there is none. Guide: https://cardog.app/docs/window-sticker.\n\nPass `vin` (17 characters). The result has exactly one of:\n- `label` — we hold the manufacturer's label: `issuer`, `retrievedAt`, `vinVerified` (true only when the VIN was read inside the file; false means the manufacturer's service returned it for this VIN and nothing stronger), and `document` (a stable identifier + SHA-256, and `downloadUrl`: a signed link to the PDF, good for 24 hours, free, no API key needed. You may give it to a person as a clickable link. Do not store the link: call this tool again for a fresh one, which bills the label again. `sha256` identifies the file). Costs 5 credits.\n- `unavailable` — no label, and `reason` says why. `not_yet_harvested` is the ONLY reason worth retrying later. `no_lane` (not collected for this manufacturer), `lane_us_only` (US-sold vehicles only), `issuer_has_no_record` (the manufacturer has none) and `pre_lane_model_year` (predates our coverage) are final. Costs 0 credits.\n\nAbsence is a normal answer, not an error. The label's printed contents (options, MSRP, fuel economy) are not served yet.\n\nErrors are instructions: every failure returns {code, message, hint, suggestions} — follow `hint` for the next call; `suggestions` lists nearest valid refs for a bad ref. Unknown-but-well-formed refs are a 400 naming the ref, NEVER a silent fuzzy match.\n\nNext: identify_vehicle({ vin }) for the vehicle's identity and its refs (model-year:… for market_quote); check_recalls({ vin }) for campaigns listed for the model year.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "properties": {
+              "context": {
+                "description": "Explain why you are calling this tool and how it fits into the user's overall goal. This parameter is used for analytics and user intent tracking. YOU MUST provide 15-25 words (count carefully). NEVER use first person ('I', 'we', 'you') - maintain third-person perspective. NEVER include sensitive information such as credentials, passwords, or personal data. Example (20 words): \"Searching across the organization's repositories to find all open issues related to performance complaints and latency issues for team prioritization.\"",
+                "type": "string"
+              },
+              "vin": {
+                "description": "17-character VIN",
+                "type": "string"
+              }
+            },
+            "required": ["context", "vin"],
+            "type": "object"
+          },
+          "annotations": {
+            "readOnlyHint": true,
+            "title": "Window Sticker"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:d3de9fbfe716067201ba677d28c76157c5da9967e1d3692b06f3eb715c7b2061"
+        }
+      ],
+      "digest": "sha256:0b6e9ec318ef5bf3740e05ff0a2c97982bf6bdbe9931249df230138b032b1769"
+    }
+  }
+}

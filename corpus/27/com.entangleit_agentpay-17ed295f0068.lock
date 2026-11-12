@@ -1,0 +1,1076 @@
+{
+  "lockfileVersion": 2,
+  "subjects": {
+    "com.entangleit/agentpay": {
+      "kind": "mcp-server",
+      "source": {
+        "client": "manual",
+        "file": "registry.modelcontextprotocol.io"
+      },
+      "transport": {
+        "type": "http",
+        "url": "https://entangleit.com/api/agentpay/mcp"
+      },
+      "protocol": {
+        "era": "modern",
+        "version": "2026-07-28",
+        "supportedVersions": ["2026-07-28"]
+      },
+      "serverInfo": {
+        "name": "agentpay",
+        "version": "0.3.1"
+      },
+      "capabilities": {
+        "tools": {
+          "listChanged": true
+        }
+      },
+      "instructions": "agentpay is a prepaid USD wallet for AI agents on Cloudflare. Pay-per-call LLM (chat → Fuse) and typed extract (extract → Fuse) with no API key, plus x402/BSV payments for registry APIs.\nHuman dashboard: https://entangleit.com/agentpay/ (create a wallet, top up with a card via Stripe, mint agent keys).\nAgents authenticate with a scoped key (agp_…). Pass it as the Authorization: Bearer header on this MCP connection, or as the `key` parameter on a tool call.\nNew agents call onboard first: it inspects balance, claims, and history, then returns the single next action.\nNo key yet: claim_trial mints a pre-funded trial wallet + key (one per IP per day, sized for ~50 fuse-fast calls). Full playbook: https://entangleit.com/api/agentpay/skill · llms.txt: https://entangleit.com/api/agentpay/llms.txt.\nPublic tools: list_services and service_quote read the x402market registry (paid x402/BSV APIs) and live 402 challenges. claim_trial mints a pre-funded trial wallet + key with no human needed (operator-gated, one per IP per day).\nWallet tools: get_balance, list_transactions, get_receipt, send.\nLLM: chat {model, messages} calls Fuse chat completions (https://entangleit.com/fuse/v1/chat/completions). No Fuse API key — agentpay pays the standard x402 v2 402 in sats and returns the completion plus receiptUrl and txid. Models: fuse-fast (500 sats) and fuse-smart (2500 sats). Wallet limits, scoped keys, and trial budgets apply.\nExtract: extract {state, fields} pays Fuse extract (https://entangleit.com/fuse/v1/extract) for typed values from messy text or receipts. Use extract instead of chat when you need structured fields with confidence scores and explicit nulls (p_null) rather than made-up answers. fields is a name→{type} object. Field types: text|number|date|time|datetime|duration|list|estimate|forecast (lists need items, e.g. \"text\"). Tiers: S 3,500 sats (≤1,500 chars / 8 fields), M 15,000 (≤6,000 / 30), L 50,000 (≤16,000 / 30). Images must be base64 PNG/JPEG/WebP (or data URI) and are at least M. Oversized → 413, bad schema → 400. Returns answers, receipt, and txid. dryRun quotes the tier and price without paying.\nSpending: spend debits the wallet and writes a receipt. send pays a BSV P2PKH address on-chain (settlement=live, txid is a BSV tx) or an agentpay wallet id apw_… as an internal ledger transfer (settlement=internal, txid is a receipt id). pay_service quotes a registry seller, settles the BSV x402 challenge (legacy single-object or standard v2 accepts[]) from the site wallet, and returns the seller's result — all in one call.\npay_service takes params (tool arguments) and optional amountCents. amountCents defaults to a 1-cent minimum unless the operator configured X402_SATS_PER_CENT.\nPer-agent policy: allowedTools restricts pay_service to entries like serviceId:tool or serviceId:* (empty = all); generic spend needs the \"spend\" entry; send needs \"spend\", \"agent_send\", or \"*\"; chat needs \"chat\", \"fuse:*\", or fuse:<model>; extract needs \"extract\", \"fuse:extract\", \"fuse:fuse-extract\", or \"fuse:*\". approvalAboveCents makes spends at/above that amount return 402 approval_required with approvalId + approvalUrl — a human approves in the dashboard, then retry with approvalId.\nPlans: wallets start on Free (3 agent keys, daily limits up to $50/agent). Pro ($29/mo) raises that to 25 keys, $1,000/agent daily limits, and CSV export. A plan_limit error includes upgradeUrl; create_upgrade_link returns a Stripe Checkout URL to hand to the human who owns the wallet.\nDelegation: a top-level agent can mint_subagent for each worker with its own lifetime budget, expiry, daily limit, and allowlist — then list_subagents and revoke_subagent. Budget-exhausted or expired child keys fail closed with code subagent_budget or subagent_expired. Cascading budgets: every child spend also counts against the parent's daily limit (code parent_daily_limit when the parent cap would be exceeded), so a parent cannot dodge its cap by delegating.\nReputation: get_attestation returns an agentpay-signed summary of the wallet's settled activity. Sellers verify it at /attestations/verify (or with the public key at /attestations/key) to price trust — for example, a discount for wallets with a proven payment history.\nEarning: list_bounties and get_bounty browse paid work on the BSVBounties marketplace. claim_bounty links a bounty to this wallet (pass payoutAddress to receive sats on-chain instead of a balance credit); submit_work submits it; my_bounties lists your claims. When a linked bounty settles, the reward is credited to your wallet balance (idempotent) so you can spend it on x402 services — earn and spend from one key.\nPosting: post_bounty funds a new listing from your wallet balance and escrows the sats on-chain from the treasury to a per-bounty key; my_escrows tracks funding, payout, and refund txids. As poster you decide with settle_bounty (outcome paid or refunded): paid spends the escrow to the worker (net of the platform fee) and refunded returns it to the treasury and credits your balance back.\nWhen the balance is low, call create_topup_link (or pay_service will fail with 402) and hand the Stripe Checkout URL to a human — agents cannot pay by card themselves.",
+      "tools": [
+        {
+          "name": "chat",
+          "title": "Pay-per-call LLM",
+          "description": "Pay-per-call LLM, no API key. Sends messages to Fuse chat completions; agentpay settles the standard x402 v2 BSV 402 from this wallet and returns the completion plus receiptUrl and txid. Models: fuse-fast (500 sats) or fuse-smart (2500 sats). Wallet limits, scoped keys, and trial budgets apply. Pass dryRun to quote without spending.",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "amountCents": {
+                "description": "Override the USD cents charged (min 1 cent default)",
+                "maximum": 9007199254740991,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "approvalId": {
+                "description": "Approval id from a prior approval_required response",
+                "type": "string"
+              },
+              "description": {
+                "maxLength": 200,
+                "type": "string"
+              },
+              "dryRun": {
+                "description": "Quote + policy check only, no debit or settlement",
+                "type": "boolean"
+              },
+              "key": {
+                "description": "Agent key (agp_…). Optional when the MCP connection sends Authorization: Bearer.",
+                "type": "string"
+              },
+              "max_tokens": {
+                "maximum": 9007199254740991,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "messages": {
+                "description": "OpenAI-style chat messages",
+                "items": {
+                  "properties": {
+                    "content": {
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "role": {
+                      "enum": ["system", "user", "assistant"],
+                      "type": "string"
+                    }
+                  },
+                  "required": ["content", "role"],
+                  "type": "object"
+                },
+                "minItems": 1,
+                "type": "array"
+              },
+              "model": {
+                "description": "Fuse model (default fuse-fast). fuse-fast = 500 sats, fuse-smart = 2500 sats.",
+                "enum": ["fuse-fast", "fuse-smart"],
+                "type": "string"
+              },
+              "ref": {
+                "type": "string"
+              }
+            },
+            "required": ["messages"],
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:175cf31af33778ed0291f72ef1c40f60f7d193b7f753f8750051707df671c31c"
+        },
+        {
+          "name": "claim_bounty",
+          "title": "Claim a bounty",
+          "description": "Claim a bounty for this wallet. Links the bounty to your agentpay wallet so the reward is credited here on settle; the response includes payout instructions. Pass workerAccount/workerPubKey (BSV identity) to bind trust.",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "bountyId": {
+                "description": "Bounty id from list_bounties",
+                "type": "string"
+              },
+              "key": {
+                "description": "Agent key (agp_…). Optional when the MCP connection sends Authorization: Bearer.",
+                "type": "string"
+              },
+              "payoutAddress": {
+                "description": "Optional BSV P2PKH payout address for direct sats",
+                "type": "string"
+              },
+              "workerAccount": {
+                "description": "BSVBounties account # doing the work",
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991,
+                "type": "integer"
+              },
+              "workerPubKey": {
+                "description": "BSV worker identity key",
+                "type": "string"
+              }
+            },
+            "required": ["bountyId"],
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:6b962144383909a5504de8da1c38948b326fb155289d1f91c2a05c9f5f18bbc2"
+        },
+        {
+          "name": "claim_trial",
+          "title": "Claim a trial wallet",
+          "description": "Self-serve onboarding: mint a real wallet pre-funded with trial credit plus a tight agent key. No human or card needed. One claim per IP per day from a limited operator budget; fails 403 when the faucet is disabled. Free.",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "name": {
+                "description": "Wallet name, e.g. trial-bot",
+                "maxLength": 60,
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:8add58fb043911944de46bc7ae7dcc8c6a429a94ed05b294c51a984f84578d54"
+        },
+        {
+          "name": "create_topup_link",
+          "title": "Create top-up link",
+          "description": "Create a Stripe Checkout URL that a human opens to fund the wallet. Amount between 100 and 100000 cents USD.",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "amountCents": {
+                "description": "Top-up amount in USD cents, e.g. 2000 = $20",
+                "maximum": 9007199254740991,
+                "minimum": -9007199254740991,
+                "type": "integer"
+              },
+              "key": {
+                "description": "Agent key (agp_…). Optional when the MCP connection sends Authorization: Bearer.",
+                "type": "string"
+              }
+            },
+            "required": ["amountCents"],
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:97bad52ed07acf128d6f61d26cbbd3036cf9f5b347c738012748517ae71f5995"
+        },
+        {
+          "name": "create_upgrade_link",
+          "title": "Create upgrade link",
+          "description": "Create a Stripe Checkout URL to upgrade the wallet to agentpay Pro (more agent keys, higher daily limits, CSV export). Hand the URL to the human who owns the wallet.",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "key": {
+                "description": "Agent key (agp_…). Optional when the MCP connection sends Authorization: Bearer.",
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:0f4ed3e56095555a3f42947d0bf984d7d3bd38ee04ed285535577cc2fd6fa395"
+        },
+        {
+          "name": "extract",
+          "title": "Extract typed fields",
+          "description": "Extract typed values from messy text or receipts. Pays Fuse extract; agentpay settles the standard x402 v2 BSV 402 from this wallet. Prefer this over chat when you need structured fields with confidence scores and explicit nulls (p_null) instead of made-up answers. Types: text|number|date|time|datetime|duration|list|estimate|forecast (lists need items, e.g. \"text\"). fields is a name→{type} object. Tiers: S 3,500 sats (≤1,500 chars, ≤8 fields), M 15,000 (≤6,000 chars, ≤30 fields), L 50,000 (≤16,000 chars, ≤30 fields); images (base64 PNG/JPEG/WebP) are at least M. Oversized → 413, bad schema → 400. Returns answers, receipt, and txid. Pass dryRun to quote the tier and price without spending.",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "amountCents": {
+                "description": "Override the USD cents charged (min 1 cent default)",
+                "maximum": 9007199254740991,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "approvalId": {
+                "description": "Approval id from a prior approval_required response",
+                "type": "string"
+              },
+              "description": {
+                "maxLength": 200,
+                "type": "string"
+              },
+              "dryRun": {
+                "description": "Quote the extract tier (S/M/L) and price only, no debit or settlement",
+                "type": "boolean"
+              },
+              "fields": {
+                "anyOf": [
+                  {
+                    "additionalProperties": {
+                      "properties": {
+                        "description": {
+                          "type": "string"
+                        },
+                        "items": {
+                          "anyOf": [
+                            {
+                              "enum": ["text", "number", "date", "time", "datetime", "duration", "list", "estimate", "forecast"],
+                              "type": "string"
+                            },
+                            {
+                              "properties": {
+                                "description": {
+                                  "type": "string"
+                                },
+                                "type": {
+                                  "enum": ["text", "number", "date", "time", "datetime", "duration", "list", "estimate", "forecast"],
+                                  "type": "string"
+                                }
+                              },
+                              "required": ["type"],
+                              "type": "object"
+                            }
+                          ],
+                          "description": "Required when type is list, e.g. \"text\""
+                        },
+                        "type": {
+                          "enum": ["text", "number", "date", "time", "datetime", "duration", "list", "estimate", "forecast"],
+                          "type": "string"
+                        }
+                      },
+                      "required": ["type"],
+                      "type": "object"
+                    },
+                    "propertyNames": {
+                      "type": "string"
+                    },
+                    "type": "object"
+                  },
+                  {
+                    "items": {
+                      "properties": {
+                        "description": {
+                          "type": "string"
+                        },
+                        "items": {
+                          "anyOf": [
+                            {
+                              "enum": ["text", "number", "date", "time", "datetime", "duration", "list", "estimate", "forecast"],
+                              "type": "string"
+                            },
+                            {
+                              "properties": {
+                                "description": {
+                                  "type": "string"
+                                },
+                                "type": {
+                                  "enum": ["text", "number", "date", "time", "datetime", "duration", "list", "estimate", "forecast"],
+                                  "type": "string"
+                                }
+                              },
+                              "required": ["type"],
+                              "type": "object"
+                            }
+                          ]
+                        },
+                        "name": {
+                          "minLength": 1,
+                          "type": "string"
+                        },
+                        "type": {
+                          "enum": ["text", "number", "date", "time", "datetime", "duration", "list", "estimate", "forecast"],
+                          "type": "string"
+                        }
+                      },
+                      "required": ["name", "type"],
+                      "type": "object"
+                    },
+                    "minItems": 1,
+                    "type": "array"
+                  }
+                ],
+                "description": "Fuse wire format: object mapping field names to {type, items?}. An array of {name, type} is also accepted."
+              },
+              "images": {
+                "description": "Base64 PNG, JPEG, or WebP (or data URI). Remote URLs are rejected. Image requests are at least M.",
+                "items": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "key": {
+                "description": "Agent key (agp_…). Optional when the MCP connection sends Authorization: Bearer.",
+                "type": "string"
+              },
+              "ref": {
+                "type": "string"
+              },
+              "reference_date": {
+                "description": "YYYY-MM-DD (or ISO datetime) used to resolve relative dates like 'yesterday'",
+                "type": "string"
+              },
+              "state": {
+                "description": "Messy text, receipt, email, or notes. Required unless images are sent.",
+                "type": "string"
+              }
+            },
+            "required": ["fields"],
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:a72c928f15b30d60277594cc85dc08c01dbbebba19d6af506fe47c2a120547a6"
+        },
+        {
+          "name": "get_attestation",
+          "title": "Get proof-of-spend attestation",
+          "description": "Ask agentpay to sign a summary of this wallet's settled activity (payments, distinct services/payees, spend, refunds, bounty earnings) for a window. Pass sub (workerPubKey) to bind it to a bounty claim — required for bond discount. Free.",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "days": {
+                "description": "Window in days (default 30)",
+                "maximum": 365,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "key": {
+                "description": "Agent key (agp_…). Optional when the MCP connection sends Authorization: Bearer.",
+                "type": "string"
+              },
+              "sub": {
+                "description": "Claimant binding, e.g. workerPubKey for a bounty claim",
+                "maxLength": 120,
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:b93a0ec5eddf39e45078f1628389b1c4f14dde2d190625da26c8abb8beaf1b78"
+        },
+        {
+          "name": "get_balance",
+          "title": "Get balance",
+          "description": "Wallet balance, agent identity, and daily limit status for the current agent key.",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "key": {
+                "description": "Agent key (agp_…). Optional when the MCP connection sends Authorization: Bearer.",
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:01204328d22924495d9c0743664bc56f6f53932dd9131fc1f31fa5023d28ec05"
+        },
+        {
+          "name": "get_bounty",
+          "title": "Get bounty",
+          "description": "Full detail for one BSVBounties listing: requirements, amount, acceptance spec, status, escrow state.",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "bountyId": {
+                "description": "Bounty id from list_bounties",
+                "type": "string"
+              }
+            },
+            "required": ["bountyId"],
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:4d929f0e7afbf2ae7a372db625b99017c4dde24990418b2ebca8f82ce7d7124c"
+        },
+        {
+          "name": "get_receipt",
+          "title": "Get receipt",
+          "description": "Fetch a receipt by id.",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "key": {
+                "description": "Agent key (agp_…). Optional when the MCP connection sends Authorization: Bearer.",
+                "type": "string"
+              },
+              "receiptId": {
+                "type": "string"
+              }
+            },
+            "required": ["receiptId"],
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:224b222cc2bf051335a29dca05e7b3c652738e0a88fd9524b68e8617c1c1342b"
+        },
+        {
+          "name": "health",
+          "title": "Health",
+          "description": "Check that the agentpay API and MCP are up.",
+          "inputSchema": {
+            "properties": {},
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:fde4974ad1aa174e99320f75ced1f4009b7f0ba7e3222fe73a8cf4166f3ae30a"
+        },
+        {
+          "name": "list_bounties",
+          "title": "List bounties",
+          "description": "Browse open paid work on the BSVBounties marketplace (sats rewards, escrow, reputation). Free — no key required.",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "category": {
+                "description": "Category filter, e.g. dev, research, content, data, design",
+                "type": "string"
+              },
+              "limit": {
+                "maximum": 50,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "offset": {
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "status": {
+                "description": "Bounty status filter (default open)",
+                "enum": ["open", "claimed", "submitted", "paid", "refunded"],
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:fa15143035d4f72b1e3eda15d10c2f197127e0ba5078220e8e1294af9e978c5c"
+        },
+        {
+          "name": "list_services",
+          "title": "List paid services",
+          "description": "Browse the x402market registry of pay-per-call services for agents. Public — no key needed. Returns tools, network, payTo, and per-tool price in sats.",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "limit": {
+                "maximum": 50,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "q": {
+                "description": "Search text",
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:5a1431bdc2a66344ebaaab6ba183d3c86032978abd12f68e89280ecca7c94614"
+        },
+        {
+          "name": "list_subagents",
+          "title": "List sub-agents",
+          "description": "List the child keys delegated by the current agent, with budget, spend, expiry, and status.",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "key": {
+                "description": "Agent key (agp_…). Optional when the MCP connection sends Authorization: Bearer.",
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:6646d128bdd96f377c66a9b85089634438db5803ab94b2502b89d1707a6b72d2"
+        },
+        {
+          "name": "list_transactions",
+          "title": "List transactions",
+          "description": "Recent wallet ledger events (top-ups, spends), newest first.",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "key": {
+                "description": "Agent key (agp_…). Optional when the MCP connection sends Authorization: Bearer.",
+                "type": "string"
+              },
+              "limit": {
+                "maximum": 100,
+                "minimum": 1,
+                "type": "integer"
+              }
+            },
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:478cac0dab2dc588bacf8fcba663bc90b8fdf2183b64412c4413fd60d033c48e"
+        },
+        {
+          "name": "mint_subagent",
+          "title": "Mint a sub-agent",
+          "description": "Delegate a scoped child key for a worker: its own lifetime budget (cents), expiry (minutes), daily limit, and tool allowlist. Only top-level agents can delegate. The child can spend only within its budget/expiry/allowlist, and every child spend also counts against the parent's daily limit (fails with code parent_daily_limit when the parent cap would be exceeded); revoke it any time.",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "allowedTools": {
+                "description": "Allowlist entries like serviceId:tool, serviceId:*, chat, extract, or fuse:fuse-fast",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "approvalAboveCents": {
+                "description": "Human approval threshold in cents",
+                "maximum": 9007199254740991,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "budgetCents": {
+                "description": "Lifetime budget in USD cents (omit for no total cap)",
+                "maximum": 9007199254740991,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "dailyLimitCents": {
+                "description": "Per-day limit in USD cents",
+                "maximum": 9007199254740991,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "expiresInMinutes": {
+                "description": "Key expiry (max 30 days)",
+                "maximum": 43200,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "key": {
+                "description": "Agent key (agp_…). Optional when the MCP connection sends Authorization: Bearer.",
+                "type": "string"
+              },
+              "name": {
+                "description": "Worker name, e.g. scraper-1",
+                "maxLength": 60,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": ["name"],
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:4d32d4c281add847888670e28521eefc84e2b708f9055772e818d85a3717cb53"
+        },
+        {
+          "name": "my_bounties",
+          "title": "My bounties",
+          "description": "List bounties this wallet has claimed through agentpay, with status and credited amount.",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "key": {
+                "description": "Agent key (agp_…). Optional when the MCP connection sends Authorization: Bearer.",
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:f32a5e0ff5672a9b2dcaa269ca701cd703c7297d85bef5cdaff698c7b0bd6517"
+        },
+        {
+          "name": "my_escrows",
+          "title": "My bounty escrows",
+          "description": "List agentpay-funded bounties posted by this wallet: amount, escrow address, funding/payout/refund txids, and any pending error.",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "key": {
+                "description": "Agent key (agp_…). Optional when the MCP connection sends Authorization: Bearer.",
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:cb610f487337ff50332cb6a2822a447bdc42a73c7ff90dd719c28d393cd7de7f"
+        },
+        {
+          "name": "onboard",
+          "title": "Onboard this agent",
+          "description": "First call for a new agent: inspects balance, claims, earnings, and spend history, then returns the single next action (earn first, dry-run spend, link identity, or scale). Free.",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "key": {
+                "description": "Agent key (agp_…). Optional when the MCP connection sends Authorization: Bearer.",
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:13b362464f4339a4d5fcf82cc28ba96f9b11d765617533f674c57523480538c2"
+        },
+        {
+          "name": "pay_service",
+          "title": "Pay a service",
+          "description": "One call for paid registry tools: quotes the seller's x402 challenge (legacy single-object or standard v2 accepts[] — BSV exact only), pays it from the site wallet on BSV mainnet, debits the agent wallet, and returns the seller's result plus txid. If the seller rejects the payment, the debit is refunded. For pay-per-call LLM with no API key, use chat; for typed values from messy text or receipts, use extract. Pass bountyAccount for reputation fast-path (approval x2 when score>=650).",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "amountCents": {
+                "description": "Override the USD cents charged (min 1 cent default)",
+                "maximum": 9007199254740991,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "approvalId": {
+                "description": "Approval id from a prior approval_required response",
+                "type": "string"
+              },
+              "bountyAccount": {
+                "description": "BSVBounties account # for trust fast-path",
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991,
+                "type": "integer"
+              },
+              "description": {
+                "maxLength": 200,
+                "type": "string"
+              },
+              "dryRun": {
+                "description": "Sandbox: quote + policy check only, no debit or settlement",
+                "type": "boolean"
+              },
+              "key": {
+                "description": "Agent key (agp_…). Optional when the MCP connection sends Authorization: Bearer.",
+                "type": "string"
+              },
+              "params": {
+                "additionalProperties": {},
+                "description": "Tool arguments (body for POST, query for GET)",
+                "propertyNames": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              "ref": {
+                "type": "string"
+              },
+              "serviceId": {
+                "description": "Registry service id (from list_services)",
+                "type": "string"
+              },
+              "tool": {
+                "description": "Tool name on that service",
+                "type": "string"
+              }
+            },
+            "required": ["serviceId", "tool"],
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:84be34763e95878914a102dd84705dc004f50e9a0ca9015786b0f4bcc9c7eb67"
+        },
+        {
+          "name": "post_bounty",
+          "title": "Post a funded bounty",
+          "description": "Create a bounty funded from this wallet's balance. The reward is escrowed on-chain (real sats, per-bounty key) and listed on BSVBounties. Debits your balance at the posted rate plus the platform fee on payout.",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "amountSats": {
+                "description": "Reward in sats; escrowed on-chain",
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991,
+                "type": "integer"
+              },
+              "category": {
+                "description": "dev, research, content, data, design, other (default other)",
+                "type": "string"
+              },
+              "deadline": {
+                "description": "Unix seconds; enables deadline refunds",
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "description": {
+                "maxLength": 2000,
+                "type": "string"
+              },
+              "key": {
+                "description": "Agent key (agp_…). Optional when the MCP connection sends Authorization: Bearer.",
+                "type": "string"
+              },
+              "payoutAddress": {
+                "description": "Optional BSV P2PKH address for the worker's sats (default: worker's agentpay balance)",
+                "type": "string"
+              },
+              "title": {
+                "maxLength": 120,
+                "type": "string"
+              }
+            },
+            "required": ["amountSats", "description", "title"],
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:81d784ceceefad5b0e958684f8dc9024c58fd613a203b04e8849926aea999845"
+        },
+        {
+          "name": "revoke_subagent",
+          "title": "Revoke a sub-agent",
+          "description": "Revoke a delegated child key immediately.",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "agentId": {
+                "description": "Sub-agent id from mint_subagent or list_subagents",
+                "type": "string"
+              },
+              "key": {
+                "description": "Agent key (agp_…). Optional when the MCP connection sends Authorization: Bearer.",
+                "type": "string"
+              }
+            },
+            "required": ["agentId"],
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:df33352c8dd6800fc1128752f06fbec730a71f8ab1999985eda637b5562f2ce2"
+        },
+        {
+          "name": "send",
+          "title": "Send to an address or wallet",
+          "description": "Pay sats to a BSV P2PKH address (on-chain, settlement=live, txid is a BSV transaction) or to an agentpay wallet id apw_… (internal ledger credit, settlement=internal, txid is a receipt id). Idempotent per idempotency_key. Daily limits, allowlists (spend or agent_send), and approval thresholds apply. Pass the public wallet id, never the secret apw_ token.",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "approvalId": {
+                "description": "Approval id from a prior approval_required response",
+                "type": "string"
+              },
+              "dest": {
+                "description": "BSV P2PKH address (1… / 3…) or public agentpay wallet id (apw_…, not the secret token)",
+                "type": "string"
+              },
+              "idempotency_key": {
+                "description": "Replay key: a retry with the same key returns the original txid/receipt instead of sending twice",
+                "maxLength": 120,
+                "type": "string"
+              },
+              "key": {
+                "description": "Agent key (agp_…). Optional when the MCP connection sends Authorization: Bearer.",
+                "type": "string"
+              },
+              "memo": {
+                "description": "Optional note stored on the send",
+                "maxLength": 200,
+                "type": "string"
+              },
+              "sats": {
+                "description": "Amount in satoshis",
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991,
+                "type": "integer"
+              }
+            },
+            "required": ["dest", "sats"],
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:a57c8d35dc214a8f211e544acf7701b3cf6b2baabd26411a5981881bcc9799e9"
+        },
+        {
+          "name": "service_quote",
+          "title": "Quote a service",
+          "description": "Call a registry tool unsigned and return the live 402 payment requirements (price/payTo). Public — no key needed. Pass bountyAccount optionally to include a trust hint (discount eligibility) without changing the price.",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "bountyAccount": {
+                "description": "BSVBounties account # for trust hint",
+                "exclusiveMinimum": 0,
+                "maximum": 9007199254740991,
+                "type": "integer"
+              },
+              "serviceId": {
+                "description": "Registry service id (from list_services)",
+                "type": "string"
+              },
+              "tool": {
+                "description": "Tool name on that service",
+                "type": "string"
+              }
+            },
+            "required": ["serviceId", "tool"],
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:bf6821b68d6c33d556efb10e5d90691d40dcd93bfba0fb737527197189f8fa3d"
+        },
+        {
+          "name": "settle_bounty",
+          "title": "Settle a posted bounty",
+          "description": "As the poster, approve a submitted bounty (paid) or refund it. Paid spends the on-chain escrow to the worker (net of fee); refunded returns it to treasury and credits your balance back.",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "bountyId": {
+                "type": "string"
+              },
+              "key": {
+                "description": "Agent key (agp_…). Optional when the MCP connection sends Authorization: Bearer.",
+                "type": "string"
+              },
+              "outcome": {
+                "enum": ["paid", "refunded"],
+                "type": "string"
+              }
+            },
+            "required": ["bountyId", "outcome"],
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:8069893d322a515a46bf3d2a4e560575182b956bbe99f571999238e69c9576ab"
+        },
+        {
+          "name": "spend",
+          "title": "Spend from wallet",
+          "description": "Debit the wallet and mint a receipt. Fails with 402 when balance or the agent daily limit is insufficient — respond by calling create_topup_link.",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "amountCents": {
+                "description": "Amount in USD cents",
+                "maximum": 9007199254740991,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "approvalId": {
+                "description": "Approval id from a prior approval_required response",
+                "type": "string"
+              },
+              "description": {
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              },
+              "key": {
+                "description": "Agent key (agp_…). Optional when the MCP connection sends Authorization: Bearer.",
+                "type": "string"
+              },
+              "ref": {
+                "description": "Idempotency-ish external reference",
+                "type": "string"
+              },
+              "service": {
+                "description": "Optional service label",
+                "type": "string"
+              },
+              "tool": {
+                "description": "Optional tool label",
+                "type": "string"
+              }
+            },
+            "required": ["amountCents", "description"],
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:618ed7fe2cf0e6797079ea3586635df2acf3db3446de45661b38e77bc1765328"
+        },
+        {
+          "name": "submit_work",
+          "title": "Submit work",
+          "description": "Submit your work for a bounty you claimed through agentpay. Provide a workUri or notes; the hash is computed by BSVBounties when omitted.",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "bountyId": {
+                "type": "string"
+              },
+              "key": {
+                "description": "Agent key (agp_…). Optional when the MCP connection sends Authorization: Bearer.",
+                "type": "string"
+              },
+              "milestoneIndex": {
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "notes": {
+                "description": "Summary for the poster/verifier — include the payout address from claim_bounty",
+                "type": "string"
+              },
+              "workHash": {
+                "description": "sha256 hex of the work, if you compute it yourself",
+                "type": "string"
+              },
+              "workUri": {
+                "description": "URL of the deliverable",
+                "type": "string"
+              }
+            },
+            "required": ["bountyId"],
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:59c7127505241d437945364e5a7a3b72fcc24aca7c1a8ea13af785384f6dec15"
+        }
+      ],
+      "digest": "sha256:50918d26944e9e61dee009d27e81ae680034dd86714bf17ac80970b5be8f3334"
+    }
+  }
+}

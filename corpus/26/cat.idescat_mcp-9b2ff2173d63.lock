@@ -1,0 +1,344 @@
+{
+  "lockfileVersion": 2,
+  "subjects": {
+    "cat.idescat/mcp": {
+      "kind": "mcp-server",
+      "source": {
+        "client": "manual",
+        "file": "registry.modelcontextprotocol.io"
+      },
+      "transport": {
+        "type": "http",
+        "url": "https://api.idescat.cat/mcp"
+      },
+      "protocol": {
+        "era": "modern",
+        "version": "2026-07-28",
+        "supportedVersions": ["2026-07-28"]
+      },
+      "serverInfo": {
+        "name": "cat.idescat/mcp",
+        "version": "1.1.1"
+      },
+      "capabilities": {
+        "resources": {},
+        "tools": {}
+      },
+      "instructions": "# Idescat MCP — Usage guidance\r\n\r\nTools to query the official statistics of Catalonia (Idescat): list of statistics, tables and data in JSON-stat format.\r\n\r\n---\r\n\r\n## 1. Choosing a statistic\r\n\r\nAlways start with `get_idescat_stats` to locate the statistic. For each one, check two key fields before choosing:\r\n- `datasets` (boolean): if `true` the statistic is normalized and you can use the rest of the tools (`get_idescat_stat_tables`, `get_table_metadata`, `get_table_data`, `get_table_geo`, `render_table`). If `false`, ONLY `get_idescat_stats` and `get_idescat_stat` are available.\r\n- `geo` (array): available territorial breakdown levels (`cat`=Catalonia, `prov`=provinces, `at`=territorial plan areas, `com`=comarques and Aran, `mun`=municipalities, `dis`=districts, `sec`=census tracts). ALWAYS check `geo` before choosing a statistic for a territorial query: if comarca-level data is requested, pick a statistic whose `geo` includes `com`.\r\n\r\n### Population figures\r\n\r\nWhen population data is requested there are several sources: the main and richest one is **CENSPH** (population and housing census, annual); for half-yearly estimates there is **EP** (population estimates, half-yearly); and there is also **PMH** (municipal population register, annual). By default use CENSPH (or EP for half-yearly data). NEVER use the PMH statistic for population data unless the user explicitly asks for it.\r\n\r\n---\r\n\r\n## 2. Data-retrieval flow\r\n\r\n1. When the user asks for specific data from a table, call `get_table_metadata` first. If the question is about a specific territory (comarca, municipality, province, area), pass the proper `geo` parameter (e.g. `geo='com'`, `geo='mun'`, `geo='prov'`); if you don't know the codes, call `get_table_geo`.\r\n2. Check the metadata `size` field: multiply all array elements. If the product exceeds 20,000, do not fetch the whole table: reduce the selection with `filters` and/or `last` (the limit applies after filtering). Only if no reasonable selection fits, tell the user and offer the HTML link to the table.\r\n3. To fetch data always use `get_table_data` (or `render_table`), which accepts optional filters:\r\n   - For a SINGLE territory or a subset (e.g. GDP of one comarca), call `get_table_data` with the proper `geo` and a filter on the territorial dimension (e.g. `geo='com'` and `filters={\"COM\":\"21\"}`), and/or `last` to limit the periods. Remember that without `geo` the call returns the Catalonia total (`geo='cat'`) by default, which does NOT include comarques, municipalities or provinces.\r\n   - When you need the full dataset (≤ 20,000 cells), call `get_table_data` without filters.\r\n\r\n---\r\n\r\n## 3. Interpreting JSON-stat\r\n\r\nNote: within a JSON-stat dataset, `id` refers to the ORDERED list of dimension names (see below) — this is unrelated to a statistic's acronym (`stat` parameter, section 6) or a table's numeric identifier (section 7).\r\n\r\nDataset structure:\r\n- `id`: ORDERED list of dimension names. This is the order that governs position calculations (NOT the key order of `dimension`).\r\n- `size`: number of categories per dimension (same order as `id`).\r\n- `dimension.{name}.category.index`: 0-based position of each category code within the dimension. It comes in one of two forms: an object `{code: position}` or a list `[code0, code1, ...]` (the position is the list index). ALWAYS use this index; do not assume alphabetical or label order.\r\n- `dimension.{name}.category.label`: code → human-readable label.\r\n- `value`: FLAT array with all values, in row-major order ([link](https://en.wikipedia.org/wiki/Row-major_order)): the LAST `id` dimension varies fastest and the first varies slowest.\r\n- `status`: flags special values (e.g. provisional or confidential data).\r\n\r\nTo READ the value of a specific combination of categories (one per dimension):\r\n1. For each dimension, take the position `p` of the chosen category from `category.index`.\r\n2. Compute each dimension's stride = product of the `size` of ALL later dimensions; the last dimension has stride = 1.\r\n3. `offset` = sum of (`p` × stride) over all dimensions.\r\n4. The value is `value[offset]`.\r\n\r\nExample: `id=['territory','sex']`, `size=[3,2]`; `territory.index={BCN:0,GIR:1,LLE:2}`, `sex.index={M:0,F:1}` → strides `[2,1]`. For Girona+Female: `offset = 1×2 + 1×1 = 3` → `value[3]`. Canonical sample: https://json-stat.org/samples/order.json\r\n\r\nNotes:\r\n- `null` (data not available) OCCUPIES its slot in the order: it does NOT shift the index.\r\n- \"Base 2024\", \"Base 2024=100\" or \"2024 Statistical Revision\" in the title do NOT mean estimates; they only indicate the methodological reference year (data is real unless `status` says otherwise).\r\n\r\n---\r\n\r\n## 4. Calculations (MANDATORY)\r\n\r\nNEVER add, subtract or compute percentages yourself from table values: models make arithmetic and selection mistakes. When the answer requires an aggregate (e.g. population aged 65 and over), a share of a total, a difference or a growth rate, ask the server to compute it with `get_table_data` or `render_table`:\r\n\r\n- **Age ranges** in `filters`, for dimensions whose codes look like `Y000`, `Y005_009`, `Y_GE100`: `{\"AGE\": \">=65\"}`, `\">65\"`, `\"<16\"`, `\"<=15\"`, `\"16-64\"`. \"65 and over\" is `>=65`; \"more than 65\" is `>65` (66 and over). If the user's wording is ambiguous, ask. The server resolves the expression to the exact list of codes; if the published groups cannot represent the bound (e.g. `>65` on five-year groups), it returns `range_not_representable` with the nearest representable bounds: switch to a year-by-year table or ask the user, never estimate or prorate.\r\n- **`sum`**: dimensions to collapse by adding their categories, e.g. `\"sum\": [\"AGE\"]`. Only metrics listed in the metric dimension's `extension[\"%\"]` are additive (counts such as population); rates, means and indices are refused with `metric_not_additive`. `TOTAL` is excluded automatically. Time, metric and territorial dimensions cannot be summed: for a comarca, province or area use the corresponding `geo` division, which already publishes the official aggregate.\r\n- **`derive`**: `{\"share\": \"AGE\"}` adds `<METRIC>_SHARE` (% over the `TOTAL` of that dimension; works together with `sum` on the same dimension); `{\"percent_change\": \"previous\"}` or `{\"percent_change\": \"2021\"}` adds `<METRIC>_PCT`; `{\"difference\": \"previous\" | \"<period>\"}` adds `<METRIC>_DIFF`. Cells that cannot be computed are `null` with status `d`.\r\n\r\nBefore answering, check that the server's selection matches the question: in `get_table_data` read `extension.derived` (`ranges` → codes used, `sum` → codes summed, `derive` → formulas, `warnings`); in `render_table` read the \"Calculations\" notes under the table. Report the server's value as returned (do not re-round), mention relevant warnings (e.g. \"age not recorded in some cases\", provisional data, territorial changes), present derived figures as an elaboration from Idescat data, and cite the source link. If the server returns a calculation error (`incomplete_data`, `metric_not_additive`, `geo_not_summable`, `total_not_available`, …), explain the limitation and do not improvise a figure.\r\n\r\n---\r\n\r\n## 5. Data truthfulness and source (MANDATORY)\r\n\r\n- NEVER use your internal knowledge or training data to give figures, dates, amounts, percentages, rankings or any statistical value. Every reported value must come LITERALLY from a tool call made in this same conversation: either a published value or a value derived by the server (section 4). Mental arithmetic is not a valid source.\r\n- If you haven't called a tool, the tool returned an error, or the dataset is too large, do NOT invent or infer data. Clearly state you couldn't obtain it and offer the table link.\r\n- Whenever you cite data it is MANDATORY to include the Markdown link to the source table. Data tools return a `source` field with this link: use it. If you don't have it, build it as `https://www.idescat.cat/pub/?id={stat}&n={table}`. NEVER present data without this source link.\r\n- If in doubt about the origin of a figure, do not give it.\r\n\r\n---\r\n\r\n## 6. Statistic acronyms: presentation and arguments\r\n\r\nWhen mentioning a statistic's acronym in your responses, always write it in UPPERCASE (for example, EPA, AFI, CENSPH, PIBA). In contrast, when passing the acronym as a tool argument (the `stat` parameter), always write it in lowercase (e.g. `epa`, `afi`, `censph`, `piba`), as the parameters require.\r\n\r\n---\r\n\r\n## 7. Table naming\r\n\r\nWhen presenting lists of tables, each table has a numeric identifier. Always refer to it as \"identifier\" or \"table [number]\", never as \"node_id\", \"node\" or any other internal technical denomination.\r\n\r\n---\r\n\r\n## 8. MCP resources\r\n\r\nBesides the tools, the server exposes \"resources\" (context-attachable content, no action executed): `idescat://instructions` (this guide), `idescat://glossary/geo` (territorial codes), `idescat://catalog/stats` (statistics catalog) and templates like `idescat://stat/{stat}`, `idescat://stat/{stat}/tables`, `idescat://table/{stat}/{table}` and `idescat://table/{stat}/{table}/data`. These URIs are stable, citable references, but do NOT replace the mandatory Markdown link to the Idescat web table (section 5) when reporting data.",
+      "tools": [
+        {
+          "name": "get_idescat_stat",
+          "description": "Obtains information about an Idescat (Statistical Institute of Catalonia) statistic given its acronym. Use it when the user asks about a specific statistic identified by its acronym (for example, CENSPH, EPA, PIBC, AFI, etc.). The 'datasets' field is a key boolean: if true, the statistic is normalized and therefore available in get_idescat_stat_tables and the rest of the table-level tools (metadata, data, divisions, etc.); if false, the statistic is NOT normalized and get_idescat_stat_tables will not recognize it (it would return an identifier error), so the only information available is what this same tool returns ('url', 'time_ref', 'update_date', 'update_title', 'update_text'). To know if a statistic has queryable tables, this tool is enough, without calling get_idescat_stat_tables. The 'url' field is a relative address to https://www.idescat.cat. The 'geo' field is an array with the available geographical disaggregation levels (e.g., 'cat', 'prov', 'at', 'com', 'mun', 'dis', 'sec'). POPULATION FIGURES: when population data is requested, the main and richest source is CENSPH (population and housing census, annual); for semi-annual estimates there is EP (population estimates, semi-annual); and there is also PMH (municipal register of inhabitants, annual). By default, choose CENSPH (or EP if semi-annual data is requested) and NEVER use PMH for population data unless the user explicitly asks for it.",
+          "inputSchema": {
+            "properties": {
+              "stat": {
+                "description": "Statistic acronym in lowercase (for example, 'afi', 'censph')",
+                "type": "string"
+              }
+            },
+            "required": ["stat"],
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:3604e3be0e3f5843a16cac89f05d07b955e42aa892ae4aa4ab2aeb91047cc230"
+        },
+        {
+          "name": "get_idescat_stat_tables",
+          "description": "Obtains the list of tables for an Idescat statistic given its official acronym. Use it when the user asks what tables or information a statistic has. The response contains a 'tables' array where each element has 'id' (numerical identifier) and 'name' (table title). Present each table as: name (id). Inform the user that they can request more details about a table by indicating its identifier.",
+          "inputSchema": {
+            "properties": {
+              "stat": {
+                "description": "Statistic acronym in lowercase (for example, 'censph', 'piba')",
+                "type": "string"
+              }
+            },
+            "required": ["stat"],
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:2336e5b9a3b60b162774683f0809ec29d972f00899bd418ec873897bb6858089"
+        },
+        {
+          "name": "get_idescat_stats",
+          "description": "Obtains the complete list of Idescat statistics (all, normalized and non-normalized). It has no parameters. The response contains a 'statistics' array where each element has: 'acronym' (lowercase acronym, e.g., 'censph', to be used as the 'stat' argument of the other tools), 'name' (title), 'description' (summary), 'datasets' (boolean), 'geo' (array of available territorial disaggregations), and 'url' (initial web address, relative to https://www.idescat.cat). Use it when the user asks what statistics are available or when a statistic needs to be found by name or territorial disaggregation. THREE KEY FIELDS to decide the flow: (1) 'datasets' — if true, the statistic is normalized and you can use the rest of the tools (get_idescat_stat_tables, get_table_metadata, get_table_data, get_table_geo, render_table); if false, ONLY the information from this tool and get_idescat_stat is available. (2) 'geo' — available levels of geographical disaggregation (e.g., 'cat'=Catalonia, 'prov'=provinces, 'at'=territorial plan areas, 'com'=counties and Aran, 'mun'=municipalities, 'dis'=districts, 'sec'=census sections). ALWAYS CHECK 'geo' before choosing a statistic for a territorial query: if the user asks for county data, choose a statistic that includes 'com' in 'geo'. (3) 'url' — home page of the statistic on the Idescat website. POPULATION FIGURES: when population data is requested, there are several sources: the main and richest is CENSPH (population and housing census, annual); for semi-annual estimates there is EP (population estimates, semi-annual); and there is also PMH (municipal register of inhabitants, annual). By default, choose CENSPH (or EP if semi-annual data is requested) and NEVER use PMH for population data unless the user explicitly asks for it.",
+          "inputSchema": {
+            "properties": {},
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:3b7a7bbd23ad7397cbb310907263101f89b9d844da5b5a703ce240b5a139ba06"
+        },
+        {
+          "name": "get_table_data",
+          "description": "Retrieves the data (values) of an Idescat table in JSON-stat format for a territorial division. You can retrieve the ENTIRE table (without filters) or only a SUBSET by passing the OPTIONAL parameters 'filters' (specific categories per dimension) and/or 'last' (number of last time periods); filtering returns smaller responses and allows querying tables that as a whole would exceed the limit. The filters use the dimension identifiers and category codes (category.index) returned by get_table_metadata (with the same 'geo'). IMPORTANT: the 20,000 cell limit is checked AFTER applying the filters; if it exceeds it, it returns a 'Dataset too large' error and you must add more filters (filters, last). You can call get_table_metadata beforehand to know the dimensions, periods, and category codes. The result contains: 'id' (dimension names in order), 'size' (number of categories per dimension), 'value' (flat array of values), 'dimension' (details per dimension: codes in category.index, labels in category.label, units in category.unit), 'role' (which dimensions are time, geo, or metric), 'status' (marks special values). HOW TO READ 'value' (row-major order): the array is FLAT; the LAST dimension of 'id' varies fastest and the first slowest. To get the value of a combination of categories (one per dimension) follow these 4 steps: (1) for each dimension, look for the POSITION (0-based) of the chosen category in dimension.{nom}.category.index — this 'index' can be a code→position object or a list of codes (the position is the index within the list); ALWAYS use this index, DO NOT assume alphabetical order or by label; (2) the stride of each dimension = product of the 'size' of the SUBSEQUENT dimensions (the last dimension has stride 1); (3) offset = sum of (position × stride) of all dimensions; (4) the searched value is value[offset]. Use the order of the 'id' array in all steps (NOT the order of keys in 'dimension'). EXAMPLE: id=['territory','sex'], size=[3,2], territory.index={BCN:0,GIR:1,LLE:2}, sex.index={M:0,F:1} → strides=[2,1]; for Girona+Woman: offset = 1×2 + 1×1 = 3, i.e., value[3]. Canonical ordering sample: https://json-stat.org/samples/order.json. WARNINGS: 1) null values (data not available) OCCUPY their position within the order: they DO NOT shift the index. 2) 'Base 2024', 'Base 2024=100' or '2024 Statistical Revision' in the title DO NOT indicate estimates; they are only the year of methodological reference and the data are real and definitive unless 'status' indicates otherwise. CALCULATIONS: never add, subtract or compute percentages yourself from the returned values; use filters ranges, sum and derive and report the server's result, checking that extension.derived (codes used, warnings) matches the question.",
+          "inputSchema": {
+            "properties": {
+              "derive": {
+                "additionalProperties": false,
+                "description": "OPTIONAL. Derived metrics computed by the server. Results carry their own unit/decimals; cells that cannot be computed are null with status d.",
+                "properties": {
+                  "difference": {
+                    "description": "\"previous\" or a period code: adds <METRIC>_DIFF versus the previous period or the given base period.",
+                    "type": "string"
+                  },
+                  "percent_change": {
+                    "description": "\"previous\" or a period code: adds <METRIC>_PCT = 100 × (value − base) / base.",
+                    "type": "string"
+                  },
+                  "share": {
+                    "description": "Dimension id: adds <METRIC>_SHARE = 100 × value / value(TOTAL of that dimension).",
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              },
+              "filters": {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "description": "OPTIONAL filter by dimension: the keys are dimension identifiers (for example, 'SEX', 'COM', 'YEAR') and the values are category codes separated by commas (for example, {\"SEX\": \"F\", \"COM\": \"01,TOTAL\"}). The codes are obtained from category.index of get_table_metadata. Without filters, the entire table is retrieved. Values can also be AGE RANGE EXPRESSIONS for dimensions coded Y000/Y005_009/Y_GE100: \">=65\", \">65\", \"<16\", \"<=15\", \"16-64\" (resolved by the server to the exact list of codes, returned in extension.derived.ranges; an error is returned if the published groups cannot represent the bound exactly).",
+                "type": "object"
+              },
+              "geo": {
+                "description": "Territorial division code (optional, defaults to 'cat' = Catalonia as a whole). Other values: 'prov', 'at', 'com', 'mun', 'dis', 'sec'. It must match the 'geo' checked in get_table_metadata. Divisions other than 'cat' usually exceed the 20,000 cell limit; in this case add filters (filters, last) to reduce the selection.",
+                "type": "string"
+              },
+              "last": {
+                "description": "OPTIONAL. Number of last time periods to retrieve (for example, 2 = the two most recent years). Do not combine it with an explicit filter on the time dimension",
+                "type": "integer"
+              },
+              "stat": {
+                "description": "Statistic acronym in lowercase (for example, 'censph', 'piba')",
+                "type": "string"
+              },
+              "sum": {
+                "description": "OPTIONAL. Dimensions to collapse by adding up their categories (e.g. [\"AGE\"]). Only for additive metrics (listed in the metric dimension's extension \"%\"); TOTAL is excluded automatically; time, metric and territorial dimensions cannot be summed. The result is a single category with code SUM; the codes summed are listed in extension.derived.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "table": {
+                "description": "Numerical identifier of the table, obtained from get_idescat_stat_tables (for example, '21654', '8607')",
+                "type": "string"
+              }
+            },
+            "required": ["stat", "table"],
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:94d1b434cba4fdbf7bb7d85854d9866adf39661f56b1da463deea900a98c2ccb"
+        },
+        {
+          "name": "get_table_geo",
+          "description": "Obtains the list of territorial divisions available for an Idescat table (for example: cat=Catalonia, com=counties and Aran, mun=municipalities, prov=provinces, at=territorial plan areas). The response contains a 'divisions' array where each element has 'id' (division code) and 'name' (label). Often it is NOT necessary to call it because get_table_metadata already returns these divisions in 'link.related'. Use it only if you need the list of divisions without having called the metadata. The 'id' code is the value to pass to the 'geo' parameter of get_table_metadata, get_table_data, or render_table. If not specified, these tools use the 'cat' division (Catalonia as a whole) by default.",
+          "inputSchema": {
+            "properties": {
+              "stat": {
+                "description": "Statistic acronym in lowercase (for example, 'censph', 'piba')",
+                "type": "string"
+              },
+              "table": {
+                "description": "Numerical identifier of the table, obtained from get_idescat_stat_tables (for example, '21654', '8607')",
+                "type": "string"
+              }
+            },
+            "required": ["stat", "table"],
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:4276c5f11566379c9f452d2b74bb620e059e668a43a0c54b0d71d684e322c0b5"
+        },
+        {
+          "name": "get_table_metadata",
+          "description": "Obtains the metadata for a specific Idescat table in JSON-stat format, given the statistic acronym (stat) and the table identifier (table). Use it when the user wants to know the details of a table: dimensions, categories available for each dimension (time periods, territorial scopes, sex, etc.), date of last update, units, etc. The acronym and identifier are previously obtained with get_idescat_stat_tables. At the end of the response, always include this Markdown link (substituting {stat} and {table} in lowercase): [See the results in this table](https://www.idescat.cat/pub/?id={stat}&n={table}). TERRITORIAL DIVISIONS: the response includes 'link.related', an array with other available territorial divisions (provinces, counties, municipalities, etc.); therefore it is often NOT necessary to call get_table_geo. If you pass the 'geo' parameter (for example geo='com' or geo='mun'), you get the metadata for that division, which includes the codes and labels (category.index / category.label) for the geographical dimension and the rest of the dimensions; use these codes directly to build the 'filters' parameter of get_table_data or render_table, without having to test and correct. SIZE CONTROL: check the 'size' field (array): the product of all its elements is the total number of cells. If it exceeds 20,000 (common case for municipal data), DO NOT retrieve the entire table; use get_table_data with filters (filters, last) to reduce the selection. If it is equal to or less than 20,000, you can retrieve it entirely with get_table_data.",
+          "inputSchema": {
+            "properties": {
+              "geo": {
+                "description": "Territorial division code (optional, defaults to 'cat' = Catalonia as a whole). Other common values: 'prov' (provinces), 'at' (territorial plan areas), 'com' (counties and Aran), 'mun' (municipalities), 'dis' (census districts), 'sec' (census sections). See the available codes in 'link.related' of the response or in get_table_geo. Pass it to obtain the category codes for that division and be able to filter later.",
+                "type": "string"
+              },
+              "stat": {
+                "description": "Statistic acronym in lowercase (for example, 'censph', 'piba')",
+                "type": "string"
+              },
+              "table": {
+                "description": "Numerical identifier of the table, obtained from get_idescat_stat_tables (for example, '21654', '8607')",
+                "type": "string"
+              }
+            },
+            "required": ["stat", "table"],
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:6df43516781efcff33ee3d6cffdd7ec23f71c3ecf8a3ca274412c650a80d1475"
+        },
+        {
+          "name": "render_table",
+          "description": "Returns a Markdown table already built with the filtered data from an Idescat table, ready to be shown to the user without having to interpret the JSON-stat. It includes the title, units, the table with category labels, status notes (e.g., provisional data), and ALWAYS a final link to the table on the Idescat website that must be kept in the response to the user. By default, it puts the time dimension in rows and the first dimension with more than one category in columns; this can be changed with the 'rows' and 'cols' parameters. All other dimensions with more than one category must be reduced to a single category with 'filters'. IMPORTANT (error self-correction): if the tool returns the error with 'pending_dimensions', DO NOT change tools: call render_table again adding the 'filters' parameter with a single category for each pending dimension (you can start from the 'suggested_filters' field that comes in the same error response, but choose the appropriate category for the user's question according to 'categories'). If it then returns the size error (maximum 40 rows × 15 columns), follow the 'how_to_fix' field: if the time dimension has too many columns, add the 'last' parameter (e.g., last: 12), and if the rows dimension is too large, filter it with 'filters' or swap 'rows'/'cols'. You can chain 'filters' and 'last' in the same call. The values '..' indicate data not available. CALCULATIONS: never add, subtract or compute percentages yourself from the returned values; use filters ranges, sum and derive and report the server's result, checking that the Calculations notes under the table (codes used, warnings) match the question.",
+          "inputSchema": {
+            "properties": {
+              "cols": {
+                "description": "Identifier of the dimension that should go in the columns (for example, 'SEX'). Default: the first dimension with more than one category that is not the row one",
+                "type": "string"
+              },
+              "derive": {
+                "additionalProperties": false,
+                "description": "OPTIONAL. Derived metrics computed by the server. Results carry their own unit/decimals; cells that cannot be computed are null with status d.",
+                "properties": {
+                  "difference": {
+                    "description": "\"previous\" or a period code: adds <METRIC>_DIFF versus the previous period or the given base period.",
+                    "type": "string"
+                  },
+                  "percent_change": {
+                    "description": "\"previous\" or a period code: adds <METRIC>_PCT = 100 × (value − base) / base.",
+                    "type": "string"
+                  },
+                  "share": {
+                    "description": "Dimension id: adds <METRIC>_SHARE = 100 × value / value(TOTAL of that dimension).",
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              },
+              "filters": {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "description": "Filters by dimension: the keys are dimension identifiers (for example, 'SEX', 'COM', 'YEAR') and the values are category codes separated by commas (for example, {\"SEX\": \"F\", \"COM\": \"01,TOTAL\"}). The codes are obtained from category.index of get_table_metadata. Values can also be AGE RANGE EXPRESSIONS for dimensions coded Y000/Y005_009/Y_GE100: \">=65\", \">65\", \"<16\", \"<=15\", \"16-64\" (resolved by the server to the exact list of codes, returned in extension.derived.ranges; an error is returned if the published groups cannot represent the bound exactly).",
+                "type": "object"
+              },
+              "geo": {
+                "description": "Territorial division code, obtained from get_table_geo or from 'link.related' (per example, 'cat', 'com', 'mun', 'prov'). Default: 'cat' (Catalonia as a whole)",
+                "type": "string"
+              },
+              "last": {
+                "description": "Number of last time periods to retrieve (for example, 2 = the two most recent years). Do not combine it with an explicit filter on the time dimension",
+                "type": "integer"
+              },
+              "rows": {
+                "description": "Identifier of the dimension that should go in the rows (for example, 'YEAR'). Default: the time dimension (more periods fit in the rows than in the columns)",
+                "type": "string"
+              },
+              "stat": {
+                "description": "Statistic acronym in lowercase (for example, 'censph', 'piba')",
+                "type": "string"
+              },
+              "sum": {
+                "description": "OPTIONAL. Dimensions to collapse by adding up their categories (e.g. [\"AGE\"]). Only for additive metrics (listed in the metric dimension's extension \"%\"); TOTAL is excluded automatically; time, metric and territorial dimensions cannot be summed. The result is a single category with code SUM; the codes summed are listed in extension.derived.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "table": {
+                "description": "Numerical identifier of the table, obtained from get_idescat_stat_tables (for example, '21654', '8607')",
+                "type": "string"
+              }
+            },
+            "required": ["stat", "table"],
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:7c01454982f492c72965a85217692af4f60d6b4eb7cbf76d82b70c2df9925b9a"
+        }
+      ],
+      "resources": [
+        {
+          "uri": "idescat://glossary/geo",
+          "name": "geo-glossary",
+          "title": "Territorial codes glossary (geo)",
+          "description": "Territorial division codes used by the 'geo' parameter (cat, prov, at, com, mun, dis, sec) with their description.",
+          "mimeType": "text/markdown",
+          "digest": "sha256:d5d6fa91a60a8e16a1c17ec2844430dd70ca3e39b0b7092fe1c020fd3801ee2b"
+        },
+        {
+          "uri": "idescat://instructions",
+          "name": "instructions",
+          "title": "Usage guidelines for Idescat MCP",
+          "description": "Server usage guide (statistic selection, data retrieval flow, JSON-stat interpretation, server-side calculations, accuracy, and source attribution). Same content as the 'instructions' header in the handshake.",
+          "mimeType": "text/markdown",
+          "digest": "sha256:d86f82c85527914f890551c9f8af61a1368a842957520df3d9248527de646991"
+        },
+        {
+          "uri": "idescat://catalog/stats",
+          "name": "stats-catalog",
+          "title": "Idescat statistics catalog",
+          "description": "Complete list of statistics (id, name, description, datasets, geo, url). Equivalent to the get_idescat_stats tool but attachable as context.",
+          "mimeType": "application/json",
+          "digest": "sha256:a0cb2fe1187df0b26ee52fe5473840b0afa5655d54797e0769f8f40b7c7994e2"
+        }
+      ],
+      "resourceTemplates": [
+        {
+          "uriTemplate": "idescat://stat/{stat}",
+          "name": "statistic",
+          "title": "Statistic information",
+          "description": "Statistic metadata by acronym (e.g., idescat://stat/censph): name, description, datasets, geo, url, and last update.",
+          "mimeType": "application/json",
+          "digest": "sha256:e6e531293917d30e180b4ff8621e3aa2812ff0e9c2a7cfc8154c2d05ecde932a"
+        },
+        {
+          "uriTemplate": "idescat://stat/{stat}/tables",
+          "name": "statistic-tables",
+          "title": "Statistic tables",
+          "description": "List of tables for a statistic by acronym (e.g., idescat://stat/censph/tables): identifier and name of each table.",
+          "mimeType": "application/json",
+          "digest": "sha256:69f53ad6b586afac2e8798546c21493e45d6b06abfb62392eb5d0ad13cefd257"
+        },
+        {
+          "uriTemplate": "idescat://table/{stat}/{table}/data",
+          "name": "table-data",
+          "title": "Table data (JSON-stat)",
+          "description": "Complete table data in JSON-stat format for Catalonia as a whole (e.g., idescat://table/censph/538/data). Returns an error if the table exceeds 20,000 cells; in this case, use the get_table_data tool with filters (filters, last).",
+          "mimeType": "application/json",
+          "digest": "sha256:f56394f7b34b24b481ab39a6b0eb19da3a86d001894745c32ee8f8b8e92b9c1a"
+        },
+        {
+          "uriTemplate": "idescat://table/{stat}/{table}",
+          "name": "table-metadata",
+          "title": "Table metadata",
+          "description": "JSON-stat metadata of a table (e.g., idescat://table/censph/538): dimensions, categories, units, and related territorial divisions.",
+          "mimeType": "application/json",
+          "digest": "sha256:ebed35e960f42bcd6b18b4617d62f5595aa3a791507529210d478aa878ff4666"
+        }
+      ],
+      "digest": "sha256:208e863ecac3cffa0d4c4f9083e5bc0bdbd04219c8ccf192df3dc3150a2bc679"
+    }
+  }
+}

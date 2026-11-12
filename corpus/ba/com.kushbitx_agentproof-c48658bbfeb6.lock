@@ -1,0 +1,458 @@
+{
+  "lockfileVersion": 2,
+  "subjects": {
+    "com.kushbitx/agentproof": {
+      "kind": "mcp-server",
+      "source": {
+        "client": "manual",
+        "file": "registry.modelcontextprotocol.io"
+      },
+      "transport": {
+        "type": "http",
+        "url": "https://kushbitx.com/mcp"
+      },
+      "protocol": {
+        "era": "legacy",
+        "version": "2025-11-25"
+      },
+      "serverInfo": {
+        "name": "kushbitx-agentproof",
+        "title": "KushBitx",
+        "version": "1.0.0",
+        "websiteUrl": "https://kushbitx.com/developers"
+      },
+      "capabilities": {
+        "tools": {
+          "listChanged": false
+        }
+      },
+      "instructions": "Use spendguard_evaluate (free) before an agent pays. Paid tools (quick_check, token_risk, preflight, verify_payment) return an x402 payment requirement in _meta[\"x402/error\"]; retry with _meta[\"x402/payment\"] to receive the report. KushBitx never signs, holds keys or moves funds. INCOMPLETE means missing evidence, never zero risk.",
+      "tools": [
+        {
+          "name": "kushbitx_preflight",
+          "title": "KushBitx Preflight",
+          "description": "One check before money moves on Base. Simulates the unsigned transaction, decodes approvals and transfers, screens the token and the recipient or spender, and applies a protected SpendGuard policy when given. Returns ALLOW, REVIEW or BLOCK with sourced findings. Fail-closed: no ALLOW unless every check ran. Does not detect prompt injection; Protected SpendGuard can cap what an agent pays, but does not detect it either. Paid tool: 0.005 USDC per call on Base via x402 (exact scheme). An unpaid call returns the payment requirement and charges nothing. Sign only if verdict is ALLOW, before expiresAt, and the transaction you sign is exactly the one you sent (same transactionDigest, chainId 8453). In code: canSign(report, transaction) from @kushbitx/sdk.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "amount": {
+                "description": "Amount in token units, for the record.",
+                "pattern": "^[0-9]+(\\.[0-9]{1,18})?$",
+                "type": "string"
+              },
+              "chainId": {
+                "description": "Base mainnet.",
+                "enum": [8453],
+                "type": "integer"
+              },
+              "data": {
+                "description": "Unsigned calldata.",
+                "pattern": "^0x([a-fA-F0-9]{2})*$",
+                "type": "string"
+              },
+              "expectedRecipient": {
+                "description": "Swap: who must receive the output (default: from). ETH or ERC-20 transfer: who must be paid; a different recipient is BLOCK (EXPECTED_RECIPIENT_MISMATCH).",
+                "pattern": "^0x[a-fA-F0-9]{40}$",
+                "type": "string"
+              },
+              "expectedTokenOut": {
+                "description": "Swap: token the swap must deliver; 0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE for native ETH. For buy_token, tokenAddress is used when this is absent.",
+                "pattern": "^0x[a-fA-F0-9]{40}$",
+                "type": "string"
+              },
+              "from": {
+                "description": "Wallet that will sign. Required in practice: without it the verdict is REVIEW (sender_unknown), because the transaction cannot be simulated from the signing wallet.",
+                "pattern": "^0x[a-fA-F0-9]{40}$",
+                "type": "string"
+              },
+              "intent": {
+                "description": "What the agent means to do.",
+                "enum": ["swap", "transfer", "approve", "buy_token", "contract_call"],
+                "type": "string"
+              },
+              "minAmountOut": {
+                "description": "Swap: smallest acceptable output, in token units (for example 25.5).",
+                "pattern": "^[0-9]+(\\.[0-9]{1,36})?$",
+                "type": "string"
+              },
+              "policy": {
+                "additionalProperties": false,
+                "description": "Protected SpendGuard policy (send the agent key as Authorization: Bearer). Base USDC transfers only.",
+                "properties": {
+                  "agentId": {
+                    "type": "string"
+                  },
+                  "policyId": {
+                    "type": "string"
+                  },
+                  "requestId": {
+                    "type": "string"
+                  }
+                },
+                "required": ["agentId", "policyId", "requestId"],
+                "type": "object"
+              },
+              "to": {
+                "description": "Transaction destination (contract or wallet).",
+                "pattern": "^0x[a-fA-F0-9]{40}$",
+                "type": "string"
+              },
+              "tokenAddress": {
+                "description": "Token to screen, when it is not the transaction destination (for example the token being bought).",
+                "pattern": "^0x[a-fA-F0-9]{40}$",
+                "type": "string"
+              },
+              "value": {
+                "description": "Native ETH value in wei.",
+                "pattern": "^[0-9]+$",
+                "type": "string"
+              }
+            },
+            "required": ["chainId", "to"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": true,
+            "title": "KushBitx Preflight"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "meta": {
+            "agents-x402/paymentRequired": true,
+            "agents-x402/priceUSD": 0.005
+          },
+          "digest": "sha256:844cf58c05803e2710a365fb128c1f84f2eefe39144956e9b6eb6a2cd8cde216"
+        },
+        {
+          "name": "preflight",
+          "title": "Simulation Check",
+          "description": "Simulate one unsigned Base transaction before an agent signs it. Runs eth_call and gas estimation on current chain state, decodes the intent (ERC-20 transfer, approve, NFT setApprovalForAll), flags unlimited approvals, calldata sent to a non-contract, zero-address targets, reverts and destination risk labels such as phishing or sanctions. Returns ALLOW, WARN, BLOCK or INCOMPLETE with findings. No key or signed transaction is requested. Paid tool: 0.001 USDC per call on Base via x402 (exact scheme). An unpaid call returns the payment requirement and charges nothing.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "chain": {
+                "enum": ["base"],
+                "type": "string"
+              },
+              "data": {
+                "description": "Unsigned calldata.",
+                "pattern": "^0x([a-fA-F0-9]{2})*$",
+                "type": "string"
+              },
+              "from": {
+                "description": "Optional sender used for simulation.",
+                "pattern": "^0x[a-fA-F0-9]{40}$",
+                "type": "string"
+              },
+              "to": {
+                "description": "Transaction destination.",
+                "pattern": "^0x[a-fA-F0-9]{40}$",
+                "type": "string"
+              },
+              "valueWei": {
+                "description": "Native ETH value in wei.",
+                "pattern": "^[0-9]+$",
+                "type": "string"
+              }
+            },
+            "required": ["chain", "to"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": true,
+            "title": "Simulation Check"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "meta": {
+            "agents-x402/paymentRequired": true,
+            "agents-x402/priceUSD": 0.001
+          },
+          "digest": "sha256:2ffe4f71f67e0b2e71734b61f7bba3d646dc5efd0f0d0783505da01195b40402"
+        },
+        {
+          "name": "quick_check",
+          "title": "Quick Check",
+          "description": "Fast pre-payment sanity check for agents on Base: confirms the RPC reports Base mainnet (chain ID 8453) and that the official USDC contract has deployed code. No request body. Returns PASS or FAIL with both checks and a timestamp. It is not a token-risk report, transaction simulation or payment proof. Paid tool: 0.001 USDC per call on Base via x402 (exact scheme). An unpaid call returns the payment requirement and charges nothing.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {},
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": true,
+            "title": "Quick Check"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "meta": {
+            "agents-x402/paymentRequired": true,
+            "agents-x402/priceUSD": 0.001
+          },
+          "digest": "sha256:e744aee5c21e08a5c741aeff4657a24e70788c3f2643eccaa1fd0006c64fc05d"
+        },
+        {
+          "name": "signature_check",
+          "title": "Signature Check",
+          "description": "Check an EIP-712 signature request before an agent signs it: EIP-3009 (x402 payments), EIP-2612 Permit and Permit2. Checks the chain, the token domain, payTo and amount, the spender, unlimited amounts and long validity. Returns ALLOW, REVIEW or BLOCK bound to the EIP-712 digest. Unknown typed data is REVIEW. Paid tool: 0.003 USDC per call on Base via x402 (exact scheme). An unpaid call returns the payment requirement and charges nothing. Sign only if verdict is ALLOW, before expiresAt, for the same signer, and the typed data you sign is exactly the one you sent (same typedDataDigest, chainId 8453 in the request and in typedData.domain). In code: canSignTypedData(report, { chainId, signer, typedData }) from @kushbitx/sdk.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "chainId": {
+                "const": 8453,
+                "type": "integer"
+              },
+              "expectedAmount": {
+                "description": "EIP-3009: the exact amount in atomic units.",
+                "pattern": "^[0-9]{1,78}$",
+                "type": "string"
+              },
+              "expectedPayTo": {
+                "description": "EIP-3009: who must be paid.",
+                "pattern": "^0x[a-fA-F0-9]{40}$",
+                "type": "string"
+              },
+              "expectedSpender": {
+                "description": "Permit and Permit2: who may spend.",
+                "pattern": "^0x[a-fA-F0-9]{40}$",
+                "type": "string"
+              },
+              "signer": {
+                "pattern": "^0x[a-fA-F0-9]{40}$",
+                "type": "string"
+              },
+              "typedData": {
+                "description": "The exact EIP-712 object the agent is asked to sign: domain, types, primaryType, message.",
+                "type": "object"
+              }
+            },
+            "required": ["chainId", "signer", "typedData"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": true,
+            "title": "Signature Check"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "meta": {
+            "agents-x402/paymentRequired": true,
+            "agents-x402/priceUSD": 0.003
+          },
+          "digest": "sha256:114b0d522c034d35ec2e5e6640d5903a4ab79e90e3c01ee1d927d4f58a13eaa0"
+        },
+        {
+          "name": "spendguard_evaluate",
+          "title": "SpendGuard policy check",
+          "description": "Free. Check a proposed Base USDC payment against a spending policy you supply (per-transaction limit, daily budget, human-approval threshold, allowed recipients) before money moves. Returns APPROVE, HUMAN_APPROVAL or BLOCK with findings. Advisory only: it never signs, holds keys or moves funds.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "agentId": {
+                "type": "string"
+              },
+              "amount": {
+                "type": "string"
+              },
+              "asset": {
+                "enum": ["USDC"],
+                "type": "string"
+              },
+              "chain": {
+                "enum": ["base"],
+                "type": "string"
+              },
+              "context": {
+                "additionalProperties": false,
+                "properties": {
+                  "agentProofDecision": {
+                    "enum": ["ALLOW", "WARN", "BLOCK", "INCOMPLETE", "UNKNOWN"],
+                    "type": "string"
+                  },
+                  "repeatCount": {
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "type": "object"
+              },
+              "policy": {
+                "additionalProperties": false,
+                "properties": {
+                  "allowedRecipients": {
+                    "items": {
+                      "pattern": "^0x[a-fA-F0-9]{40}$",
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "blockUnknownRecipients": {
+                    "type": "boolean"
+                  },
+                  "maxPerTransaction": {
+                    "type": "string"
+                  },
+                  "maxRepeats": {
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "remainingDailyBudget": {
+                    "type": "string"
+                  },
+                  "requireHumanAbove": {
+                    "type": "string"
+                  }
+                },
+                "required": ["allowedRecipients", "blockUnknownRecipients", "maxPerTransaction", "maxRepeats", "remainingDailyBudget", "requireHumanAbove"],
+                "type": "object"
+              },
+              "recipient": {
+                "pattern": "^0x[a-fA-F0-9]{40}$",
+                "type": "string"
+              },
+              "requestId": {
+                "type": "string"
+              }
+            },
+            "required": ["agentId", "amount", "asset", "chain", "policy", "recipient", "requestId"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": true,
+            "title": "SpendGuard policy check"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:7be795b1c18d723283534d8c31ae08222cf739671b4e5b51509afbaba4afa359"
+        },
+        {
+          "name": "token_risk",
+          "title": "Token Risk",
+          "description": "Token-risk report for one Base ERC-20 contract. Checks whether the token can be sold (honeypot simulation), buy/sell/transfer tax, owner privileges (mint, pause, blacklist, balance changes, proxy upgrades), holder concentration and DEX liquidity. Returns ALLOW, WARN, BLOCK or INCOMPLETE with scored findings and per-check coverage. INCOMPLETE means required evidence was unavailable, never zero risk. Read-only: never signs or trades. Paid tool: 0.001 USDC per call on Base via x402 (exact scheme). An unpaid call returns the payment requirement and charges nothing.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "address": {
+                "description": "Base token contract address.",
+                "pattern": "^0x[a-fA-F0-9]{40}$",
+                "type": "string"
+              },
+              "chain": {
+                "description": "Blockchain network.",
+                "enum": ["base"],
+                "type": "string"
+              }
+            },
+            "required": ["address", "chain"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": true,
+            "title": "Token Risk"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "meta": {
+            "agents-x402/paymentRequired": true,
+            "agents-x402/priceUSD": 0.001
+          },
+          "digest": "sha256:f01fdecaa798439cbd9211fb9d2b6c9e9ccea8cf7e783310ac87d3c7e9324359"
+        },
+        {
+          "name": "verify_payment",
+          "title": "Payment Proof",
+          "description": "Verify Base USDC payment by transaction hash: did my x402 payment settle? Check recipient and amount (and optional sender) against the official USDC Transfer logs before releasing goods or credit. Returns VERIFIED, MISMATCH, FAILED or PENDING_OR_NOT_FOUND with block, confirmations, the matching transfer and a Basescan link. Read-only: never moves funds. Paid tool: 0.00288 USDC per call on Base via x402 (exact scheme). An unpaid call returns the payment requirement and charges nothing.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "chain": {
+                "enum": ["base"],
+                "type": "string"
+              },
+              "expectedAmount": {
+                "description": "Expected USDC amount.",
+                "pattern": "^[0-9]+(\\.[0-9]{1,6})?$",
+                "type": "string"
+              },
+              "expectedFrom": {
+                "pattern": "^0x[a-fA-F0-9]{40}$",
+                "type": "string"
+              },
+              "expectedTo": {
+                "pattern": "^0x[a-fA-F0-9]{40}$",
+                "type": "string"
+              },
+              "txHash": {
+                "pattern": "^0x[a-fA-F0-9]{64}$",
+                "type": "string"
+              }
+            },
+            "required": ["chain", "expectedAmount", "expectedTo", "txHash"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": true,
+            "title": "Payment Proof"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "meta": {
+            "agents-x402/paymentRequired": true,
+            "agents-x402/priceUSD": 0.00288
+          },
+          "digest": "sha256:50802745995fb014f3ff8176bd7a5bea41fe40ba09943b3ef2cb0d507919673f"
+        }
+      ],
+      "digest": "sha256:62d81f5e0a1d887627b4dd80793bf85befbcd95b655ae86ffc497df0f143cae2"
+    }
+  }
+}

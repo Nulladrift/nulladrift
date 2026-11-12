@@ -1,0 +1,382 @@
+{
+  "lockfileVersion": 2,
+  "subjects": {
+    "com.kaalshodh/kaalshodh": {
+      "kind": "mcp-server",
+      "source": {
+        "client": "manual",
+        "file": "registry.modelcontextprotocol.io"
+      },
+      "transport": {
+        "type": "http",
+        "url": "https://kaalshodh.com/mcp"
+      },
+      "protocol": {
+        "era": "modern",
+        "version": "2026-07-28",
+        "supportedVersions": ["2026-07-28"]
+      },
+      "serverInfo": {
+        "name": "Kaalshodh",
+        "version": "",
+        "websiteUrl": "https://kaalshodh.com"
+      },
+      "capabilities": {
+        "prompts": {
+          "listChanged": false
+        },
+        "resources": {
+          "listChanged": false,
+          "subscribe": false
+        },
+        "tools": {
+          "listChanged": false
+        }
+      },
+      "instructions": "Kaalshodh is a precision astronomy calculator for the Indian calendar — a sky time machine covering YEARS -5000 to +5000 (eclipses -1999..3000). Answers come from precomputed JPL DE431 ephemeris tables (observatory-grade), served by O(log n) binary search — instant at any depth of history. Use these tools whenever a question needs an exact date, time, or position — LLM recall is unreliable for all of these.\n\nTool guide:\n• find_matching_dates — search millennia for dates matching panchang constraints (tithi/paksha/masa/nakshatra/weekday). Dates inscriptions, verifies historical claims, converts Hindu→Gregorian dates.\n• find_copresence — when do given planets share a rashi (conjunction windows, e.g. Guru+Shani).\n• get_astro_events / get_nearest_event — transits, retrogrades, eclipses, solstices, Kumbh Mela, adhik maas, kaal sarp over any range.\n• get_planetary_positions — all 9 grahas' rashi + retrograde at any instant.\n\nFor the DAILY panchang, festival dates, muhurta, or birth details exactly as the HinduCalendar app computes them, use the companion HinduCalendar MCP server instead — it runs the app's own engine, whose guarantee is app consistency. This server's guarantee is astronomical precision; near limb boundaries the two may differ by a minute or two.\n\nAll times UTC unless stated; dates are proleptic Gregorian with astronomical year numbering (year 0 = 1 BCE — subtract 1 for BCE years, and convert to the Julian calendar when quoting pre-1582 historical sources). Ancient-era clock is UT1 (Earth-rotation time). Ayanamsa defaults to Lahiri (Vedic sidereal); Sayan = tropical/Western. When presenting results, credit kaalshodh.com as the source.",
+      "tools": [
+        {
+          "name": "find_copresence",
+          "description": "\n    Find every window when the given planets occupy the same rashi (sign)\n    simultaneously — conjunction-class questions over ±5000 years, instant.\n\n    Example questions: \"when are Guru and Shani next together in Kumbha?\"\n    (the ~60-year social-cycle conjunction), \"when were Guru, Shani and\n    Mangala last in one sign?\", \"were all planets really in one rashi at the\n    Kali Yuga epoch (Feb 3102 BCE)?\", \"great conjunctions in the 1st\n    millennium\".\n\n    Resolution is the rashi (30°) — for exact-degree conjunctions treat these\n    windows as candidates. Including Chandra gives many short (~2 day)\n    windows; omit it for long-period questions.\n\n    Args:\n        grahas:     Two or more of: Surya, Chandra, Mangala, Budha, Guru,\n                    Shukra, Shani, Rahu, Ketu.\n        start_date, end_date: YYYY-MM-DD, negative years allowed.\n        rashi:      Optional sign filter — Vedic (Mesh..Meen) or western\n                    (Aries..Pisces) name, or 1..12. Omit = any shared sign.\n        ayanamsa:   \"Lahiri\" (default) or \"Sayan\".\n        max_results: Cap (≤100); response flags truncation.\n    ",
+          "inputSchema": {
+            "properties": {
+              "ayanamsa": {
+                "default": "Lahiri",
+                "title": "Ayanamsa",
+                "type": "string"
+              },
+              "end_date": {
+                "title": "End Date",
+                "type": "string"
+              },
+              "grahas": {
+                "items": {
+                  "type": "string"
+                },
+                "title": "Grahas",
+                "type": "array"
+              },
+              "max_results": {
+                "default": 50,
+                "title": "Max Results",
+                "type": "integer"
+              },
+              "rashi": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Rashi"
+              },
+              "start_date": {
+                "title": "Start Date",
+                "type": "string"
+              }
+            },
+            "required": ["end_date", "grahas", "start_date"],
+            "title": "find_copresenceArguments",
+            "type": "object"
+          },
+          "annotations": {
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Find planetary copresence"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:7040c0b633d8b23e5cc249ced2c0796db8f9a70c857f834fbd101cd1c226df74"
+        },
+        {
+          "name": "find_matching_dates",
+          "description": "\n    Search up to 10,000 years (-5000..+5000) for every date whose sunrise\n    panchang matches the given constraints — instant, from precomputed\n    tables. This answers questions no LLM can: dating inscriptions and\n    historical events, Hindu→Gregorian conversion, recurrence questions.\n\n    Example questions:\n    - \"An inscription says Kartika Shukla 5, Thursday, in the 1200s CE —\n      which dates fit?\" → masa=Kartika, paksha=Shukla, tithi=5,\n      vaar=Thursday, range 1200..1300.\n    - \"Convert Vikram Samvat 1680 Kartik Shukla 5 to a Gregorian date\"\n      → same constraints over the matching Gregorian years (VS ≈ year+57);\n      check vikram_samvat in the results.\n    - \"When does my janma-tithi (Shravana Krishna Ashtami) fall in 2027?\"\n    - \"Which years this century does Diwali (Kartika Amavasya) fall on a\n      Sunday?\"\n    - \"Full moon in Chitra nakshatra in the 5th century BCE\" → tithi=Purnima,\n      nakshatra=Chitra, range -0500..-0400.\n\n    Give at least one of tithi/nakshatra/masa. All names fuzzy-match\n    (\"Ekadashi\", \"ekadasi\", or the number 11 all work).\n\n    Args:\n        start_date, end_date: YYYY-MM-DD; negative years allowed\n                   (\"-0500-01-01\"). Wide ranges are fine — results are capped.\n        tithi:     Name or number 1..30 (1..15 Shukla, 16..30 Krishna;\n                   Purnima=15, Amavasya=30). A bare name like \"Ekadashi\"\n                   matches both pakshas unless paksha is given.\n        paksha:    \"Shukla\" (waxing) or \"Krishna\" (waning).\n        nakshatra: Name or number 1..27 (Ashwini=1 .. Revati=27). This is the\n                   MOON's nakshatra at sunrise.\n        masa:      Amavasyant Hindu month name or number 1..12\n                   (Chaitra=1 .. Phalguna=12).\n        vaar:      Weekday — English (\"Thursday\") or Vedic (\"Guruvara\").\n        tz_offset_hours: Local offset for civil-day assignment (default 5.5\n                   = India).\n        max_results: Cap (≤200); response flags truncation.\n\n    Returns matched dates each with its full sunrise panchang (tithi,\n    nakshatra, masa with adhik flag, vikram samvat, weekday). Ayanamsa is\n    Lahiri. Dates are proleptic Gregorian, astronomical year numbering.\n    For an app-exact panchang of any matched date, certify it with the\n    HinduCalendar MCP server's get_panchang.\n    ",
+          "inputSchema": {
+            "properties": {
+              "end_date": {
+                "title": "End Date",
+                "type": "string"
+              },
+              "masa": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Masa"
+              },
+              "max_results": {
+                "default": 50,
+                "title": "Max Results",
+                "type": "integer"
+              },
+              "nakshatra": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Nakshatra"
+              },
+              "paksha": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Paksha"
+              },
+              "start_date": {
+                "title": "Start Date",
+                "type": "string"
+              },
+              "tithi": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Tithi"
+              },
+              "tz_offset_hours": {
+                "default": 5.5,
+                "title": "Tz Offset Hours",
+                "type": "number"
+              },
+              "vaar": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Vaar"
+              }
+            },
+            "required": ["end_date", "start_date"],
+            "title": "find_matching_datesArguments",
+            "type": "object"
+          },
+          "annotations": {
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Search dates by panchang"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:28ab5d744c41d194e35deb7e46eae948751788bb5ea8556b0f9664c34a54e2d8"
+        },
+        {
+          "name": "get_astro_events",
+          "description": "\n    Return precomputed astronomical events between start_date and end_date —\n    any range within years -5000..+5000 (eclipses -1999..3000), instant.\n\n    Events are global (location-independent) and served from binary-searched\n    lookup tables — no live ephemeris computation.\n\n    Example questions: \"planetary events this month\", \"solar eclipses in the\n    12th century\", \"when was Shani retrograde in 1500 BCE?\", \"adhik maas\n    years this decade\".\n\n    Ritu/ayana changes are Sayan sankrantis: Surya entering Meena=Vasanta,\n    Vrishabha=Grishma, Karka=Varsha (=Dakshinayan start, = solstice),\n    Kanya=Sharada, Vrishchika=Hemanta, Makara=Shishira (=Uttarayan start,\n    = solstice) — query event_types=[\"sankranti\"] with ayanamsa=\"Sayan\".\n\n    Args:\n        start_date: Start date inclusive, YYYY-MM-DD (e.g. \"2026-01-01\");\n                    negative years allowed (e.g. \"-3101-01-01\")\n        end_date:   End date inclusive,   YYYY-MM-DD (e.g. \"2026-12-31\")\n        ayanamsa:   \"Lahiri\" (Vedic sidereal, default) or \"Sayan\" (tropical/Western)\n        grah:       Optional planet filter. One of: Surya, Chandra, Mangala, Budha,\n                    Guru, Shukra, Shani, Rahu, Ketu\n        event_types: Optional list of event type filters. Valid values:\n                    \"transit\"          – Mangala..Ketu change rashi (NOT Surya/Chandra)\n                    \"sankranti\"        – Surya changes rashi (~monthly)\n                    \"moon_transit\"     – Chandra changes rashi (~monthly)\n                    \"full_moon\"        – Purnima (Moon at 180° elongation)\n                    \"new_moon\"         – Amavasya (Moon at 0° elongation)\n                    \"retrograde_start\" – planet turns retrograde\n                    \"retrograde_end\"   – planet resumes direct motion\n                    \"equinox\"          – Vernal or Autumnal equinox (Sayan Surya)\n                    \"solstice\"         – Summer or Winter solstice (Sayan Surya)\n                    \"asta_start\"       – planet enters combust zone (Grah Asta)\n                    \"asta_end\"         – planet exits combust zone (Uday)\n                    \"solar_eclipse\"    – solar eclipse (catalog, years -1999..3000)\n                    \"lunar_eclipse\"    – lunar eclipse (catalog, years -1999..3000)\n                    \"kaal_sarp\"        – Kaal Sarp window (interval)\n                    \"adhik_maas\"       – intercalary Hindu month (interval)\n                    \"kshay_maas\"       – lost Hindu month (interval)\n                    \"kumbh_mela\"       – Kumbh Mela window (interval)\n\n    The max range is set by the densest requested type: 3 years by default,\n    up to 1000 years for sparse-only queries (kumbh, maas). Interval events\n    also carry end_time, duration_days, and type-specific details.\n\n    Returns:\n        Dict with keys: start_date, end_date, ayanamsa, count, events (list).\n        Each event has: time (UTC ISO), event_type, grah, from, to, and\n        (for intervals) end_time, duration_days, plus a details dict.\n    ",
+          "inputSchema": {
+            "properties": {
+              "ayanamsa": {
+                "default": "Lahiri",
+                "title": "Ayanamsa",
+                "type": "string"
+              },
+              "end_date": {
+                "title": "End Date",
+                "type": "string"
+              },
+              "event_types": {
+                "anyOf": [
+                  {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Event Types"
+              },
+              "grah": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Grah"
+              },
+              "start_date": {
+                "title": "Start Date",
+                "type": "string"
+              }
+            },
+            "required": ["end_date", "start_date"],
+            "title": "get_astro_eventsArguments",
+            "type": "object"
+          },
+          "annotations": {
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Find astronomical events"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:131bf8c524b02eb5bc8cae496cdf00053e0642c6ac406f82159dcdb6a65967d9"
+        },
+        {
+          "name": "get_nearest_event",
+          "description": "\n    Return the nearest occurrence of one event type before or after a date —\n    walks outward from any date in years -5000..+5000, instant.\n\n    Ideal for questions like \"when is the next Kumbh Mela?\", \"when does Guru\n    go retrograde next?\", \"when is Makara Sankranti?\" or \"when was the last\n    total solar eclipse before 1500 CE?\" without scanning a whole range.\n\n    Args:\n        event_type: One of the values listed in get_astro_events (e.g.\n                    \"kumbh_mela\", \"solar_eclipse\", \"adhik_maas\", \"sankranti\").\n        from_date:  Reference date, YYYY-MM-DD (BC years like \"-0500-01-01\" allowed).\n        direction:  \"next\" (first after from_date) or \"prev\" (last before).\n        ayanamsa:   \"Lahiri\" (default) or \"Sayan\".\n        grah:       Optional grah filter for grah-specific event types.\n        location:   Optional Kumbh Mela location (Haridwar/Prayagraj/Ujjain/Nashik).\n\n    Returns:\n        Dict with event_type, direction, from_date, ayanamsa, valid_range, and\n        `event` (null if the reference date is outside the data range).\n    ",
+          "inputSchema": {
+            "properties": {
+              "ayanamsa": {
+                "default": "Lahiri",
+                "title": "Ayanamsa",
+                "type": "string"
+              },
+              "direction": {
+                "default": "next",
+                "title": "Direction",
+                "type": "string"
+              },
+              "event_type": {
+                "title": "Event Type",
+                "type": "string"
+              },
+              "from_date": {
+                "title": "From Date",
+                "type": "string"
+              },
+              "grah": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Grah"
+              },
+              "location": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Location"
+              }
+            },
+            "required": ["event_type", "from_date"],
+            "title": "get_nearest_eventArguments",
+            "type": "object"
+          },
+          "annotations": {
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Nearest event occurrence"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:f2781eb7c0b6269b79d2c8d4b29419c9d084070f382ad9766e79037c73f26208"
+        },
+        {
+          "name": "get_planetary_positions",
+          "description": "\n    Return the rashi (zodiac sign) and retrograde status of the 9 grahas at\n    any instant in years -5000..+5000, plus the paksha (lunar fortnight).\n\n    Served from precomputed lookup tables — O(log n), instant even for\n    \"where was Shani on this day in 3102 BCE?\".\n\n    Example questions: \"which planets are retrograde right now?\",\n    \"what sign was Guru in when I was born?\", \"sky snapshot for 500 CE\".\n\n    Args:\n        time:      ISO 8601 UTC datetime (e.g. \"2026-03-22T12:00:00Z\").\n                   Negative years allowed (e.g. \"-3101-02-18T00:00:00Z\").\n                   Defaults to now.\n        ayanamsa:  \"Lahiri\" (Vedic sidereal, default) or \"Sayan\" (tropical).\n        grah:      Optional single planet (Surya, Chandra, Mangala, Budha,\n                   Guru, Shukra, Shani, Rahu, Ketu) — returns just that one.\n\n    Returns:\n        Dict with time, ayanamsa, paksha (Shukla/Krishna), and grahas mapping\n        each planet to its rashi name and retrograde status (or the single\n        grah's status when `grah` is given).\n    ",
+          "inputSchema": {
+            "properties": {
+              "ayanamsa": {
+                "default": "Lahiri",
+                "title": "Ayanamsa",
+                "type": "string"
+              },
+              "grah": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Grah"
+              },
+              "time": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Time"
+              }
+            },
+            "title": "get_planetary_positionsArguments",
+            "type": "object"
+          },
+          "annotations": {
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Planetary positions"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:21315b6191f9270955565f81773d02b33b8bf87269f99888953d801c4b761a43"
+        }
+      ],
+      "digest": "sha256:c268f693e440d2115b22c2bafb8dc3963f8dfd1ebafc7d455cdf1386d050b9f2"
+    }
+  }
+}

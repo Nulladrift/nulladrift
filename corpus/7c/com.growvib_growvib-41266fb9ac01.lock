@@ -1,0 +1,426 @@
+{
+  "lockfileVersion": 2,
+  "subjects": {
+    "com.growvib/growvib": {
+      "kind": "mcp-server",
+      "source": {
+        "client": "manual",
+        "file": "registry.modelcontextprotocol.io"
+      },
+      "transport": {
+        "type": "http",
+        "url": "https://api.growvib.com/mcp-public"
+      },
+      "protocol": {
+        "era": "legacy",
+        "version": "2025-11-25"
+      },
+      "serverInfo": {
+        "name": "growvib-mcp-public",
+        "version": "0.1.0"
+      },
+      "capabilities": {
+        "tools": {}
+      },
+      "tools": [
+        {
+          "name": "create_checkout",
+          "description": "Create a checkout session: a payment link a PERSON opens and pays in their own USDC wallet (Base or Solana), for when you cannot sign a payment yourself or the user wants to pay with their own wallet. Pick the service with search_catalog or recommend_service and price it with get_quote first, then call this with service_id, quantity and link. The result carries page_url (give it to the person), the exact amount, expires_at (the price is held until then, 30 minutes by default) and a token for get_checkout_status. Creating a session moves no money and reserves nothing: nothing is charged until the person signs in their wallet, and an unpaid session simply expires. Each call opens a NEW session, so call it once per intended order and reuse the token you were given. Prefer create_paid_order when you hold a wallet and should pay yourself.",
+          "inputSchema": {
+            "properties": {
+              "external_ref": {
+                "description": "Optional reference of your own (an order or conversation id, at most 128 characters), echoed by get_checkout_status.",
+                "type": "string"
+              },
+              "link": {
+                "description": "The target link the order is delivered to.",
+                "type": "string"
+              },
+              "quantity": {
+                "description": "Quantity to order.",
+                "type": "number"
+              },
+              "return_url": {
+                "description": "Optional https URL shown to the person as a link after paying (where they came from). Never followed by the server.",
+                "type": "string"
+              },
+              "service_id": {
+                "description": "The service id from search_catalog.",
+                "type": "string"
+              },
+              "service_option_id": {
+                "description": "Optional specific service option id; defaults to the service's primary option.",
+                "type": "string"
+              },
+              "ttl_seconds": {
+                "description": "Optional: hold the price for LESS than the default 30 minutes. A larger value is clamped to the default, never granted.",
+                "type": "number"
+              }
+            },
+            "required": ["link", "quantity", "service_id"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": false,
+            "openWorldHint": true,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:bc77f7c0794935ab8e3062550426d4a2b714a77313a77a9f41b6157ff1b440dc"
+        },
+        {
+          "name": "create_paid_order",
+          "description": "Place an order and pay for it with USDC on Base or Solana, with no GrowVib account and no human in the loop, using the x402 payment protocol. Call it FIRST without the `payment` argument: it returns the exact payment requirements, one `accepts` entry per network (amount in atomic units, asset, recipient, network, and for Solana the facilitator's feePayer). Pick the network your wallet is on: sign an EIP-3009 transferWithAuthorization (Base) or build and sign the USDC transfer transaction (Solana) for exactly those requirements, then call it AGAIN with the same arguments plus `payment` set to the signed x402 payment payload. Anything paid above the order's price stays as spendable balance on the wallet's account, so many small orders can be paid for with one settlement. If a call reports that the payment is still being confirmed, do NOT sign and send a new payment: the first one may already have gone through. Use get_quote first if you only want a price.",
+          "inputSchema": {
+            "properties": {
+              "agent_token": {
+                "description": "The agent_token from a previous order's result. Send it INSTEAD of `payment` to pay out of the balance you already hold, with no new signature and nothing on chain. Requires `idempotency_key`. If your balance does not cover the order you get the payment requirements back as usual.",
+                "type": "string"
+              },
+              "idempotency_key": {
+                "description": "A value unique to this order attempt (a UUID is fine), required when using `agent_token`. Sending the same key again returns the SAME order instead of buying a second time, so a retry after a timeout is safe.",
+                "type": "string"
+              },
+              "link": {
+                "description": "The target link the order is delivered to.",
+                "type": "string"
+              },
+              "payment": {
+                "description": "The signed x402 v2 payment payload. Omit on the first call to receive the payment requirements.",
+                "properties": {},
+                "type": "object"
+              },
+              "posts": {
+                "description": "Only for a subscription option on an auto-delivery service (get_quote tells you when one is needed): how many of the target's future posts to cover. The quantity is then the amount per post and the price is posts times that amount. Omit for every ordinary option.",
+                "type": "number"
+              },
+              "quantity": {
+                "description": "Quantity to order.",
+                "type": "number"
+              },
+              "service_id": {
+                "description": "The service id from search_catalog.",
+                "type": "string"
+              },
+              "service_option_id": {
+                "description": "Optional specific service option id; defaults to the service's primary option.",
+                "type": "string"
+              }
+            },
+            "required": ["link", "quantity", "service_id"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": true,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:cac932ac105b9718b55db4dc1230b449b3e7d66915cd8bfb93fe882dd2d62314"
+        },
+        {
+          "name": "get_checkout_status",
+          "description": "Read a checkout session created with create_checkout: its status (open, pending, paid, paid_no_order, failed, expired), the frozen quote, and once paid the payment and the order with its tracking code. Poll it after handing the person the link, every few seconds, until it reports paid or expired. `pending` means a payment is being confirmed: tell the person to wait, never to pay again. `paid_no_order` means the money arrived as balance on the paying wallet's account but the order could not be placed; the person was told to contact support. Read-only and idempotent, so polling is safe.",
+          "inputSchema": {
+            "properties": {
+              "token": {
+                "description": "The token from create_checkout's result. It is the session's bearer: whoever holds it can read the session and, while it is open, pay it, so do not post it anywhere but here and the person's own page_url.",
+                "type": "string"
+              }
+            },
+            "required": ["token"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:3c727de6a1b75eba45be3928ef59f5d4a01ba0a1a25990694c75d680fa5a11a8"
+        },
+        {
+          "name": "get_paid_order_status",
+          "description": "Track an order placed with create_paid_order: status, start count and remaining quantity, plus a delivery block (the start window the option lists, its bound in minutes, whether delivery has started, and start_overdue when an active order has not started past that bound). Delivery is gradual once it starts and completion time is not estimated, so a falling remains is progress, not a stall. Pass the `agent_token` that create_paid_order returned (or one from the wallet sign-in at POST /v1/agent/auth/challenge). Read-only and idempotent, so polling it is safe. Statuses: PENDING, SUBMITTED, PROCESSING, COMPLETED, PARTIALLY_COMPLETED, CANCELED, FAILED, PARTIALLY_FAILED, REFUNDED, PARTIALLY_REFUNDED.",
+          "inputSchema": {
+            "properties": {
+              "agent_token": {
+                "description": "The agent_token from create_paid_order's result, or from the wallet sign-in. It proves which wallet is asking; an order that is not this wallet's is reported as not found.",
+                "type": "string"
+              },
+              "order_id": {
+                "description": "The order_id from create_paid_order.",
+                "type": "string"
+              }
+            },
+            "required": ["agent_token", "order_id"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:28bd14ef665d6784b5a2a9265617bfaf5053e53b9b9cbcfb6bac0c3f567de774"
+        },
+        {
+          "name": "get_quote",
+          "description": "Get the exact price that will be charged, with no account needed. Call this before every order: never total up the per-1000 prices the catalog tools return yourself, because the quantity bounds and rounding are applied here and nowhere else. Returns unit price and total in USD, priced by the same server-side path a real order uses. It places no order and charges nothing. The result's payment_methods says how the order can be paid: from a connected GrowVib account (connect one over OAuth at the /mcp endpoint, which is where the account ordering tool lives), or, when listed, with no account at all over x402 (USDC on Base or Solana, via create_paid_order or the REST endpoint it names; payment_methods.x402.networks lists the rails).",
+          "inputSchema": {
+            "properties": {
+              "posts": {
+                "description": "Only for a subscription option on an auto-delivery service (requires_posts on the option; the quote says when one is missing): how many of the target's future posts to cover. The quantity is then the amount per post and the price is posts times that amount. Omit for every ordinary option.",
+                "type": "number"
+              },
+              "quantity": {
+                "description": "Quantity to order (e.g. number of members or views).",
+                "type": "number"
+              },
+              "service_id": {
+                "description": "The service id from search_catalog.",
+                "type": "string"
+              },
+              "service_option_id": {
+                "description": "Optional specific service option id; defaults to the service's primary option.",
+                "type": "string"
+              }
+            },
+            "required": ["quantity", "service_id"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:70138ab3e4fbd6c24f1ffeac4096a96b0bf4ac05b8eb2b8d9a8443843e1a969e"
+        },
+        {
+          "name": "get_service",
+          "description": "Look up ONE service you already have the id for. No id yet? Find one with search_catalog. Want a single option chosen for a quantity rather than all of them? Use recommend_service. Returns the service's full detail, including ALL of its plan options (id, name, price per 1000, min/max quantity, quality tier, typed axes such as country or watch length, listed delivery speed and start window, and the recommended flag), so you can present the available plans and quantity range to the user, then pass the chosen service_option_id to get_quote and create_paid_order (this endpoint lists it while the accountless x402 payment channel is on), or create_checkout when a person will pay in their own wallet instead (listed while checkout sessions are on).",
+          "inputSchema": {
+            "properties": {
+              "service_id": {
+                "description": "The service id from search_catalog. The catalog slug (telegram-members) is accepted in place of the id",
+                "type": "string"
+              }
+            },
+            "required": ["service_id"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:605323fe6f77b7fd01db403629eacbbfd90774b3d9faa8d58d9497848722732c"
+        },
+        {
+          "name": "list_paid_orders",
+          "description": "List the orders belonging to the wallet behind an agent_token, newest first, each with the same fields get_paid_order_status returns. Use it when you no longer have the order_id an order gave you: after a restart, when resuming work another session started, or to check everything this wallet has bought. Pass the `agent_token` from any of its orders (or from the wallet sign-in at POST /v1/agent/auth/challenge). Optional `status` narrows to one order status, `page` and `page_size` page through the rest (page_size defaults to 10 and is capped at 100; the result carries the total so you know when to stop). Read-only and idempotent, so polling it is safe.",
+          "inputSchema": {
+            "properties": {
+              "agent_token": {
+                "description": "The agent_token from one of this wallet's orders, or from the wallet sign-in. It proves which wallet is asking; only that wallet's orders are returned.",
+                "type": "string"
+              },
+              "page": {
+                "description": "1-based page number (default 1).",
+                "type": "number"
+              },
+              "page_size": {
+                "description": "Rows per page (default 10, maximum 100).",
+                "type": "number"
+              },
+              "status": {
+                "description": "Optional order status to filter by: PENDING, SUBMITTED, PROCESSING, COMPLETED, PARTIALLY_COMPLETED, CANCELED, FAILED, PARTIALLY_FAILED, REFUNDED or PARTIALLY_REFUNDED.",
+                "type": "string"
+              }
+            },
+            "required": ["agent_token"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:adc2f8ccc58751de633c98a3801b5a436fb46a03913c4a41c481f3f0ed2e6ba7"
+        },
+        {
+          "name": "recommend_service",
+          "description": "Choose WHICH plan option to order, once you know what to buy and for how many. Use it instead of comparing options yourself from search_catalog or get_service. Takes a service (or a platform plus a goal), a quantity, an audience and a preference. Returns one recommended option plus the cheapest, highest-tier and fastest-listed alternatives. Each pick carries the price per 1000, the total for this quantity, the quantity range it accepts, its quality tier, typed axes such as country or watch length, the listed delivery speed and start window, a sensitive flag marking a deliberate product such as a negative reaction, and short reasons written for the buyer. Branch on the typed fields; the reasons are prose in the requested locale and state only what an option gives, so their absence is never a drawback. One reason states how many independent delivery pools can serve the option, when two or more can: it is a count of the ways we can deliver it, not a promise about any one order, and a pick without it is not worse. The response also says how many options were considered, how many fit, and why the rest fell out (rejected: audience_mismatch, quantity_below_min, quantity_above_max, dominated). It carries quoted_at and catalog_version: the version fingerprints the option data the answer came from, so if you recommend, ask the user, then order, re-call and compare catalog_version to know whether the card changed in between. Prices are live at order time; placing an order re-prices from the same data get_quote does, so treat quoted_at as when this answer was computed, not as a price hold. tradeoffs compares each alternative with the lead as data (price and total deltas, quality steps, listed speed ratio, start bucket delta, max quantity delta, plus gives and costs naming the dimensions it wins and loses on; null means one side lists nothing). Use it to CHOOSE and to explain a choice as what each option gives (\"$18.60 less for one tier lower and twice the listed rate\"); never present a pick to the user as a percentage more expensive than another. Identify the service by service_id (from search_catalog) OR by platform + goal (the deliverable, e.g. platform \"youtube\" and goal \"short-views\" or \"followers\"). Read-only: it places no order. Pass the returned option_id as service_option_id to get_quote and create_paid_order (this endpoint lists it while the accountless x402 payment channel is on), or create_checkout when a person will pay in their own wallet instead (listed while checkout sessions are on).",
+          "inputSchema": {
+            "properties": {
+              "audience": {
+                "description": "\"worldwide\" (default) for untargeted delivery, or \"<axis>:<value>\" such as \"country:usa\" or \"emoji:❤️\". On a vote service the poll answer is an audience too (\"answer:option-2\", \"answer:yes\"): ask the user which answer, never assume one. The response lists the audiences the service serves.",
+                "type": "string"
+              },
+              "goal": {
+                "description": "The deliverable: a metric key (followers, likes, views, short-views, members, comments, ...) or a service slug without the platform prefix (comment-likes, reel-views, story-views). Spaces and underscores are read as hyphens. Used with platform when service_id is omitted; when nothing matches, the error names the goals that platform sells.",
+                "type": "string"
+              },
+              "locale": {
+                "description": "Language of the option labels and the reasons: en (default), fa, ru, uz or id. The typed fields are locale-independent, so pass the user's language freely.",
+                "type": "string"
+              },
+              "platform": {
+                "description": "Platform key (telegram, instagram, tiktok, youtube, ...). Used with goal when service_id is omitted.",
+                "type": "string"
+              },
+              "priority": {
+                "description": "\"balanced\" (default), \"cheapest\", \"quality\" or \"fastest\": which pick leads. fastest ranks on the LISTED start window first, then the listed delivery rate (the listing's own claims): for the quantities an agent usually buys the start matters more than the rate; when no eligible option lists either it falls back to balanced.",
+                "type": "string"
+              },
+              "quantity": {
+                "description": "The quantity the user wants to order; every pick accepts it.",
+                "type": "number"
+              },
+              "service_id": {
+                "description": "The service id from search_catalog. Optional when platform and goal are given.",
+                "type": "string"
+              }
+            },
+            "required": ["quantity"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:0bf1ee682a05a9d308c55e0441850888bdbce21f92fd0057fb193b435de7af86"
+        },
+        {
+          "name": "search_catalog",
+          "description": "START HERE when you do not yet know which service to buy: this is the entry point to the catalog. Already have a service id? get_service returns that one in full detail. Know the service and only need the right plan for a quantity? recommend_service picks one. Searches the sellable social growth service catalog (Telegram, Instagram, TikTok, YouTube and more). Each result includes the service (id, name, platform, starting/cheapest price per 1000) AND up to 8 of its plan options (the recommended and cheapest ones, each with id, name, price per 1000, min/max quantity; options_total says how many there are and get_service returns them all) - present the options to the user and let them choose a plan, then pass that service_option_id to get_quote and create_paid_order (this endpoint lists it while the accountless x402 payment channel is on), or create_checkout when a person will pay in their own wallet instead (listed while checkout sessions are on) instead of defaulting to the cheapest.",
+          "inputSchema": {
+            "properties": {
+              "country": {
+                "description": "Filter to geo-targeted services for a country (matches the catalog's geo-target codes, e.g. a country name or code). Most services are global and unaffected.",
+                "type": "string"
+              },
+              "limit": {
+                "description": "Max results per page (1-50, default 50).",
+                "type": "number"
+              },
+              "locale": {
+                "description": "Catalog language for names/descriptions (default en). Each service is returned once per call in this single language.",
+                "type": "string"
+              },
+              "max_price": {
+                "description": "Only services whose starting price per 1000 is at most this (USD) - use for a budget cap.",
+                "type": "number"
+              },
+              "min_price": {
+                "description": "Only services whose starting price per 1000 is at least this (USD).",
+                "type": "number"
+              },
+              "offset": {
+                "description": "Row offset for paging (default 0). The response returns total, limit, offset and returned; fetch the next page with offset += limit while offset+returned < total.",
+                "type": "number"
+              },
+              "platform": {
+                "description": "Filter by platform key, e.g. telegram, instagram, tiktok, youtube.",
+                "type": "string"
+              },
+              "quality_tier": {
+                "description": "Filter by quality tier, e.g. standard, premium.",
+                "type": "string"
+              },
+              "quantity": {
+                "description": "Optional: only list the options that accept this quantity (min_quantity <= quantity <= max_quantity). options_total still counts every option and options_fit says how many accept it. Each service still shows at most 8 options (the recommended ones first, then the cheapest; options_truncated says when some were cut), so call get_service for the full list of a service you have chosen.",
+                "type": "number"
+              },
+              "query": {
+                "description": "Keyword search over service names and descriptions. Pass concrete keywords (e.g. \"telegram members\"); map the user's natural-language intent (budget, country, speed) onto the structured filters below.",
+                "type": "string"
+              },
+              "sort_by": {
+                "description": "Sort order: \"newest\" (default) or \"name\" (alphabetical).",
+                "type": "string"
+              },
+              "sort_order": {
+                "description": "\"asc\" or \"desc\". Defaults to desc for newest, asc for name.",
+                "type": "string"
+              },
+              "speed_tier": {
+                "description": "Filter by delivery speed tier (e.g. instant, fast) - use for \"fastest delivery\" requests.",
+                "type": "string"
+              }
+            },
+            "required": [],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:2b0f6638813768353b55681af36e3159b8f8f08f27b68ba4a60dee4b672b57e6"
+        }
+      ],
+      "digest": "sha256:4f702cebb9b8349faf7f884e3ff0a9fd3072d8a5f451c7c1ba0380c4250b6352"
+    }
+  }
+}

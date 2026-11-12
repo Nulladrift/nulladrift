@@ -1,0 +1,1521 @@
+{
+  "lockfileVersion": 2,
+  "subjects": {
+    "com.botrecipe/cloudforbots": {
+      "kind": "mcp-server",
+      "source": {
+        "client": "manual",
+        "file": "registry.modelcontextprotocol.io"
+      },
+      "transport": {
+        "type": "http",
+        "url": "https://cloudforbots.com/mcp"
+      },
+      "protocol": {
+        "era": "legacy",
+        "version": "2025-11-25"
+      },
+      "serverInfo": {
+        "name": "cloud-for-bots",
+        "version": "1.0.0"
+      },
+      "capabilities": {
+        "prompts": {
+          "listChanged": false
+        },
+        "resources": {
+          "listChanged": false
+        },
+        "tools": {
+          "listChanged": false
+        }
+      },
+      "instructions": "# Cloud for Bots: how to use it (for bots)\n\nYou are connected to Cloud for Bots: one key, one MCP server, many tools. Use them when your own chat session is not enough.\n\n## Which tool when\n- **sandbox**: heavy or long work (code, installs, data jobs). It pauses instead of dying, so files survive. Each `run` is up to 120 s; use `background: true` for longer jobs and check back.\n- **store**: save progress and results (`set`/`get`). Save after every step so you can resume after a crash or a new session.\n- **inbox, queue, cron**: wake up later. `inbox` gives you a URL that webhooks and other bots can POST to; messages land in queue `inbox.<name>`. `cron` runs on a schedule or a one-off `timer`. Read with `queue` `pull`, then `ack` when done.\n- **lock, rate**: stop bots colliding. `lock` = one writer at a time. `rate` = shared limits like \"6/6h\" across all your bots.\n- **secrets + fetch**: never paste API keys into chat or code. Store once with `secrets` `set` (with `allowed_hosts`), then call APIs with `fetch` using `{{secret:NAME}}`.\n- **browser**: sites that need a login. Sessions keep cookies between calls.\n- **handoff**: when a human is needed (captcha, 2FA). Watch-only on free keys.\n- **ledger, replay, loop_*, budget_***: safety. Record runs in `ledger`, check repeats with `loop_check_step`, cap spend with `budget_open_budget` and `budget_reserve`, review with `replay`.\n\n## Pattern 1: long job with resume\n1. `store` get ns `jobs`, key `<job>` -> last finished step (none = start at 0).\n2. For each remaining step: `sandbox` run it, then `store` set `{\"step\": n, \"result\": ...}`.\n3. If you crash or the chat ends, start again at step 1. You skip finished steps.\n\n## Pattern 2: webhook-driven bot\n1. `inbox` create name `orders` -> give the URL to the other service.\n2. `cron` set (or `timer`) with `{queue: \"wake.orders\"}` if you need a nudge, or just check on each run.\n3. `queue` pull `inbox.orders`, handle each message, then `ack` its id. Un-acked messages come back.\n\n## Pattern 3: safe posting with a rate limit\n1. `lock` acquire `post` (ttl_s 60). If you do not get it, another bot is posting: stop.\n2. `rate` take `posts` limit `6/6h`. If not allowed, wait `retry_after_s`.\n3. `fetch` the posting API with `{{secret:POST_TOKEN}}`.\n4. `ledger` record the run, then `lock` release with the token.\n\n## Rules of thumb\n- Save to `store` before and after anything slow.\n- Ack queue messages only after the work is done.\n- Ask your human before spending money or posting publicly.\n- Full reference: https://cloudforbots.com/llms-full.txt\n",
+      "tools": [
+        {
+          "name": "ai",
+          "description": "[bot-ai] Model gateway: call Grok, Claude or GPT with one cloudforbots key. Bring your own provider key, stored first in Secrets (XAI_API_KEY / ANTHROPIC_API_KEY / OPENAI_API_KEY, or key_secret). No markup: the provider bills you. Every call lands in the run ledger.",
+          "inputSchema": {
+            "properties": {
+              "bot": {
+                "type": "string"
+              },
+              "key_secret": {
+                "type": "string"
+              },
+              "max_tokens": {
+                "type": "integer"
+              },
+              "messages": {
+                "items": {
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "model": {
+                "type": "string"
+              },
+              "prompt": {
+                "type": "string"
+              },
+              "provider": {
+                "enum": ["xai", "anthropic", "openai"],
+                "type": "string"
+              },
+              "run_id": {
+                "type": "string"
+              },
+              "system": {
+                "type": "string"
+              },
+              "temperature": {
+                "type": "number"
+              }
+            },
+            "required": ["model"],
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:22d71e8db14003c28e87f887bf6a0909fde560690ab2867ad729b5ebf2a57e7c"
+        },
+        {
+          "name": "approve_check_action",
+          "title": "approval-rules: check_action",
+          "description": "[approval-rules] Before a consequential action, ask whether the user's rules auto-approve it. Returns auto_approve, needs_approval (with a plain-English approval card and a link the user can tap) or deny. Free plan is watch-only: it reports what it WOULD decide and logs it for the weekly report, but nothing counts as approved, so ask your user as you normally would.",
+          "inputSchema": {
+            "properties": {
+              "action": {
+                "description": "The action your agent wants to take.",
+                "properties": {
+                  "amount_usd": {
+                    "description": "Money involved, if any.",
+                    "type": "number"
+                  },
+                  "reversible": {
+                    "description": "Can it be undone easily?",
+                    "type": "boolean"
+                  },
+                  "summary": {
+                    "description": "One plain sentence of what will happen, e.g. \"Buy a $3.99 domain renewal for example.com\".",
+                    "type": "string"
+                  },
+                  "target": {
+                    "description": "Who or what it touches: a recipient email, domain, file, repo.",
+                    "type": "string"
+                  },
+                  "type": {
+                    "description": "Short verb: read, search, draft, send_email, send_message, post, purchase, payment, delete, deploy, change_settings, ...",
+                    "type": "string"
+                  }
+                },
+                "required": ["summary", "type"],
+                "type": "object"
+              }
+            },
+            "required": ["action"],
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:5f5ebfa968582da67c835239b7ac82e8b9bfb94ac2a0f1bce0ddc6a64cc173aa"
+        },
+        {
+          "name": "approve_get_decision",
+          "title": "approval-rules: get_decision",
+          "description": "[approval-rules] Check whether the user approved or rejected an approval card (by card_id and card_token). Only act when status is approved.",
+          "inputSchema": {
+            "properties": {
+              "card_id": {
+                "type": "string"
+              },
+              "card_token": {
+                "type": "string"
+              }
+            },
+            "required": ["card_id", "card_token"],
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:ee0d235e19e60f6511d1296206dd5163efafed33636b50dc09470048ae04e92f"
+        },
+        {
+          "name": "approve_get_rules",
+          "title": "approval-rules: get_rules",
+          "description": "[approval-rules] Show the rules in effect for your key (or the default starter rules).",
+          "inputSchema": {
+            "properties": {},
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:29a8c8ca6a0203939e5b3c233a9212da7b1a48fad591bbbde4454a9490bf6d97"
+        },
+        {
+          "name": "approve_set_rules",
+          "title": "approval-rules: set_rules",
+          "description": "[approval-rules] Save the user's rules (needs an API key so they stay yours). Each rule: {name, when:{type:[...], max_usd, min_usd, reversible, target_ends_with:[...]}, verdict:\"auto\"|\"ask\"|\"deny\"}. First matching rule wins; anything unmatched needs approval. Call once without confirm to preview, then with confirm=true.",
+          "inputSchema": {
+            "properties": {
+              "confirm": {
+                "type": "boolean"
+              },
+              "rules": {
+                "items": {
+                  "type": "object"
+                },
+                "type": "array"
+              }
+            },
+            "required": ["rules"],
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:ade287b2cd66b28aa8e205bf359ea65a6a321a534b7d28e6c4cb488e9272f72f"
+        },
+        {
+          "name": "approve_usage_and_upgrade",
+          "title": "approval-rules: usage_and_upgrade",
+          "description": "[approval-rules] Show today's usage for your key or IP and the $49/month All Access upgrade link (cloudforbots.com/offer). Free tier: 200 calls/day. Not metered.",
+          "inputSchema": {
+            "properties": {},
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:b734b9dec4df51184ad09183e40bb7077b2b2daa89584a1319cf785a7ba30991"
+        },
+        {
+          "name": "approve_weekly_report",
+          "title": "approval-rules: weekly_report",
+          "description": "[approval-rules] Draft a plain-English report of the last 7 days: actions checked, how many your rules would auto-approve, how many needed you, top kinds of asks, and rule suggestions. Read-only; sends nothing.",
+          "inputSchema": {
+            "properties": {},
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:1eca493f5279222a509a5841e6464514705fabab1df379480e96ac05bd8442a6"
+        },
+        {
+          "name": "browser",
+          "description": "[bot-browser] A real headless Chrome per named session that pauses instead of dying: logins, cookies and tabs survive between calls and across days. Actions: open (url), run (steps: [{goto:url},{click:selector},{fill:{selector,value}},{type:{selector,text}},{press:key},{select:{selector,value}},{wait_for:selector},{wait_ms:n},{scroll:n},{back:true},{extract:selector},{eval:js},{screenshot:true},{clear_cookies:true}], screenshot?), screenshot, pause, kill, list. Returns url, title, page text and links. fill values can be {{secret:NAME}} (typed only on that secret's allowed hosts, redacted from replies). Stuck on 2FA? action handoff (kind, note, fill: selector, submit?) asks a person via Human Handoff, waits, and types the code into the page without returning it. Uses the sandbox allowance (3 live, 60 min/day free).",
+          "inputSchema": {
+            "properties": {
+              "action": {
+                "enum": ["open", "run", "screenshot", "pause", "kill", "list", "handoff"],
+                "type": "string"
+              },
+              "fill": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string"
+              },
+              "links": {
+                "type": "boolean"
+              },
+              "max_text": {
+                "type": "integer"
+              },
+              "note": {
+                "type": "string"
+              },
+              "screenshot": {
+                "type": "boolean"
+              },
+              "session": {
+                "type": "string"
+              },
+              "steps": {
+                "items": {
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "submit": {
+                "type": "boolean"
+              },
+              "text": {
+                "type": "boolean"
+              },
+              "url": {
+                "type": "string"
+              },
+              "wait_s": {
+                "type": "integer"
+              }
+            },
+            "required": ["action"],
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:d60368817acf6659269e04bc19f83ba1d028fbde48e6085082496d0f744eacbf"
+        },
+        {
+          "name": "budget_budget_status",
+          "title": "budget-guard: budget_status",
+          "description": "[budget-guard] See spend vs limits, remaining budget, whether the run is stopped and why, and the last 20 ledger events. Set close=true when the run finishes.",
+          "inputSchema": {
+            "properties": {
+              "close": {
+                "type": "boolean"
+              },
+              "handle": {
+                "description": "The budget handle from open_budget (looks like bg_<id>.<secret>). Pass it to every sub-agent so they all spend from the same budget.",
+                "type": "string"
+              }
+            },
+            "required": ["handle"],
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:08c9dd06f9fa8269d6d311b28b1bda9c108907c6f59dff6e2a097d445c54bfce"
+        },
+        {
+          "name": "budget_open_budget",
+          "title": "budget-guard: open_budget",
+          "description": "[budget-guard] Open a hard budget for one agent run before it starts: max dollars, tokens, calls and/or wall-clock seconds. Returns a handle. Give the handle to every sub-agent; they all draw from the same ledger, so one runaway loop or fork cannot exceed the run cap.",
+          "inputSchema": {
+            "properties": {
+              "label": {
+                "description": "What this run is for, e.g. \"nightly code cleanup\".",
+                "type": "string"
+              },
+              "max_calls": {
+                "description": "Cap on model/tool calls for the whole run.",
+                "type": "integer"
+              },
+              "max_seconds": {
+                "description": "Wall-clock cap in seconds from now.",
+                "type": "integer"
+              },
+              "max_tokens": {
+                "description": "Token cap (input + output) for the whole run.",
+                "type": "integer"
+              },
+              "max_usd": {
+                "description": "Dollar cap for the whole run (your own estimates per call).",
+                "type": "number"
+              },
+              "mode": {
+                "description": "shadow = watch only: track spend and flag where the cap WOULD have stopped the run, never block (free). enforce = return allowed=false at the cap (Pro). Default: enforce on Pro, shadow on free.",
+                "enum": ["shadow", "enforce"],
+                "type": "string"
+              },
+              "ttl_hours": {
+                "description": "Handle lifetime (free max 24, Pro max 168). Default 24.",
+                "type": "integer"
+              }
+            },
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:4f4952f7b02349c62b81ba2d8bfdcf6b8467145926b4c2de1472019074cbdd39"
+        },
+        {
+          "name": "budget_record",
+          "title": "budget-guard: record",
+          "description": "[budget-guard] After a call, report the actual usage minus what you reserved (positive if it cost more, negative to give back an overestimate). Keeps the ledger honest without blocking.",
+          "inputSchema": {
+            "properties": {
+              "handle": {
+                "description": "The budget handle from open_budget (looks like bg_<id>.<secret>). Pass it to every sub-agent so they all spend from the same budget.",
+                "type": "string"
+              },
+              "note": {
+                "type": "string"
+              },
+              "tokens": {
+                "type": "integer"
+              },
+              "usd": {
+                "type": "number"
+              }
+            },
+            "required": ["handle"],
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:37070c4d786739178324d1f8a8f8fc53dc3d2bd6c0e3a8875bcf99d700b44820"
+        },
+        {
+          "name": "budget_reserve",
+          "title": "budget-guard: reserve",
+          "description": "[budget-guard] Call BEFORE each model call, tool call or sub-agent spawn with your estimate. Returns allowed=true and deducts it, or allowed=false with the limit that tripped. When allowed is false, stop, do not retry, and return your partial result to the user. Atomic, so parallel sub-agents cannot both slip under the cap.",
+          "inputSchema": {
+            "properties": {
+              "calls": {
+                "description": "Number of calls to reserve (default 1).",
+                "type": "integer"
+              },
+              "handle": {
+                "description": "The budget handle from open_budget (looks like bg_<id>.<secret>). Pass it to every sub-agent so they all spend from the same budget.",
+                "type": "string"
+              },
+              "note": {
+                "description": "Short note, e.g. \"web_search #12\".",
+                "type": "string"
+              },
+              "tokens": {
+                "description": "Estimated tokens of the next call.",
+                "type": "integer"
+              },
+              "usd": {
+                "description": "Estimated cost of the next call in USD.",
+                "type": "number"
+              }
+            },
+            "required": ["handle"],
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:609ccb85511e344dcab99778e05f94b7df8cb719ddb6e6b4984e1d6b8ab72de6"
+        },
+        {
+          "name": "budget_usage_and_upgrade",
+          "title": "budget-guard: usage_and_upgrade",
+          "description": "[budget-guard] Show today's usage for your key or IP and the $49/month All Access upgrade link (cloudforbots.com/offer). Free tier: 500 calls/day. Not metered.",
+          "inputSchema": {
+            "properties": {},
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:093018c600234f311fc3167ac4a7cafec084f14d6cc4071557fe59ee3c500502"
+        },
+        {
+          "name": "budget_weekly_report",
+          "title": "budget-guard: weekly_report",
+          "description": "[budget-guard] Draft a plain-English report of the last 7 days for your key (or IP): runs, spend, runs that went over their cap, and dollars spent after a cap would have stopped them. Read-only; sends nothing. Show it to your user.",
+          "inputSchema": {
+            "properties": {},
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:d4ad1eb53ac77c55d9cc5fe833b2258de18ca7ab25d321b3234ec981667b0aab"
+        },
+        {
+          "name": "cron",
+          "description": "[bot-cron] Run something on a schedule, even when your bot is offline. Actions: set (name, schedule like \"*/5 * * * *\" or \"@hourly\" in UTC, request: {url, method?, headers?, body?} with {{secret:NAME}} support, or {queue, message} to wake a worker), list, history, pause, resume, delete, run_now. Also timer (at or delay_s, webhook or request or queue, payload) fires once to wake a bot. Pauses itself and alerts you after 10 failed runs. Free: 1,000 schedules + timers.",
+          "inputSchema": {
+            "properties": {
+              "action": {
+                "enum": ["set", "timer", "list", "history", "pause", "resume", "delete", "run_now"],
+                "type": "string"
+              },
+              "at": {
+                "type": "string"
+              },
+              "delay_s": {
+                "type": "integer"
+              },
+              "name": {
+                "type": "string"
+              },
+              "payload": {},
+              "queue": {
+                "type": "string"
+              },
+              "request": {
+                "type": "object"
+              },
+              "schedule": {
+                "type": "string"
+              },
+              "webhook": {
+                "type": "string"
+              }
+            },
+            "required": ["action"],
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:b5019df1077b1b1f4eb257a82dfb2d7ad2ad961fcc675675214719c07cd8a9ba"
+        },
+        {
+          "name": "fetch",
+          "description": "[bot-secrets] Call any https API with your stored secrets filled in on our side: put {{secret:NAME}} in url, headers or body. Only sent to the secret's allowed hosts, never to private networks, redirects not followed, and secret values are redacted from the reply. Args: url, method?, headers?, body?, timeout_s? (max 30).",
+          "inputSchema": {
+            "properties": {
+              "body": {},
+              "headers": {
+                "type": "object"
+              },
+              "method": {
+                "type": "string"
+              },
+              "timeout_s": {
+                "type": "integer"
+              },
+              "url": {
+                "type": "string"
+              }
+            },
+            "required": ["url"],
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:b981c8952e981e9a18d708f7fe551d10ce363a85d5cd95aace8a818e75a4f5dc"
+        },
+        {
+          "name": "handoff",
+          "description": "[human-handoff] Bot hits captcha/2FA; a person gets a one-tap link; bot polls and continues. Actions: create, status, cancel, list. Free keys are watch-only.",
+          "inputSchema": {
+            "properties": {
+              "action": {
+                "type": "string"
+              },
+              "id": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string"
+              },
+              "note": {
+                "type": "string"
+              },
+              "notify_email": {
+                "type": "boolean"
+              },
+              "run_id": {
+                "type": "string"
+              },
+              "ui": {
+                "enum": ["openui"],
+                "type": "string"
+              },
+              "url": {
+                "type": "string"
+              }
+            },
+            "required": ["action"],
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:bbde5f0be7212bcd0e0d660f41fdf29748ba6e48031f43b232900edeac10f398"
+        },
+        {
+          "name": "inbox",
+          "description": "[bot-inbox] Give a bot its own public webhook URL. Actions: create (name) -> url (POST anything there: webhooks, forms, other bots); list; delete. Events land in queue inbox.<name>: read them with the queue tool (pull, then ack). Create again to rotate the URL. Free: 50 inboxes.",
+          "inputSchema": {
+            "properties": {
+              "action": {
+                "enum": ["create", "list", "delete"],
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "required": ["action"],
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:56d91b34364750067e930a551749f40bd48c4285d013a0438257a59fe53f48b8"
+        },
+        {
+          "name": "ledger",
+          "description": "[bot-ledger] Run ledger and cost view across all your bots. Actions: record (bot, status ok|failed|running|skipped, run_id?, kind?, usd?, tokens_in?, tokens_out?, model?, ms?, note?), feed (since?, bot?, status?, limit?) = one feed of bot runs, Agent Cost Log costs and failed API calls, rollup (days?) = per day per bot runs, failures and USD.",
+          "inputSchema": {
+            "properties": {
+              "action": {
+                "enum": ["record", "feed", "rollup"],
+                "type": "string"
+              },
+              "bot": {
+                "type": "string"
+              },
+              "days": {
+                "type": "integer"
+              },
+              "kind": {
+                "type": "string"
+              },
+              "limit": {
+                "type": "integer"
+              },
+              "model": {
+                "type": "string"
+              },
+              "ms": {
+                "type": "integer"
+              },
+              "note": {
+                "type": "string"
+              },
+              "run_id": {
+                "type": "string"
+              },
+              "since": {
+                "type": "string"
+              },
+              "status": {
+                "type": "string"
+              },
+              "tokens_in": {
+                "type": "integer"
+              },
+              "tokens_out": {
+                "type": "integer"
+              },
+              "usd": {
+                "type": "number"
+              }
+            },
+            "required": ["action"],
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:246a3156b4e5612d7a08407b349e1789aebc97f3b45442650f4ab9c64d350ee0"
+        },
+        {
+          "name": "library_get",
+          "description": "[bot-library] Read one library entry (recipe, tools, version, signature, install and success counts). Args: slug.",
+          "inputSchema": {
+            "properties": {
+              "slug": {
+                "type": "string"
+              }
+            },
+            "required": ["slug"],
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:c78e93eb647139c0046a1b9f5ea6223903405053d5ac35eddb00bb0ecddab130"
+        },
+        {
+          "name": "library_install",
+          "description": "[bot-library] Clone a library bot into this bot: returns the recipe steps, tools, prompt and memory_seed to run now. Counts one install per account. Args: slug.",
+          "inputSchema": {
+            "properties": {
+              "slug": {
+                "type": "string"
+              }
+            },
+            "required": ["slug"],
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:374e861b50ad75c4a7592bdf4323a5e728e2d5b262a90c5328179649a82ef5a6"
+        },
+        {
+          "name": "library_publish",
+          "description": "[bot-library] Publish or update (new version) a reusable bot recipe. The publishing key owns and signs it. Blocked automatically if it contains keys, tokens, emails or phone numbers; use {{secret:NAME}} placeholders. Args: slug (3-48 lowercase/dashes), data {name, summary, steps[], tools?[], tags?[], prompt?, memory_seed?, handoff_inbox?, forked_from?, works_with?[]}.",
+          "inputSchema": {
+            "properties": {
+              "data": {
+                "type": "object"
+              },
+              "slug": {
+                "type": "string"
+              }
+            },
+            "required": ["data", "slug"],
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:2d104911b3ac9e9a85173688b2e3893a9581840b083fecbcda6acf6f02067abb"
+        },
+        {
+          "name": "library_rate",
+          "description": "[bot-library] After running an installed recipe, report whether it worked. This is what ranks the library. Args: slug, ok (boolean).",
+          "inputSchema": {
+            "properties": {
+              "ok": {
+                "type": "boolean"
+              },
+              "slug": {
+                "type": "string"
+              }
+            },
+            "required": ["ok", "slug"],
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:4af7a9a3a8b44cc00862de7b594c37ec2310d3576b5b4abeb7c0cf2452eaadb9"
+        },
+        {
+          "name": "library_report",
+          "description": "[bot-library] Report a broken, unsafe or spammy entry. 3 reports from different accounts pause it automatically. Args: slug, reason.",
+          "inputSchema": {
+            "properties": {
+              "reason": {
+                "type": "string"
+              },
+              "slug": {
+                "type": "string"
+              }
+            },
+            "required": ["slug"],
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:c2763a299ea9a26b543907fcb9154ec3aacd5ec42517418e694a4237647d92e1"
+        },
+        {
+          "name": "library_search",
+          "description": "[bot-library] Find bot recipes other bots published, ranked by real installs and reported success. Args: q?, limit? (max 50). No key needed.",
+          "inputSchema": {
+            "properties": {
+              "limit": {
+                "type": "integer"
+              },
+              "q": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:6acdf6f6f313c971129c746d8f1eab4edb246bbca45580a62a6bc0896a489eae"
+        },
+        {
+          "name": "lock",
+          "description": "[bot-coord] Named locks (leases) shared by every bot on your account, e.g. browser.lock. Actions: acquire (name, holder?, ttl_s? default 60, wait_s? up to 25), renew (name, token, ttl_s), release (name, token), status (name), list. Auto-releases at expiry; fence increases with each new holder. Free: 1,000 locks.",
+          "inputSchema": {
+            "properties": {
+              "action": {
+                "enum": ["acquire", "renew", "release", "status", "list"],
+                "type": "string"
+              },
+              "holder": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "token": {
+                "type": "string"
+              },
+              "ttl_s": {
+                "type": "integer"
+              },
+              "wait_s": {
+                "type": "integer"
+              }
+            },
+            "required": ["action"],
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:114fd8f188ffd82c38195266e011d5488d04765398b1079fceab548f53a51348"
+        },
+        {
+          "name": "loop_check_step",
+          "title": "loop-breaker: check_step",
+          "description": "[loop-breaker] Call AFTER each tool call or agent step with what you just did and whether it failed. Loop Breaker fingerprints the call (tool + normalized args + error) and returns verdict ok, loop_detected or halted. Pro: on a loop, halt=true; stop the run, do not retry, and tell your user what repeated. Free watch-only: never halts, returns would_halt and logs it for the weekly report.",
+          "inputSchema": {
+            "properties": {
+              "args": {
+                "description": "The arguments you passed (object or string). Volatile values like timestamps and ids are normalized away."
+              },
+              "error": {
+                "description": "The error message if the step failed. Omit or empty if it succeeded.",
+                "type": "string"
+              },
+              "max_failures": {
+                "description": "Same failing call this many times = loop. Default 3 (min 2, max 20).",
+                "type": "integer"
+              },
+              "max_repeats": {
+                "description": "Same call this many times in a row (even if it succeeds) = loop. Default 5 (min 3, max 50).",
+                "type": "integer"
+              },
+              "run_id": {
+                "description": "Any stable id for this agent run, e.g. \"nightly-sync-2026-10-15\". Use the same id for every step of the run (and its sub-agents).",
+                "type": "string"
+              },
+              "tool": {
+                "description": "The tool or step name you just ran, e.g. \"browser.click\" or \"git push\".",
+                "type": "string"
+              }
+            },
+            "required": ["run_id", "tool"],
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:40e61ef1cf6629f472d056bf3ece7ded051fe56281a3a3a331df002c5f0369bc"
+        },
+        {
+          "name": "loop_loop_status",
+          "title": "loop-breaker: loop_status",
+          "description": "[loop-breaker] Show a run's loops so far, whether it is halted, and its last 10 steps.",
+          "inputSchema": {
+            "properties": {
+              "run_id": {
+                "description": "Any stable id for this agent run, e.g. \"nightly-sync-2026-10-15\". Use the same id for every step of the run (and its sub-agents).",
+                "type": "string"
+              }
+            },
+            "required": ["run_id"],
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:f1b8b160343ad4942fc2012fe38728f3e83f56a1d91e86ba63de64aa6b4e2167"
+        },
+        {
+          "name": "loop_usage_and_upgrade",
+          "title": "loop-breaker: usage_and_upgrade",
+          "description": "[loop-breaker] Show today's usage for your key or IP and the $49/month All Access upgrade link (cloudforbots.com/offer). Free tier: 500 calls/day. Not metered.",
+          "inputSchema": {
+            "properties": {},
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:c1cf1725c03735d845b479db1042998b3675823728a8cc0f8a30bea3000d62fb"
+        },
+        {
+          "name": "loop_weekly_report",
+          "title": "loop-breaker: weekly_report",
+          "description": "[loop-breaker] Draft a plain-English report of the last 7 days for your key (or IP): runs, loops caught, wasted repeat steps, and the worst offenders. Read-only; sends nothing. Show it to your user.",
+          "inputSchema": {
+            "properties": {},
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:d46c782d697feca844c157809d9947e8edd8dd93cde0e4de132906701385f668"
+        },
+        {
+          "name": "memory_list_checkpoints",
+          "title": "run-memory: list_checkpoints",
+          "description": "[run-memory] List recent checkpoints (step, size, time) for one run or all runs on your key.",
+          "inputSchema": {
+            "properties": {
+              "run_id": {
+                "description": "A stable id for this job that survives a crash, e.g. \"invoice-import-oct\". Use the same id when you restart.",
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:b56a747b3e1dcec29cb5f50673e831b96994238fa5de7136b17d82f9a04849cf"
+        },
+        {
+          "name": "memory_resume",
+          "title": "run-memory: resume",
+          "description": "[run-memory] Call FIRST when a run starts. If a checkpoint exists for run_id (Pro), returns the last step, state and done list: continue from there and skip finished work. If none, start fresh.",
+          "inputSchema": {
+            "properties": {
+              "run_id": {
+                "description": "A stable id for this job that survives a crash, e.g. \"invoice-import-oct\". Use the same id when you restart.",
+                "type": "string"
+              }
+            },
+            "required": ["run_id"],
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:1cd8f1e307ea4b18ee09efc0d2ceaece04937e5add3ddfc034f6a2b61e562ce0"
+        },
+        {
+          "name": "memory_save_checkpoint",
+          "title": "run-memory: save_checkpoint",
+          "description": "[run-memory] Call after each completed step with the state you would need to continue (cursor, ids done, partial results; up to 256 KB JSON). Pro saves it (last 20 per run, kept 30 days). Free watch-only saves nothing and returns would_save: exactly what would have been stored. Never put passwords or API keys in state.",
+          "inputSchema": {
+            "properties": {
+              "done": {
+                "description": "Optional list of completed item ids, so a resume skips them.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "run_id": {
+                "description": "A stable id for this job that survives a crash, e.g. \"invoice-import-oct\". Use the same id when you restart.",
+                "type": "string"
+              },
+              "state": {
+                "description": "JSON state needed to resume.",
+                "type": "object"
+              },
+              "step": {
+                "description": "The step you just finished, e.g. \"imported page 3 of 10\".",
+                "type": "string"
+              }
+            },
+            "required": ["run_id", "state", "step"],
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:951a741df877448cc8d28051958e8f7cab1d321b083c13c4baa69ba7734a95cd"
+        },
+        {
+          "name": "memory_usage_and_upgrade",
+          "title": "run-memory: usage_and_upgrade",
+          "description": "[run-memory] Show today's usage for your key or IP and the $49/month All Access upgrade link (cloudforbots.com/offer). Free tier: 500 calls/day. Not metered.",
+          "inputSchema": {
+            "properties": {},
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:6db6393e26cc10e44258bdcc9373fa759885f8c047bb2a035c38b469060c8727"
+        },
+        {
+          "name": "memory_weekly_report",
+          "title": "run-memory: weekly_report",
+          "description": "[run-memory] Draft a plain-English report of the last 7 days: runs, checkpoints saved (Pro) or that would have been saved (free). Read-only; sends nothing.",
+          "inputSchema": {
+            "properties": {},
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:bc24d732a4672897d40de909daecfc30ab3d82f21069873642752643feec2bde"
+        },
+        {
+          "name": "queue",
+          "description": "[bot-queue] Durable job queues for bots. Actions: push (queue, message or messages[], delay_s?, max_attempts?), pull (queue, max<=10, visibility_s?), ack (ids), nack (ids, delay_s?, error?), stats, dead, retry_dead, purge (dead_only?). At-least-once: ack when done or the message returns after visibility_s; after max_attempts it moves to dead letters. Free: 1,000 queues, 10,000 pushes/day.",
+          "inputSchema": {
+            "properties": {
+              "action": {
+                "enum": ["push", "pull", "ack", "nack", "stats", "dead", "retry_dead", "purge"],
+                "type": "string"
+              },
+              "delay_s": {
+                "type": "integer"
+              },
+              "error": {
+                "type": "string"
+              },
+              "ids": {
+                "items": {
+                  "type": "integer"
+                },
+                "type": "array"
+              },
+              "max": {
+                "type": "integer"
+              },
+              "max_attempts": {
+                "type": "integer"
+              },
+              "message": {},
+              "messages": {
+                "type": "array"
+              },
+              "queue": {
+                "type": "string"
+              },
+              "visibility_s": {
+                "type": "integer"
+              }
+            },
+            "required": ["action"],
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:39dcae34c000b12351ed6df646a6ea6d676eff926e88495338db10aa5a41d7d5"
+        },
+        {
+          "name": "rate",
+          "description": "[bot-coord] Shared rate counters across all your bots, e.g. \"6 posts per 6h across all lanes\". Actions: take (name, limit like \"6/6h\", n?) -> allowed, remaining, retry_after_s; peek (name, limit); list. Sliding window. Free: 200 counters.",
+          "inputSchema": {
+            "properties": {
+              "action": {
+                "enum": ["take", "peek", "list"],
+                "type": "string"
+              },
+              "limit": {
+                "type": "string"
+              },
+              "n": {
+                "type": "integer"
+              },
+              "name": {
+                "type": "string"
+              }
+            },
+            "required": ["action"],
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:e7e4525f043f569772de5f2bb51430a658ef7983e0ccbf1a3b51c81021a6f071"
+        },
+        {
+          "name": "replay",
+          "description": "[run-replay] Timeline of a run: steps, loops, checkpoints, spend, stop point. Pass run_id; omit to list recent runs. Set ui=openui for a live card.",
+          "inputSchema": {
+            "properties": {
+              "run_id": {
+                "type": "string"
+              },
+              "ui": {
+                "enum": ["openui"],
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:9cc366c920226d7eedadec34d3cc935cdf36d494cbe0e505e59b69480f5ab9f2"
+        },
+        {
+          "name": "report",
+          "description": "[daily-report] Opt-in daily owner summary (loops stopped, spend blocked, approvals waiting). Actions: subscribe, unsubscribe, preview.",
+          "inputSchema": {
+            "properties": {
+              "action": {
+                "type": "string"
+              },
+              "email": {},
+              "ui": {
+                "enum": ["openui"],
+                "type": "string"
+              },
+              "webhook_url": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:11dad482b004742374ba32b372a4de9ebfa7e59dae6c16347823922b01e4e38e"
+        },
+        {
+          "name": "sandbox",
+          "description": "[bot-sandbox] A named Linux sandbox (Python, Node, shell, internet) that pauses instead of dying: files, installed packages and running processes survive between calls and across days. Actions: run (cmd, cwd?, timeout_s? up to 120, background?), write_file (path, content or content_base64), read_file (path), sync_from_store (ns?, prefix?, dir? = /home/user/store: copy your stored files in), sync_to_store (dir?, ns?, prefix?: save changed files back), run with secrets: [\"NAME\"] to call APIs from code via $CFB_FETCH_URL + $CFB_FETCH_TOKEN without the value ever entering the sandbox, status, pause, kill, list. Created on first use; auto-pauses after 1 idle minute; resumes in about a second. Free: 3 sandboxes, 60 run-minutes/day.",
+          "inputSchema": {
+            "properties": {
+              "action": {
+                "enum": ["run", "write_file", "read_file", "sync_from_store", "sync_to_store", "status", "pause", "kill", "list"],
+                "type": "string"
+              },
+              "background": {
+                "type": "boolean"
+              },
+              "cmd": {
+                "type": "string"
+              },
+              "content": {
+                "type": "string"
+              },
+              "content_base64": {
+                "type": "string"
+              },
+              "cwd": {
+                "type": "string"
+              },
+              "dir": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "ns": {
+                "type": "string"
+              },
+              "path": {
+                "type": "string"
+              },
+              "prefix": {
+                "type": "string"
+              },
+              "secrets": {
+                "description": "run only: secret names this command may use via $CFB_FETCH_URL with Authorization: Bearer $CFB_FETCH_TOKEN and {{secret:NAME}}; values never enter the sandbox",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "timeout_s": {
+                "type": "integer"
+              }
+            },
+            "required": ["action"],
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:6a284dc94bda9f8160cf735b149a0d71a53d5db90492ee7d37d4fa5625b678c3"
+        },
+        {
+          "name": "secrets",
+          "description": "[bot-secrets] Store API keys and tokens once; your bot never sees them again. Actions: set (name in UPPER_SNAKE_CASE, value, allowed_hosts like [\"api.openai.com\"]), list (names only, never values), delete. Use them with the fetch tool as {{secret:NAME}}. Free: 25 secrets.",
+          "inputSchema": {
+            "properties": {
+              "action": {
+                "enum": ["set", "list", "delete"],
+                "type": "string"
+              },
+              "allowed_hosts": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "name": {
+                "type": "string"
+              },
+              "value": {
+                "type": "string"
+              }
+            },
+            "required": ["action"],
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:251215dbdfd9d7a109a200f1f2945b587ab48a6193515793978a65217e6059dc"
+        },
+        {
+          "name": "store",
+          "description": "[bot-storage] Durable key-value + file storage for your bot, shared by every key on your account. Survives sandbox restarts. Actions: get, set (value: any JSON, ttl_seconds?, if_version? for compare-and-set), incr (by?), delete, list (prefix?, after?, limit?), file_put (name, content_base64, content_type?), file_get, file_meta, file_delete, file_list, usage. ns = namespace (default \"default\"). Free: 100 MB, 100k items, values up to 256 KB, files up to 4 MB.",
+          "inputSchema": {
+            "properties": {
+              "action": {
+                "enum": ["get", "set", "incr", "delete", "list", "file_put", "file_get", "file_meta", "file_delete", "file_list", "usage"],
+                "type": "string"
+              },
+              "after": {
+                "type": "string"
+              },
+              "by": {
+                "type": "number"
+              },
+              "content_base64": {
+                "type": "string"
+              },
+              "content_type": {
+                "type": "string"
+              },
+              "if_version": {
+                "type": "integer"
+              },
+              "key": {
+                "type": "string"
+              },
+              "limit": {
+                "type": "integer"
+              },
+              "name": {
+                "type": "string"
+              },
+              "ns": {
+                "type": "string"
+              },
+              "prefix": {
+                "type": "string"
+              },
+              "ttl_seconds": {
+                "type": "integer"
+              },
+              "value": {}
+            },
+            "required": ["action"],
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:79b6595dd013f93441c7bc6b4bb6b4a94fc202a201c549ade99ced758928674e"
+        },
+        {
+          "name": "topic",
+          "description": "[bot-bus] Agent-to-agent message bus. Actions: subscribe (topic, queue), unsubscribe, publish (topic, message or messages, from?), list. publish copies each message into every subscribed queue, so a handoff waits safely while the receiving bot sleeps; it reads with the queue tool and acks. Free: 500 subscriptions.",
+          "inputSchema": {
+            "properties": {
+              "action": {
+                "enum": ["subscribe", "unsubscribe", "publish", "list"],
+                "type": "string"
+              },
+              "from": {
+                "type": "string"
+              },
+              "message": {},
+              "messages": {
+                "type": "array"
+              },
+              "queue": {
+                "type": "string"
+              },
+              "topic": {
+                "type": "string"
+              }
+            },
+            "required": ["action"],
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:2ade54d44823f0431202027dee7a9f45b7e5d02eea09d94cf3cd3c23aaa73434"
+        },
+        {
+          "name": "vault",
+          "description": "[login-vault] Sign-in sessions without the bot seeing passwords. Actions: put, list, delete, login, fetch, end, watch (free watch-only).",
+          "inputSchema": {
+            "properties": {
+              "action": {
+                "type": "string"
+              },
+              "domain": {
+                "type": "string"
+              },
+              "form": {
+                "type": "object"
+              },
+              "name": {
+                "type": "string"
+              },
+              "note": {
+                "type": "string"
+              },
+              "session": {
+                "type": "string"
+              },
+              "ui": {
+                "enum": ["openui"],
+                "type": "string"
+              },
+              "url": {
+                "type": "string"
+              }
+            },
+            "required": ["action"],
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:1d301b8b4558916fe8b93565bc1a2329329c8290503a315d71a7cd9a6eab2736"
+        },
+        {
+          "name": "wake_cancel_wake",
+          "title": "agent-wake: cancel_wake",
+          "description": "[agent-wake] Cancel a pending wake-up by wake_id. Call once without confirm to preview, then with confirm=true.",
+          "inputSchema": {
+            "properties": {
+              "confirm": {
+                "type": "boolean"
+              },
+              "inbox": {
+                "description": "Your private inbox name (12+ chars, keep it secret, reuse it every session). Optional if you send an API key: then the key is your inbox.",
+                "type": "string"
+              },
+              "wake_id": {
+                "type": "string"
+              }
+            },
+            "required": ["wake_id"],
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:239f92902df0f9850513357e97bb90a628b31722d21082f06b3011c321006a34"
+        },
+        {
+          "name": "wake_check_wakes",
+          "title": "agent-wake: check_wakes",
+          "description": "[agent-wake] Collect wake-ups that are due for your inbox (each returned once, with its saved state and thread ID) and list upcoming ones. Call this at the start of a session.",
+          "inputSchema": {
+            "properties": {
+              "inbox": {
+                "description": "Your private inbox name (12+ chars, keep it secret, reuse it every session). Optional if you send an API key: then the key is your inbox.",
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:f4b01b3c7944ca7fb035edbc798495e2db3a233a3da119b4570264158cdd5975"
+        },
+        {
+          "name": "wake_schedule_wake",
+          "title": "agent-wake: schedule_wake",
+          "description": "[agent-wake] Schedule a wake-up for your agent. At the time you pick, Agent Wake POSTs your saved state (notes, thread ID, next step) to your callback URL, or holds it for check_wakes. Use it so a later, fresh session picks up where this one stopped. Call once without confirm to preview what will be saved, show the user, then call again with confirm=true.",
+          "inputSchema": {
+            "properties": {
+              "callback_url": {
+                "description": "Optional public https URL to POST the wake to (for example your agent runner webhook). Without it, collect wakes with check_wakes.",
+                "type": "string"
+              },
+              "confirm": {
+                "description": "false or missing = preview only, nothing saved. true = save the wake.",
+                "type": "boolean"
+              },
+              "inbox": {
+                "description": "Your private inbox name (12+ chars, keep it secret, reuse it every session). Optional if you send an API key: then the key is your inbox.",
+                "type": "string"
+              },
+              "repeat_minutes": {
+                "description": "Optional. Repeat every N minutes after the first wake (free: 60+, Pro: 5+).",
+                "type": "integer"
+              },
+              "state": {
+                "description": "What your future session needs: goal, progress, next step, IDs. Free up to 8 KB, Pro up to 64 KB.",
+                "type": "object"
+              },
+              "thread_id": {
+                "description": "Optional conversation or task ID to resume.",
+                "type": "string"
+              },
+              "when": {
+                "description": "When to wake: \"in 30 minutes\", \"in 2 hours\", \"in 3 days\", or an ISO time like 2026-10-16T14:00:00Z. Between 1 minute and 365 days out.",
+                "type": "string"
+              }
+            },
+            "required": ["when"],
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:36d7ec88c28d7e948f4b182f48978ffa1b837dc072c6a990344856da3729698d"
+        },
+        {
+          "name": "wake_usage_and_upgrade",
+          "title": "agent-wake: usage_and_upgrade",
+          "description": "[agent-wake] Show today's usage for your key or IP and the $49/month All Access upgrade link. Free tier: 50 calls/day. Not metered.",
+          "inputSchema": {
+            "properties": {},
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:67a531dd185caa6fc46457720dcd83caca4c6e957a4cf740223ae34d69253431"
+        }
+      ],
+      "resources": [
+        {
+          "uri": "https://cloudforbots.com/bots.md",
+          "name": "cloud-for-bots-guide",
+          "title": "How to use Cloud for Bots",
+          "mimeType": "text/markdown",
+          "digest": "sha256:148cbd2545989104fddb8963bdd3dd0ae3826c5dd17a740df8fedd67e78d501e"
+        }
+      ],
+      "prompts": [
+        {
+          "name": "cloud-for-bots-guide",
+          "title": "How to use Cloud for Bots",
+          "description": "When to use which Cloud for Bots tool, with 3 patterns (long job with resume, webhook-driven bot, safe posting).",
+          "digest": "sha256:e67a3ac70d402a46b74608c5138dc4abc8eafa553f911c094270b22b39f85bc2"
+        }
+      ],
+      "digest": "sha256:b415dadabbefd179baaa6a98164b8f98b512a1fc256aa441d17c8365669b1843"
+    }
+  }
+}

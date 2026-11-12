@@ -1,0 +1,2899 @@
+{
+  "lockfileVersion": 2,
+  "subjects": {
+    "com.doctofam/doctofam": {
+      "kind": "mcp-server",
+      "source": {
+        "client": "manual",
+        "file": "registry.modelcontextprotocol.io"
+      },
+      "transport": {
+        "type": "http",
+        "url": "https://mcp.doctofam.com/mcp"
+      },
+      "protocol": {
+        "era": "modern",
+        "version": "2026-07-28",
+        "supportedVersions": ["2026-07-28"]
+      },
+      "serverInfo": {
+        "name": "doctofam-mcp",
+        "title": "DoctoFam",
+        "version": "0.2.0"
+      },
+      "capabilities": {
+        "extensions": {
+          "io.modelcontextprotocol/skills": {}
+        },
+        "resources": {
+          "listChanged": false
+        },
+        "tools": {
+          "listChanged": false
+        }
+      },
+      "instructions": "# Clinic administration with DoctoFam\n\nThis skill drives the hosted DoctoFam MCP. The user must connect DoctoFam and\nauthorize the intended organization. If authorization fails, ask the user to\nconnect or reauthorize; never guess another tenant.\n\n## Hard privacy and clinical boundary\n\nThis connector serves the front desk, never the medical record. It does not\nexpose:\n\n- patient lists, patient counts, contact details, dates of birth, addresses or\n  any part of a patient's record;\n- diagnoses, treatments, prescriptions, anamnesis, history, images,\n  documents, consents or free-text notes;\n- which procedures an appointment holds, only how many; or\n- provider contacts, credentials or organization internals.\n\nA patient is found only by the name the user gives, with `find_patient`: up\nto five matches, each with an id, the stored name, the clinic and, when two\nshare a name, the last two digits of each one's phone. When more than five\nmatch, nobody is returned: ask the user for more of the name. Never use it to\nbrowse or count patients, and repeat no more names than the task needs.\n\nNever ask users to paste health data into chat or try to infer it from what\nthe tools return. The connector does not diagnose, triage, prescribe,\nrecommend treatment, determine urgency or make a medical decision.\n\n## What the connector changes\n\nThe read tools change nothing. Six tools write, as the signed-in member, with\nthat member's DoctoFam role: `book_appointment`, `reschedule_appointment`,\n`cancel_appointment`, `create_patient`, `update_patient` and\n`set_inventory_quantity`. DoctoFam's own rules apply to every write: a member\nchanges only what their role allows.\n\nIf those six tools are missing, the connection was authorized to read only\n(every connection made before November 2026 was). Ask the user to disconnect\nDoctoFam and connect it again, allowing DoctoFam to create and update data.\n\nConfirm every write with the user before calling it: which patient, which\nclinic, when, and what will change. Booking, moving and cancelling reach the\npatient: a booking schedules the clinic's reminder messages, a move moves\nthem, and a cancellation sends the clinic's cancellation message when the\nclinic set one up. Say so when you ask.\n\nThe connector cannot delete anything, read or write a medical record, add a\nnote, take or refund payments, send a message of its own, change reminder\nsettings, create a repeating series of appointments, change procedures,\nprices, staff or roles, or touch expenses. Direct the user to the DoctoFam\napp for those.\n\n## Resource identifiers\n\n- `clinicId` selects an owned clinic. A write may leave it out when the\n  account has one clinic. Never guess one: call `list_clinics` and reuse its\n  24-character hexadecimal id. Ask when several match.\n- `patientId` names one patient, from `find_patient` or `create_patient`;\n  `appointmentId` one appointment, from `list_appointments`;\n  `inventoryItemId` one stock item.\n- `providerIds` are the ids `list_providers` returns; `procedureIds` the ids\n  `list_procedures` returns.\n- `lastEditTime` is a record's version. Moving or cancelling an appointment,\n  updating a patient and setting a stock quantity take it as\n  `expectedLastEditTime` and are refused with `conflict` when the record\n  changed since it was read.\n- `requestId` is a unique id you choose for each new booking or patient, such\n  as a UUID. Calling again with the same `requestId` returns the first result\n  instead of booking or adding twice.\n\nOpaque cursors may be reused only with the filters that produced them.\n\n## Available tools\n\n| Tool                          | Use it when someone asks…                                                    |\n| ----------------------------- | ---------------------------------------------------------------------------- |\n| `list_clinics`                | which practices they run; also resolves the clinic ID every other tool needs |\n| `get_clinic`                  | about one practice's currency, language or timezone                          |\n| `get_clinic_schedule_summary` | how busy each UTC day is (appointment counts, at most 31 days)               |\n| `list_procedures`             | what a consultation or service costs, or which procedure to book             |\n| `list_rooms`                  | which consultation or exam rooms a practice has                              |\n| `list_calendar_events`        | when the practice is closed or a doctor or room is blocked                   |\n| `list_providers`              | which doctors, nurses or assistants can be booked, with their ids            |\n| `get_clinic_availability`     | when there are free consultation times (up to 7 days with openings)          |\n| `get_subscription_status`     | which plan a practice is on and its caps, or the default Free plan           |\n| `show_clinic_overview`        | for a one-card overview of one practice                                      |\n| `find_patient`                | for the patient they named, to book, move, cancel or update                  |\n| `list_appointments`           | when a patient is booked, or what is booked on one day                       |\n| `list_inventory_items`        | how much of a supply is left, or what is running low                         |\n| `book_appointment`            | to book a patient in                                                         |\n| `reschedule_appointment`      | to move an appointment to another day or time                                |\n| `cancel_appointment`          | to cancel an appointment                                                     |\n| `create_patient`              | to add a new patient                                                         |\n| `update_patient`              | to change a patient's name, phone, email or language                         |\n| `set_inventory_quantity`      | to correct or update a stock count                                           |\n\nFor a broad snapshot, resolve a clinic and call `show_clinic_overview`. For\nworkload, call `get_clinic_schedule_summary` and report only the total,\nlower-bound flag and UTC-day counts. Counts include canceled appointments; say\nso when describing workload. A `+` count is not a complete total. Bookable\navailability is unassigned capacity inside the practice's own online-booking\nwindow; it is not evidence about any person. Procedure names and prices are\nadministrative catalog data, not diagnosis, treatment history or a\nrecommendation.\n\n## Booking workflow\n\n1. Find the patient with `find_patient` and the name the user gave. If\n   several match, ask which one, using the last phone digits when given. If\n   none does, offer to add them with `create_patient` and use the id it\n   returns.\n2. Use `get_clinic` for the clinic's timezone, and `get_clinic_availability`\n   when the user has no time in mind.\n3. Use `list_procedures` for the procedures asked for, and `list_providers`\n   when the clinic has several providers and the user named one or must\n   choose.\n4. Confirm the patient, clinic, local day and time, procedures and provider\n   with the user, then call `book_appointment` with a new `requestId`. Give\n   `startTime` with the clinic's UTC offset. Leave `durationMinutes` out for\n   the clinic's usual length.\n5. Report the booked time in the clinic's timezone, and that the clinic's\n   reminders will reach the patient.\n\n`book_appointment` books only a doctor, nurse or assistant, and only a patient\nof the same organization. With several providers and none named, it answers\n`provider_required`: ask which one. `plan_limit_reached` means the clinic's\nplan limit is used up; the owner can upgrade in the app.\n\n## Moving or cancelling an appointment\n\n1. Find the appointment with `list_appointments`, by the patient's id or by\n   one day, and keep its `id` and `lastEditTime`.\n2. Confirm the change with the user, then call `reschedule_appointment` (the\n   patient, providers, procedures and length stay the same unless a new\n   `durationMinutes` is given) or `cancel_appointment`. Cancelling keeps the\n   appointment as canceled; it never deletes it.\n3. On `conflict`, read the appointment again, tell the user what changed, and\n   ask again before retrying with the new `lastEditTime`.\n\nOnly requested and booked appointments can be moved or canceled. One the\npatient attended or missed stays as it is.\n\n## Patients\n\n`create_patient` needs a name; phone, email and language are optional. The\nphone and email are saved for the clinic's messages but never returned. Use\n`update_patient` with the patient's `lastEditTime` from `find_patient` to\nchange a name, phone, email or language; only the fields given change.\nNothing else about a patient can be written here. Ask for a patient's phone or\nemail only to add or update that patient, never to answer a question.\n\n## Stock\n\n`list_inventory_items` shows each item's unit, quantity, minimum and whether\nit is at or below its minimum. `set_inventory_quantity` replaces the stored\nquantity with the number given: when the user reports a change (\"we used\ntwo\"), work out the new total from the quantity you read, confirm it, and send\nthat total with the item's `lastEditTime`.\n\n## When the answer is lost\n\n`delivery_unknown` means the connection dropped after the request was sent,\nso the change may have been saved. For a booking or a new patient, retry with\nthe same `requestId`: a record already saved is returned instead of written\ntwice. For anything else, read the record again before deciding to retry.\n\nFor clinical or medical-decision requests, follow host safety guidance and\nmake clear that DoctoFam provides no medical decision.\n",
+      "tools": [
+        {
+          "name": "book_appointment",
+          "title": "Book a patient appointment",
+          "description": "Use this when someone asks to book a patient in at their clinic. Returns the new appointment with its time, providers and number of procedures; it takes the clinic's usual length, room and reminders, so the clinic's reminder messages go to the patient. Not for finding free slots.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "clinicId": {
+                "description": "Id of the clinic, from list_clinics. Leave it out when the user has one clinic.",
+                "maxLength": 24,
+                "minLength": 24,
+                "pattern": "^[0-9a-f]{24}$",
+                "type": "string"
+              },
+              "durationMinutes": {
+                "description": "Length in minutes. Leave it out for the clinic's usual length.",
+                "maximum": 480,
+                "minimum": 5,
+                "type": "integer"
+              },
+              "patientId": {
+                "description": "Id of the patient, from find_patient or create_patient.",
+                "maxLength": 24,
+                "minLength": 24,
+                "pattern": "^[0-9a-f]{24}$",
+                "type": "string"
+              },
+              "procedureIds": {
+                "description": "Ids of the procedures booked, from list_procedures.",
+                "items": {
+                  "maxLength": 24,
+                  "minLength": 24,
+                  "pattern": "^[0-9a-f]{24}$",
+                  "type": "string"
+                },
+                "maxItems": 20,
+                "type": "array"
+              },
+              "providerIds": {
+                "description": "Ids of the doctors, nurses or assistants who take it, from list_providers. Leave it out when the clinic has one provider or the user is the provider.",
+                "items": {
+                  "maxLength": 24,
+                  "minLength": 24,
+                  "pattern": "^[0-9a-f]{24}$",
+                  "type": "string"
+                },
+                "maxItems": 5,
+                "type": "array"
+              },
+              "requestId": {
+                "description": "A unique id you choose for this booking, such as a UUID. Calling again with the same requestId returns the first booking instead of booking twice.",
+                "maxLength": 64,
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9_-]{1,64}$",
+                "type": "string"
+              },
+              "startTime": {
+                "description": "Start as an ISO 8601 time with the clinic's UTC offset, such as 2026-11-20T10:00:00+01:00.",
+                "format": "date-time",
+                "maxLength": 40,
+                "type": "string"
+              }
+            },
+            "required": ["patientId", "requestId", "startTime"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "appointment": {
+                "additionalProperties": false,
+                "properties": {
+                  "clinicId": {
+                    "anyOf": [
+                      {
+                        "maxLength": 24,
+                        "minLength": 24,
+                        "pattern": "^[0-9a-f]{24}$",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "endTime": {
+                    "anyOf": [
+                      {
+                        "maxLength": 40,
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "id": {
+                    "anyOf": [
+                      {
+                        "maxLength": 24,
+                        "minLength": 24,
+                        "pattern": "^[0-9a-f]{24}$",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "lastEditTime": {
+                    "anyOf": [
+                      {
+                        "maxLength": 40,
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "patientId": {
+                    "anyOf": [
+                      {
+                        "maxLength": 24,
+                        "minLength": 24,
+                        "pattern": "^[0-9a-f]{24}$",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "providerIds": {
+                    "items": {
+                      "maxLength": 24,
+                      "minLength": 24,
+                      "pattern": "^[0-9a-f]{24}$",
+                      "type": "string"
+                    },
+                    "maxItems": 10,
+                    "type": "array"
+                  },
+                  "reminderCount": {
+                    "maximum": 100000,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "serviceCount": {
+                    "maximum": 100000,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "startTime": {
+                    "anyOf": [
+                      {
+                        "maxLength": 40,
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "status": {
+                    "anyOf": [
+                      {
+                        "enum": ["REQUESTED", "SCHEDULED", "PATIENT_ARRIVED", "NO_SHOW", "CANCELED"],
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": ["clinicId", "endTime", "id", "lastEditTime", "patientId", "providerIds", "reminderCount", "serviceCount", "startTime", "status"],
+                "type": "object"
+              },
+              "status": {
+                "enum": ["booked", "already_booked"],
+                "type": "string"
+              }
+            },
+            "required": ["appointment", "status"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": true,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": false,
+            "title": "Book a patient appointment"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "meta": {
+            "securitySchemes": [
+              {
+                "scopes": ["doctofam:write"],
+                "type": "oauth2"
+              }
+            ]
+          },
+          "digest": "sha256:9cc75bba6852a9bffc16e04ae371d659c0cb7e4bac4aa047e5e426bed8d3e8bc"
+        },
+        {
+          "name": "cancel_appointment",
+          "title": "Cancel a patient appointment",
+          "description": "Use this when someone asks to cancel a patient's appointment. Returns the canceled appointment and whether the clinic's cancellation message goes to the patient; the appointment is kept with status CANCELED, never deleted. Not for moving it to another time.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "appointmentId": {
+                "description": "Id of the appointment, from list_appointments.",
+                "maxLength": 24,
+                "minLength": 24,
+                "pattern": "^[0-9a-f]{24}$",
+                "type": "string"
+              },
+              "expectedLastEditTime": {
+                "description": "The lastEditTime from list_appointments. An appointment changed since then is refused.",
+                "format": "date-time",
+                "maxLength": 40,
+                "type": "string"
+              }
+            },
+            "required": ["appointmentId", "expectedLastEditTime"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "appointment": {
+                "additionalProperties": false,
+                "properties": {
+                  "clinicId": {
+                    "anyOf": [
+                      {
+                        "maxLength": 24,
+                        "minLength": 24,
+                        "pattern": "^[0-9a-f]{24}$",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "endTime": {
+                    "anyOf": [
+                      {
+                        "maxLength": 40,
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "id": {
+                    "anyOf": [
+                      {
+                        "maxLength": 24,
+                        "minLength": 24,
+                        "pattern": "^[0-9a-f]{24}$",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "lastEditTime": {
+                    "anyOf": [
+                      {
+                        "maxLength": 40,
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "patientId": {
+                    "anyOf": [
+                      {
+                        "maxLength": 24,
+                        "minLength": 24,
+                        "pattern": "^[0-9a-f]{24}$",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "providerIds": {
+                    "items": {
+                      "maxLength": 24,
+                      "minLength": 24,
+                      "pattern": "^[0-9a-f]{24}$",
+                      "type": "string"
+                    },
+                    "maxItems": 10,
+                    "type": "array"
+                  },
+                  "reminderCount": {
+                    "maximum": 100000,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "serviceCount": {
+                    "maximum": 100000,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "startTime": {
+                    "anyOf": [
+                      {
+                        "maxLength": 40,
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "status": {
+                    "anyOf": [
+                      {
+                        "enum": ["REQUESTED", "SCHEDULED", "PATIENT_ARRIVED", "NO_SHOW", "CANCELED"],
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": ["clinicId", "endTime", "id", "lastEditTime", "patientId", "providerIds", "reminderCount", "serviceCount", "startTime", "status"],
+                "type": "object"
+              },
+              "clientNotification": {
+                "enum": ["configured", "not_configured", "unknown"],
+                "type": "string"
+              },
+              "status": {
+                "enum": ["canceled", "already_canceled"],
+                "type": "string"
+              }
+            },
+            "required": ["appointment", "clientNotification", "status"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": true,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": false,
+            "title": "Cancel a patient appointment"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "meta": {
+            "securitySchemes": [
+              {
+                "scopes": ["doctofam:write"],
+                "type": "oauth2"
+              }
+            ]
+          },
+          "digest": "sha256:07455718d2f88bfeea76e30523268d749958cf40ff11a0feb218cd491a78e192"
+        },
+        {
+          "name": "create_patient",
+          "title": "Add a patient",
+          "description": "Use this when someone asks to add a new patient to their clinic. Returns the patient's id, name, clinic and language; the phone and email given are stored but never returned. Not for a patient already on file.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "clinicId": {
+                "description": "Id of the clinic, from list_clinics. Leave it out when the user has one clinic.",
+                "maxLength": 24,
+                "minLength": 24,
+                "pattern": "^[0-9a-f]{24}$",
+                "type": "string"
+              },
+              "email": {
+                "description": "Email address.",
+                "maxLength": 254,
+                "type": "string"
+              },
+              "language": {
+                "description": "Language for their messages, as a code such as en or it. Leave it out for the clinic language.",
+                "maxLength": 10,
+                "type": "string"
+              },
+              "name": {
+                "description": "The patient's full name.",
+                "maxLength": 160,
+                "minLength": 1,
+                "type": "string"
+              },
+              "phone": {
+                "description": "Mobile number, with the country code when known.",
+                "maxLength": 40,
+                "type": "string"
+              },
+              "requestId": {
+                "description": "A unique id you choose for this patient, such as a UUID. Calling again with the same requestId returns the first patient instead of adding a second.",
+                "maxLength": 64,
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9_-]{1,64}$",
+                "type": "string"
+              }
+            },
+            "required": ["name", "requestId"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "patient": {
+                "additionalProperties": false,
+                "properties": {
+                  "clinicId": {
+                    "anyOf": [
+                      {
+                        "maxLength": 24,
+                        "minLength": 24,
+                        "pattern": "^[0-9a-f]{24}$",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "id": {
+                    "anyOf": [
+                      {
+                        "maxLength": 24,
+                        "minLength": 24,
+                        "pattern": "^[0-9a-f]{24}$",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "language": {
+                    "anyOf": [
+                      {
+                        "maxLength": 16,
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "lastEditTime": {
+                    "anyOf": [
+                      {
+                        "maxLength": 40,
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "name": {
+                    "maxLength": 200,
+                    "type": "string"
+                  }
+                },
+                "required": ["clinicId", "id", "language", "lastEditTime", "name"],
+                "type": "object"
+              },
+              "status": {
+                "enum": ["created", "already_created"],
+                "type": "string"
+              }
+            },
+            "required": ["patient", "status"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": true,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": false,
+            "title": "Add a patient"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": false
+          },
+          "meta": {
+            "securitySchemes": [
+              {
+                "scopes": ["doctofam:write"],
+                "type": "oauth2"
+              }
+            ]
+          },
+          "digest": "sha256:d49687b6322c8eb039c81bb98cc5055b572736b30c0d17657a59514006d7747e"
+        },
+        {
+          "name": "find_patient",
+          "title": "Find a patient by name",
+          "description": "Use this when someone names a patient to book, move, cancel or update. Returns up to 5 patients whose name contains every word given, with their ids and clinic; the last two phone digits appear only to tell namesakes apart. Not for browsing, counting or reading patient records.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "clinicId": {
+                "description": "Only patients of this clinic; every clinic of the account when absent",
+                "pattern": "^[0-9a-f]{24}$",
+                "type": "string"
+              },
+              "search": {
+                "description": "The patient's name as the user gave it, or part of it. Every word must appear in the stored name, in any order, ignoring case and accents.",
+                "maxLength": 100,
+                "minLength": 3,
+                "type": "string"
+              }
+            },
+            "required": ["search"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "count": {
+                "maximum": 5,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "patients": {
+                "description": "The patients whose name matches, with the ids the other tools take. Contact details, dates of birth, notes and clinical records are never returned.",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "clinicId": {
+                      "anyOf": [
+                        {
+                          "pattern": "^[0-9a-f]{24}$",
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "id": {
+                      "pattern": "^[0-9a-f]{24}$",
+                      "type": "string"
+                    },
+                    "lastEditTime": {
+                      "anyOf": [
+                        {
+                          "maxLength": 32,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "name": {
+                      "maxLength": 200,
+                      "type": "string"
+                    },
+                    "phoneEnding": {
+                      "anyOf": [
+                        {
+                          "pattern": "^\\d{2}$",
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "The last two digits of the patient's phone, given only when two patients share this name"
+                    }
+                  },
+                  "required": ["clinicId", "id", "lastEditTime", "name", "phoneEnding"],
+                  "type": "object"
+                },
+                "maxItems": 5,
+                "type": "array"
+              },
+              "tooManyMatches": {
+                "description": "More than 5 patients match: none are returned; ask the user for more of the name",
+                "type": "boolean"
+              }
+            },
+            "required": ["count", "patients", "tooManyMatches"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Find a patient by name"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "securitySchemes": [
+              {
+                "scopes": ["doctofam:read"],
+                "type": "oauth2"
+              }
+            ]
+          },
+          "digest": "sha256:709f0ed1a989928ab0c76758b4411e7ee7900a2099afdbeb962d062a35b3e129"
+        },
+        {
+          "name": "get_clinic",
+          "title": "Get medical practice details",
+          "description": "Use this when someone asks about one medical practice's setup, such as its currency, language or timezone. Returns the practice's name, currency, default language, timezone and last edit time. Not for free consultation times.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "clinicId": {
+                "description": "Practice id: 24 lowercase hexadecimal characters",
+                "pattern": "^[0-9a-f]{24}$",
+                "type": "string"
+              }
+            },
+            "required": ["clinicId"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "clinic": {
+                "anyOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "currency": {
+                        "anyOf": [
+                          {
+                            "pattern": "^[A-Za-z]{3}$",
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "defaultLocale": {
+                        "anyOf": [
+                          {
+                            "maxLength": 35,
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "id": {
+                        "pattern": "^[0-9a-f]{24}$",
+                        "type": "string"
+                      },
+                      "lastEditTime": {
+                        "anyOf": [
+                          {
+                            "maxLength": 32,
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "name": {
+                        "maxLength": 200,
+                        "type": "string"
+                      },
+                      "timezone": {
+                        "anyOf": [
+                          {
+                            "maxLength": 64,
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      }
+                    },
+                    "required": ["currency", "defaultLocale", "id", "lastEditTime", "name", "timezone"],
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Administrative practice metadata only; opening hours, staff, patient and appointment data are not included. Null when not found."
+              },
+              "status": {
+                "enum": ["found", "not-found"],
+                "type": "string"
+              }
+            },
+            "required": ["clinic", "status"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Get medical practice details"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "securitySchemes": [
+              {
+                "scopes": ["doctofam:read"],
+                "type": "oauth2"
+              }
+            ]
+          },
+          "digest": "sha256:42b3fe59368fc9ee9f8a582f85a25ef13143f5ecfc6121195710d5366764c1da"
+        },
+        {
+          "name": "get_clinic_availability",
+          "title": "Find free consultation times",
+          "description": "Use this when someone asks when their doctor's practice has free appointment or consultation times. Returns each open online-booking slot's start and end, grouped by day, for the next days with openings: up to 7 days and 100 slots (no patient or doctor details). Not for booking a visit.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "clinicId": {
+                "description": "Practice id: 24 lowercase hexadecimal characters",
+                "pattern": "^[0-9a-f]{24}$",
+                "type": "string"
+              }
+            },
+            "required": ["clinicId"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "days": {
+                "description": "One row per day with open online-booking slots, in date order, holding at most 100 slots in total. Slot times only; patients, doctors, services and clinical data are never included.",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "day": {
+                      "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+                      "type": "string"
+                    },
+                    "slots": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "endTime": {
+                            "$ref": "#/properties/days/items/properties/slots/items/properties/startTime"
+                          },
+                          "startTime": {
+                            "maxLength": 32,
+                            "type": "string"
+                          }
+                        },
+                        "required": ["endTime", "startTime"],
+                        "type": "object"
+                      },
+                      "maxItems": 100,
+                      "type": "array"
+                    }
+                  },
+                  "required": ["day", "slots"],
+                  "type": "object"
+                },
+                "maxItems": 7,
+                "type": "array"
+              }
+            },
+            "required": ["days"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Find free consultation times"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "securitySchemes": [
+              {
+                "scopes": ["doctofam:read"],
+                "type": "oauth2"
+              }
+            ]
+          },
+          "digest": "sha256:7da5f348ae62f87aca3bf1fe49424495b8a5c44bd232f4bf67cd6486b06c456a"
+        },
+        {
+          "name": "get_clinic_schedule_summary",
+          "title": "Count patient visits per day",
+          "description": "Use this when someone asks how busy their medical practice is or how many patient visits are booked each day. Returns appointment counts per UTC day for one practice, whatever their status, for the next 7 days by default and at most 31 days; counting stops at 100. Not for counting cancellations or seeing which patients are booked.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "clinicId": {
+                "description": "Practice id: 24 lowercase hexadecimal characters",
+                "pattern": "^[0-9a-f]{24}$",
+                "type": "string"
+              },
+              "endTime": {
+                "$ref": "#/properties/startTime",
+                "description": "End of the range as an ISO 8601 date-time, after startTime and at most 31 days later; defaults to 7 days after the start"
+              },
+              "startTime": {
+                "description": "Start of the range as an ISO 8601 date-time; defaults to now",
+                "maxLength": 32,
+                "type": "string"
+              }
+            },
+            "required": ["clinicId"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "appointmentCount": {
+                "maximum": 100,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "appointmentCountIsLowerBound": {
+                "description": "True when more than 100 appointments fall in the range",
+                "type": "boolean"
+              },
+              "days": {
+                "description": "One row per UTC day that has appointments, canceled ones included. Aggregate counts only: appointment identifiers and times, patient information, services, diagnoses and notes are never returned.",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "appointmentCount": {
+                      "maximum": 100,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "day": {
+                      "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+                      "type": "string"
+                    }
+                  },
+                  "required": ["appointmentCount", "day"],
+                  "type": "object"
+                },
+                "maxItems": 100,
+                "type": "array"
+              },
+              "range": {
+                "additionalProperties": false,
+                "properties": {
+                  "endTime": {
+                    "$ref": "#/properties/range/properties/startTime"
+                  },
+                  "startTime": {
+                    "maxLength": 32,
+                    "type": "string"
+                  }
+                },
+                "required": ["endTime", "startTime"],
+                "type": "object"
+              }
+            },
+            "required": ["appointmentCount", "appointmentCountIsLowerBound", "days", "range"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Count patient visits per day"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "openai/outputTemplate": "ui://doctofam/schedule-summary-v1.html",
+            "openai/toolInvocation/invoked": "DoctoFam schedule summary ready.",
+            "openai/toolInvocation/invoking": "Counting DoctoFam schedule…",
+            "securitySchemes": [
+              {
+                "scopes": ["doctofam:read"],
+                "type": "oauth2"
+              }
+            ],
+            "ui": {
+              "resourceUri": "ui://doctofam/schedule-summary-v1.html"
+            },
+            "ui/resourceUri": "ui://doctofam/schedule-summary-v1.html"
+          },
+          "digest": "sha256:02c796ea49d251da0c9c485bd8450f3d39034a7575a9d4814120df30c29b1e03"
+        },
+        {
+          "name": "get_subscription_status",
+          "title": "Check DoctoFam plan and limits",
+          "description": "Use this when someone asks which DoctoFam plan a practice is on, whether it is active, or how many appointments, patients, rooms or users it allows. Returns the plan name, status, billing frequency and plan caps, or the default Free plan when none is active. Not for invoices or amounts billed.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "clinicId": {
+                "description": "Practice id: 24 lowercase hexadecimal characters",
+                "pattern": "^[0-9a-f]{24}$",
+                "type": "string"
+              }
+            },
+            "required": ["clinicId"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "subscription": {
+                "additionalProperties": false,
+                "description": "The practice's active or past-due plan, or the default Free plan (isDefaultFreePlan) when neither exists. Seats are rooms; caps are limits, not usage. Billing identifiers, payment-provider data, amounts, currencies, patient records and clinical data are never returned.",
+                "properties": {
+                  "billingFrequency": {
+                    "anyOf": [
+                      {
+                        "enum": ["MONTHLY", "YEARLY"],
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "isDefaultFreePlan": {
+                    "type": "boolean"
+                  },
+                  "lastEditTime": {
+                    "anyOf": [
+                      {
+                        "maxLength": 32,
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "maxNumberOfAppointments": {
+                    "anyOf": [
+                      {
+                        "maximum": 9007199254740991,
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "maxNumberOfPatients": {
+                    "$ref": "#/properties/subscription/properties/maxNumberOfAppointments"
+                  },
+                  "maxNumberOfSeats": {
+                    "$ref": "#/properties/subscription/properties/maxNumberOfAppointments"
+                  },
+                  "maxNumberOfUsers": {
+                    "$ref": "#/properties/subscription/properties/maxNumberOfAppointments"
+                  },
+                  "productName": {
+                    "maxLength": 200,
+                    "type": "string"
+                  },
+                  "status": {
+                    "anyOf": [
+                      {
+                        "enum": ["ACTIVE", "PAST_DUE", "CANCELED"],
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": ["billingFrequency", "isDefaultFreePlan", "lastEditTime", "maxNumberOfAppointments", "maxNumberOfPatients", "maxNumberOfSeats", "maxNumberOfUsers", "productName", "status"],
+                "type": "object"
+              }
+            },
+            "required": ["subscription"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Check DoctoFam plan and limits"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "securitySchemes": [
+              {
+                "scopes": ["doctofam:read"],
+                "type": "oauth2"
+              }
+            ]
+          },
+          "digest": "sha256:b7480ef70f3e67f2361b055c3e984d456990f27f217b439aa140c556a52e6525"
+        },
+        {
+          "name": "list_appointments",
+          "title": "List a patient's or a day's appointments",
+          "description": "Use this when someone asks when a patient is booked, or what is booked at the clinic on a given day. Returns appointment ids with patient, clinic and provider ids, times, status, edit time and how many procedures each has, latest first, up to 100. Not for counting how busy days are, nor for procedure names, notes or any medical detail.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "clinicId": {
+                "description": "Only appointments at this clinic, by an id from list_clinics; every clinic when absent",
+                "pattern": "^[0-9a-f]{24}$",
+                "type": "string"
+              },
+              "endTime": {
+                "description": "Only appointments ending before this ISO 8601 time",
+                "maxLength": 32,
+                "type": "string"
+              },
+              "limit": {
+                "description": "Maximum number of appointments to return (default 20, maximum 100)",
+                "exclusiveMinimum": 0,
+                "maximum": 100,
+                "type": "integer"
+              },
+              "patientId": {
+                "description": "Only appointments of this patient, by an id from find_patient",
+                "pattern": "^[0-9a-f]{24}$",
+                "type": "string"
+              },
+              "startTime": {
+                "description": "Only appointments starting at or after this ISO 8601 time. Without a patientId, give a startTime and endTime at most one day apart",
+                "maxLength": 32,
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "appointments": {
+                "description": "Appointments, latest start first. Procedure names, notes, reminders, patient names and contact details are never returned.",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "clinicId": {
+                      "anyOf": [
+                        {
+                          "pattern": "^[0-9a-f]{24}$",
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "endTime": {
+                      "anyOf": [
+                        {
+                          "maxLength": 32,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "id": {
+                      "pattern": "^[0-9a-f]{24}$",
+                      "type": "string"
+                    },
+                    "lastEditTime": {
+                      "anyOf": [
+                        {
+                          "maxLength": 32,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "Version to pass as expectedLastEditTime when moving or cancelling it"
+                    },
+                    "patientId": {
+                      "anyOf": [
+                        {
+                          "pattern": "^[0-9a-f]{24}$",
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "procedureCount": {
+                      "description": "How many procedures it has; never which",
+                      "maximum": 1000,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "providerIds": {
+                      "description": "Doctors, nurses or assistants booked on it, as list_providers ids",
+                      "items": {
+                        "pattern": "^[0-9a-f]{24}$",
+                        "type": "string"
+                      },
+                      "maxItems": 20,
+                      "type": "array"
+                    },
+                    "startTime": {
+                      "anyOf": [
+                        {
+                          "maxLength": 32,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "status": {
+                      "anyOf": [
+                        {
+                          "enum": ["REQUESTED", "SCHEDULED", "PATIENT_ARRIVED", "NO_SHOW", "CANCELED"],
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": ["clinicId", "endTime", "id", "lastEditTime", "patientId", "procedureCount", "providerIds", "startTime", "status"],
+                  "type": "object"
+                },
+                "maxItems": 100,
+                "type": "array"
+              },
+              "count": {
+                "maximum": 100,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "hasMore": {
+                "type": "boolean"
+              }
+            },
+            "required": ["appointments", "count", "hasMore"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "List a patient's or a day's appointments"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "securitySchemes": [
+              {
+                "scopes": ["doctofam:read"],
+                "type": "oauth2"
+              }
+            ]
+          },
+          "digest": "sha256:848fc606ee409daac41ee1b4326fa4a88b28684df8845208c9aa42d10b5dd5ee"
+        },
+        {
+          "name": "list_calendar_events",
+          "title": "List closures, holidays and blocked time",
+          "description": "Use this when someone asks when their medical practice is closed, or when a doctor or room is blocked for holidays, sick leave, courses, meetings or maintenance. Returns each block or extra opening with start, end, all-day flag, scope and type (no titles or notes). Not for patient appointments.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "clinicId": {
+                "description": "Only this practice (24 lowercase hexadecimal characters); every practice when absent",
+                "pattern": "^[0-9a-f]{24}$",
+                "type": "string"
+              },
+              "cursor": {
+                "description": "The nextCursor of the previous page with the same filters; absent for the first page",
+                "maxLength": 4096,
+                "type": "string"
+              },
+              "endTime": {
+                "$ref": "#/properties/startTime",
+                "description": "Only blocks ending before this ISO 8601 date-time"
+              },
+              "limit": {
+                "description": "Blocks per page, from 1 to 100; defaults to 20",
+                "exclusiveMinimum": 0,
+                "maximum": 100,
+                "type": "integer"
+              },
+              "startTime": {
+                "description": "Only blocks starting at or after this ISO 8601 date-time",
+                "maxLength": 32,
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "calendarEvents": {
+                "description": "Non-appointment calendar blocks, earliest first. Event identifiers, staff and room references, titles, notes and patient links are never returned.",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "allDay": {
+                      "type": "boolean"
+                    },
+                    "effect": {
+                      "anyOf": [
+                        {
+                          "enum": ["BLOCK", "OPEN"],
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "BLOCK removes bookable time; OPEN adds hours on a normally closed time"
+                    },
+                    "endTime": {
+                      "anyOf": [
+                        {
+                          "$ref": "#/properties/calendarEvents/items/properties/startTime/anyOf/0"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "scope": {
+                      "anyOf": [
+                        {
+                          "enum": ["SEAT", "PROVIDER", "CLINIC"],
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "CLINIC: the whole practice; PROVIDER: one or more staff; SEAT: one room"
+                    },
+                    "startTime": {
+                      "anyOf": [
+                        {
+                          "maxLength": 32,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "type": {
+                      "anyOf": [
+                        {
+                          "maxLength": 64,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "Label such as COURSE, MEETING, VACATION, SICK, HOLIDAY, MAINTENANCE or OTHER"
+                    }
+                  },
+                  "required": ["allDay", "effect", "endTime", "scope", "startTime", "type"],
+                  "type": "object"
+                },
+                "maxItems": 100,
+                "type": "array"
+              },
+              "nextCursor": {
+                "anyOf": [
+                  {
+                    "maxLength": 4096,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Cursor for the next page; null on the last page"
+              }
+            },
+            "required": ["calendarEvents", "nextCursor"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "List closures, holidays and blocked time"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "securitySchemes": [
+              {
+                "scopes": ["doctofam:read"],
+                "type": "oauth2"
+              }
+            ]
+          },
+          "digest": "sha256:1aad67559287ea566b7b8cdd6a38af6ef7f1cf94fa05a1ae7351cde3928b9806"
+        },
+        {
+          "name": "list_clinics",
+          "title": "List your medical practices",
+          "description": "Use this when someone asks which medical practices or doctor's offices they run in DoctoFam, or a practice's id is needed. Returns each practice's id, name, currency, default language and timezone, 20 per page by default. Not for finding a patient or a visit.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "cursor": {
+                "description": "The nextCursor of the previous page of this listing; absent for the first page",
+                "maxLength": 4096,
+                "type": "string"
+              },
+              "limit": {
+                "description": "Practices per page, from 1 to 100; defaults to 20",
+                "exclusiveMinimum": 0,
+                "maximum": 100,
+                "type": "integer"
+              }
+            },
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "clinics": {
+                "description": "Medical practices in the signed-in organization, administrative metadata only. Patient, appointment and clinical records are never returned.",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "currency": {
+                      "anyOf": [
+                        {
+                          "pattern": "^[A-Za-z]{3}$",
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "defaultLocale": {
+                      "anyOf": [
+                        {
+                          "maxLength": 35,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "id": {
+                      "pattern": "^[0-9a-f]{24}$",
+                      "type": "string"
+                    },
+                    "lastEditTime": {
+                      "anyOf": [
+                        {
+                          "maxLength": 32,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "name": {
+                      "maxLength": 200,
+                      "type": "string"
+                    },
+                    "timezone": {
+                      "anyOf": [
+                        {
+                          "maxLength": 64,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": ["currency", "defaultLocale", "id", "lastEditTime", "name", "timezone"],
+                  "type": "object"
+                },
+                "maxItems": 100,
+                "type": "array"
+              },
+              "nextCursor": {
+                "anyOf": [
+                  {
+                    "maxLength": 4096,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Cursor for the next page; null on the last page"
+              }
+            },
+            "required": ["clinics", "nextCursor"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "List your medical practices"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "securitySchemes": [
+              {
+                "scopes": ["doctofam:read"],
+                "type": "oauth2"
+              }
+            ]
+          },
+          "digest": "sha256:eb8d24ae515924bd2a36ddadd266f47a4339c5010d5f7eec749e22a8497459db"
+        },
+        {
+          "name": "list_inventory_items",
+          "title": "Check clinic stock",
+          "description": "Use this when someone asks how much of a supply is left in the clinic's stock or what is running low. Returns up to 100 stock items with unit, quantity, minimum and a low-stock flag. Not for procedure prices.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "clinicId": {
+                "description": "Id of the clinic, from list_clinics. Leave it out when the user has one clinic.",
+                "maxLength": 24,
+                "minLength": 24,
+                "pattern": "^[0-9a-f]{24}$",
+                "type": "string"
+              },
+              "limit": {
+                "description": "Maximum number of items (default 50, maximum 100).",
+                "maximum": 100,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "lowStockOnly": {
+                "description": "Only items at or below their minimum quantity.",
+                "type": "boolean"
+              },
+              "search": {
+                "description": "Only items whose name contains these words.",
+                "maxLength": 100,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "clinicId": {
+                "maxLength": 24,
+                "minLength": 24,
+                "pattern": "^[0-9a-f]{24}$",
+                "type": "string"
+              },
+              "count": {
+                "maximum": 100000,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "hasMore": {
+                "type": "boolean"
+              },
+              "items": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "clinicId": {
+                      "anyOf": [
+                        {
+                          "maxLength": 24,
+                          "minLength": 24,
+                          "pattern": "^[0-9a-f]{24}$",
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "id": {
+                      "anyOf": [
+                        {
+                          "maxLength": 24,
+                          "minLength": 24,
+                          "pattern": "^[0-9a-f]{24}$",
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "lastEditTime": {
+                      "anyOf": [
+                        {
+                          "maxLength": 40,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "lowStock": {
+                      "type": "boolean"
+                    },
+                    "minimumQuantity": {
+                      "anyOf": [
+                        {
+                          "maximum": 1000000000,
+                          "minimum": 0,
+                          "type": "number"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "name": {
+                      "maxLength": 200,
+                      "type": "string"
+                    },
+                    "quantity": {
+                      "anyOf": [
+                        {
+                          "maximum": 1000000000,
+                          "minimum": 0,
+                          "type": "number"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "unit": {
+                      "anyOf": [
+                        {
+                          "maxLength": 40,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": ["clinicId", "id", "lastEditTime", "lowStock", "minimumQuantity", "name", "quantity", "unit"],
+                  "type": "object"
+                },
+                "maxItems": 100,
+                "type": "array"
+              }
+            },
+            "required": ["clinicId", "count", "hasMore", "items"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Check clinic stock"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "securitySchemes": [
+              {
+                "scopes": ["doctofam:read"],
+                "type": "oauth2"
+              }
+            ]
+          },
+          "digest": "sha256:9e4099d5319e926a26d361bc734d3dd057fee5015565a029f6eea24ae30fd920"
+        },
+        {
+          "name": "list_procedures",
+          "title": "Look up consultation and service prices",
+          "description": "Use this when someone asks what their medical practice charges for a consultation, check-up, vaccination or other service, or which procedure to book. Returns catalog service ids and names with price and last edit time, alphabetically, 50 per page by default. Not for a patient's medical history or the care they received.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "clinicId": {
+                "description": "Only this practice (24 lowercase hexadecimal characters); every practice when absent",
+                "pattern": "^[0-9a-f]{24}$",
+                "type": "string"
+              },
+              "cursor": {
+                "description": "The nextCursor of the previous page with the same filters; absent for the first page",
+                "maxLength": 4096,
+                "type": "string"
+              },
+              "limit": {
+                "description": "Services per page, from 1 to 100; defaults to 50",
+                "exclusiveMinimum": 0,
+                "maximum": 100,
+                "type": "integer"
+              }
+            },
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "nextCursor": {
+                "anyOf": [
+                  {
+                    "maxLength": 4096,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Cursor for the next page; null on the last page"
+              },
+              "procedures": {
+                "description": "Service catalog entries in name order, with the ids a booking takes. Patient-linked treatments, diagnoses and prescriptions are never returned.",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "duration": {
+                      "description": "Configured duration, or null when none was recorded",
+                      "type": ["number", "null"]
+                    },
+                    "id": {
+                      "anyOf": [
+                        {
+                          "pattern": "^[0-9a-f]{24}$",
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "Id to book with, as book_appointment takes it"
+                    },
+                    "lastEditTime": {
+                      "anyOf": [
+                        {
+                          "maxLength": 32,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "name": {
+                      "maxLength": 200,
+                      "type": "string"
+                    },
+                    "price": {
+                      "description": "Price in the practice's currency",
+                      "type": ["number", "null"]
+                    }
+                  },
+                  "required": ["duration", "id", "lastEditTime", "name", "price"],
+                  "type": "object"
+                },
+                "maxItems": 100,
+                "type": "array"
+              }
+            },
+            "required": ["nextCursor", "procedures"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Look up consultation and service prices"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "securitySchemes": [
+              {
+                "scopes": ["doctofam:read"],
+                "type": "oauth2"
+              }
+            ]
+          },
+          "digest": "sha256:4183bfa587b1409782cda30af531666223ab554fbf09e86900ca407e23481896"
+        },
+        {
+          "name": "list_providers",
+          "title": "List doctors and staff who take bookings",
+          "description": "Use this when someone asks which doctors, nurses or assistants patients can book at their practice, or who takes an appointment. Returns up to 100 staff ids and display names for one practice (no contact details or roles). Not for staff holidays or sick days.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "clinicId": {
+                "description": "Practice id: 24 lowercase hexadecimal characters",
+                "pattern": "^[0-9a-f]{24}$",
+                "type": "string"
+              }
+            },
+            "required": ["clinicId"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "providers": {
+                "description": "Ids and display names of staff with a doctor, nurse or assistant role, the ones the public booking page offers. Contact details, role records and clinical data are never returned.",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "displayName": {
+                      "maxLength": 200,
+                      "type": "string"
+                    },
+                    "id": {
+                      "description": "Id to book with, as book_appointment takes it",
+                      "pattern": "^[0-9a-f]{24}$",
+                      "type": "string"
+                    }
+                  },
+                  "required": ["displayName", "id"],
+                  "type": "object"
+                },
+                "maxItems": 100,
+                "type": "array"
+              }
+            },
+            "required": ["providers"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "List doctors and staff who take bookings"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "securitySchemes": [
+              {
+                "scopes": ["doctofam:read"],
+                "type": "oauth2"
+              }
+            ]
+          },
+          "digest": "sha256:db9272236092a671c166a609eebecfe20fd70ff4f8720aeaabf3efe982c435dc"
+        },
+        {
+          "name": "list_rooms",
+          "title": "List consultation rooms",
+          "description": "Use this when someone asks which consultation or exam rooms their medical practice has. Returns room names with last edit time for one practice, alphabetically, 50 per page by default. Not for room schedules or which patient uses a room.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "clinicId": {
+                "description": "Practice id: 24 lowercase hexadecimal characters",
+                "pattern": "^[0-9a-f]{24}$",
+                "type": "string"
+              },
+              "cursor": {
+                "description": "The nextCursor of the previous page with the same filters; absent for the first page",
+                "maxLength": 4096,
+                "type": "string"
+              },
+              "limit": {
+                "description": "Rooms per page, from 1 to 100; defaults to 50",
+                "exclusiveMinimum": 0,
+                "maximum": 100,
+                "type": "integer"
+              }
+            },
+            "required": ["clinicId"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "nextCursor": {
+                "anyOf": [
+                  {
+                    "maxLength": 4096,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Cursor for the next page; null on the last page"
+              },
+              "rooms": {
+                "description": "Rooms in name order. Record identifiers, appointment links, patient information and clinical content are never returned.",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "lastEditTime": {
+                      "anyOf": [
+                        {
+                          "maxLength": 32,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "name": {
+                      "maxLength": 200,
+                      "type": "string"
+                    }
+                  },
+                  "required": ["lastEditTime", "name"],
+                  "type": "object"
+                },
+                "maxItems": 100,
+                "type": "array"
+              }
+            },
+            "required": ["nextCursor", "rooms"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "List consultation rooms"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "securitySchemes": [
+              {
+                "scopes": ["doctofam:read"],
+                "type": "oauth2"
+              }
+            ]
+          },
+          "digest": "sha256:67b1dd589a81dd0f4a85ca424bfedd4f3e9aa662165cbc1a2d03dfb0519d0f76"
+        },
+        {
+          "name": "reschedule_appointment",
+          "title": "Move a patient appointment",
+          "description": "Use this when someone asks to move a patient's appointment to another day or time. Returns the appointment with its new and previous start; it keeps the patient, providers, procedures and length unless a new length is given, and its reminders move with it. Not for cancelling.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "appointmentId": {
+                "description": "Id of the appointment, from list_appointments.",
+                "maxLength": 24,
+                "minLength": 24,
+                "pattern": "^[0-9a-f]{24}$",
+                "type": "string"
+              },
+              "durationMinutes": {
+                "description": "New length in minutes. Leave it out to keep the current length.",
+                "maximum": 480,
+                "minimum": 5,
+                "type": "integer"
+              },
+              "expectedLastEditTime": {
+                "description": "The lastEditTime from list_appointments. An appointment changed since then is refused.",
+                "format": "date-time",
+                "maxLength": 40,
+                "type": "string"
+              },
+              "startTime": {
+                "description": "New start as an ISO 8601 time with the clinic's UTC offset, such as 2026-11-20T10:00:00+01:00.",
+                "format": "date-time",
+                "maxLength": 40,
+                "type": "string"
+              }
+            },
+            "required": ["appointmentId", "expectedLastEditTime", "startTime"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "appointment": {
+                "additionalProperties": false,
+                "properties": {
+                  "clinicId": {
+                    "anyOf": [
+                      {
+                        "maxLength": 24,
+                        "minLength": 24,
+                        "pattern": "^[0-9a-f]{24}$",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "endTime": {
+                    "anyOf": [
+                      {
+                        "maxLength": 40,
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "id": {
+                    "anyOf": [
+                      {
+                        "maxLength": 24,
+                        "minLength": 24,
+                        "pattern": "^[0-9a-f]{24}$",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "lastEditTime": {
+                    "anyOf": [
+                      {
+                        "maxLength": 40,
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "patientId": {
+                    "anyOf": [
+                      {
+                        "maxLength": 24,
+                        "minLength": 24,
+                        "pattern": "^[0-9a-f]{24}$",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "providerIds": {
+                    "items": {
+                      "maxLength": 24,
+                      "minLength": 24,
+                      "pattern": "^[0-9a-f]{24}$",
+                      "type": "string"
+                    },
+                    "maxItems": 10,
+                    "type": "array"
+                  },
+                  "reminderCount": {
+                    "maximum": 100000,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "serviceCount": {
+                    "maximum": 100000,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "startTime": {
+                    "anyOf": [
+                      {
+                        "maxLength": 40,
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "status": {
+                    "anyOf": [
+                      {
+                        "enum": ["REQUESTED", "SCHEDULED", "PATIENT_ARRIVED", "NO_SHOW", "CANCELED"],
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": ["clinicId", "endTime", "id", "lastEditTime", "patientId", "providerIds", "reminderCount", "serviceCount", "startTime", "status"],
+                "type": "object"
+              },
+              "previousStartTime": {
+                "anyOf": [
+                  {
+                    "maxLength": 40,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "status": {
+                "enum": ["rescheduled"],
+                "type": "string"
+              }
+            },
+            "required": ["appointment", "previousStartTime", "status"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": true,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": false,
+            "title": "Move a patient appointment"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "meta": {
+            "securitySchemes": [
+              {
+                "scopes": ["doctofam:write"],
+                "type": "oauth2"
+              }
+            ]
+          },
+          "digest": "sha256:a4ddf68340dbc1285037f7019fa85b4270d9dc7cf922ff52a3dbd8f57e478006"
+        },
+        {
+          "name": "set_inventory_quantity",
+          "title": "Update a stock quantity",
+          "description": "Use this when someone asks to correct or update how much of a stock item the clinic has. Returns the item with its previous and new quantity; the number given replaces the stored one. Not for adding a new stock item.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "expectedLastEditTime": {
+                "description": "The lastEditTime from list_inventory_items. An item changed since then is refused.",
+                "format": "date-time",
+                "maxLength": 40,
+                "type": "string"
+              },
+              "inventoryItemId": {
+                "description": "Id of the stock item, from list_inventory_items.",
+                "maxLength": 24,
+                "minLength": 24,
+                "pattern": "^[0-9a-f]{24}$",
+                "type": "string"
+              },
+              "quantity": {
+                "description": "The quantity now in stock, in the item unit. It replaces the stored quantity; work out the total first when the user gives a change.",
+                "maximum": 1000000000,
+                "minimum": 0,
+                "type": "number"
+              }
+            },
+            "required": ["expectedLastEditTime", "inventoryItemId", "quantity"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "item": {
+                "additionalProperties": false,
+                "properties": {
+                  "clinicId": {
+                    "anyOf": [
+                      {
+                        "maxLength": 24,
+                        "minLength": 24,
+                        "pattern": "^[0-9a-f]{24}$",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "id": {
+                    "anyOf": [
+                      {
+                        "maxLength": 24,
+                        "minLength": 24,
+                        "pattern": "^[0-9a-f]{24}$",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "lastEditTime": {
+                    "anyOf": [
+                      {
+                        "maxLength": 40,
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "lowStock": {
+                    "type": "boolean"
+                  },
+                  "minimumQuantity": {
+                    "anyOf": [
+                      {
+                        "maximum": 1000000000,
+                        "minimum": 0,
+                        "type": "number"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "name": {
+                    "maxLength": 200,
+                    "type": "string"
+                  },
+                  "quantity": {
+                    "anyOf": [
+                      {
+                        "maximum": 1000000000,
+                        "minimum": 0,
+                        "type": "number"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "unit": {
+                    "anyOf": [
+                      {
+                        "maxLength": 40,
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": ["clinicId", "id", "lastEditTime", "lowStock", "minimumQuantity", "name", "quantity", "unit"],
+                "type": "object"
+              },
+              "previousQuantity": {
+                "anyOf": [
+                  {
+                    "maximum": 1000000000,
+                    "minimum": 0,
+                    "type": "number"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "status": {
+                "enum": ["updated"],
+                "type": "string"
+              }
+            },
+            "required": ["item", "previousQuantity", "status"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": true,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": false,
+            "title": "Update a stock quantity"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": false
+          },
+          "meta": {
+            "securitySchemes": [
+              {
+                "scopes": ["doctofam:write"],
+                "type": "oauth2"
+              }
+            ]
+          },
+          "digest": "sha256:fc94a2042ccc70b9a814e004c308c9142e35c94823983ef8e09a46fc9b708ce4"
+        },
+        {
+          "name": "show_clinic_overview",
+          "title": "Show medical practice overview",
+          "description": "Use this when someone wants a quick overview or dashboard of one medical practice. Returns an overview card with the practice's details, appointment counts for the next 7 days, staff and room counts, open online-booking slots, up to 12 service prices and the current plan (no patient or clinical data). Not for a single patient or visit.",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "clinicId": {
+                "description": "Practice id: 24 lowercase hexadecimal characters",
+                "pattern": "^[0-9a-f]{24}$",
+                "type": "string"
+              }
+            },
+            "required": ["clinicId"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "additionalProperties": false,
+            "properties": {
+              "appointmentCount": {
+                "maximum": 100,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "appointmentCountIsLowerBound": {
+                "type": "boolean"
+              },
+              "availabilityDays": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "count": {
+                      "maximum": 100,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "day": {
+                      "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+                      "type": "string"
+                    }
+                  },
+                  "required": ["count", "day"],
+                  "type": "object"
+                },
+                "maxItems": 7,
+                "type": "array"
+              },
+              "availableDayCount": {
+                "maximum": 7,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "availableSlotCount": {
+                "maximum": 100,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "clinic": {
+                "anyOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "currency": {
+                        "anyOf": [
+                          {
+                            "pattern": "^[A-Za-z]{3}$",
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "defaultLocale": {
+                        "anyOf": [
+                          {
+                            "maxLength": 35,
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "id": {
+                        "pattern": "^[0-9a-f]{24}$",
+                        "type": "string"
+                      },
+                      "name": {
+                        "maxLength": 200,
+                        "type": "string"
+                      },
+                      "timezone": {
+                        "anyOf": [
+                          {
+                            "maxLength": 64,
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      }
+                    },
+                    "required": ["currency", "defaultLocale", "id", "name", "timezone"],
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Administrative practice metadata; null when the practice was not found. The overview never includes individual appointment records, patient information, diagnoses, treatment details, notes or other clinical data."
+              },
+              "procedureCount": {
+                "maximum": 12,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "procedureCountIsLowerBound": {
+                "type": "boolean"
+              },
+              "procedures": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "duration": {
+                      "anyOf": [
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "lastEditTime": {
+                      "anyOf": [
+                        {
+                          "maxLength": 32,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "name": {
+                      "maxLength": 200,
+                      "type": "string"
+                    },
+                    "price": {
+                      "anyOf": [
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": ["duration", "lastEditTime", "name", "price"],
+                  "type": "object"
+                },
+                "maxItems": 12,
+                "type": "array"
+              },
+              "providerCount": {
+                "maximum": 100,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "providerCountIsLowerBound": {
+                "type": "boolean"
+              },
+              "roomCount": {
+                "maximum": 100,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "roomCountIsLowerBound": {
+                "type": "boolean"
+              },
+              "scheduleDays": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "count": {
+                      "maximum": 100,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "day": {
+                      "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+                      "type": "string"
+                    }
+                  },
+                  "required": ["count", "day"],
+                  "type": "object"
+                },
+                "maxItems": 100,
+                "type": "array"
+              },
+              "scheduleRange": {
+                "additionalProperties": false,
+                "properties": {
+                  "endTime": {
+                    "maxLength": 32,
+                    "type": "string"
+                  },
+                  "startTime": {
+                    "maxLength": 32,
+                    "type": "string"
+                  }
+                },
+                "required": ["endTime", "startTime"],
+                "type": "object"
+              },
+              "subscription": {
+                "anyOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "billingFrequency": {
+                        "anyOf": [
+                          {
+                            "enum": ["MONTHLY", "YEARLY"],
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "isDefaultFreePlan": {
+                        "type": "boolean"
+                      },
+                      "maxNumberOfAppointments": {
+                        "anyOf": [
+                          {
+                            "maximum": 9007199254740991,
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "maxNumberOfPatients": {
+                        "anyOf": [
+                          {
+                            "maximum": 9007199254740991,
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "maxNumberOfSeats": {
+                        "anyOf": [
+                          {
+                            "maximum": 9007199254740991,
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "maxNumberOfUsers": {
+                        "anyOf": [
+                          {
+                            "maximum": 9007199254740991,
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "productName": {
+                        "maxLength": 200,
+                        "type": "string"
+                      },
+                      "status": {
+                        "anyOf": [
+                          {
+                            "enum": ["ACTIVE", "PAST_DUE", "CANCELED"],
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      }
+                    },
+                    "required": ["billingFrequency", "isDefaultFreePlan", "maxNumberOfAppointments", "maxNumberOfPatients", "maxNumberOfSeats", "maxNumberOfUsers", "productName", "status"],
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": ["appointmentCount", "appointmentCountIsLowerBound", "availabilityDays", "availableDayCount", "availableSlotCount", "clinic", "procedureCount", "procedureCountIsLowerBound", "procedures", "providerCount", "providerCountIsLowerBound", "roomCount", "roomCountIsLowerBound", "scheduleDays", "scheduleRange", "subscription"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Show medical practice overview"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "openai/outputTemplate": "ui://doctofam/clinic-overview-v2.html",
+            "openai/toolInvocation/invoked": "DoctoFam clinic overview ready.",
+            "openai/toolInvocation/invoking": "Loading DoctoFam clinic…",
+            "securitySchemes": [
+              {
+                "scopes": ["doctofam:read"],
+                "type": "oauth2"
+              }
+            ],
+            "ui": {
+              "resourceUri": "ui://doctofam/clinic-overview-v2.html"
+            },
+            "ui/resourceUri": "ui://doctofam/clinic-overview-v2.html"
+          },
+          "digest": "sha256:522b4a18c645ddcb9e114752c71025fa0b2e4edda6da22befeb8a9098aae7625"
+        },
+        {
+          "name": "update_patient",
+          "title": "Update a patient's contact details",
+          "description": "Use this when someone asks to change a patient's name, phone, email or language. Returns the patient's id, name, clinic and which fields changed; contact details are never returned. Not for medical history or any other patient detail.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "email": {
+                "description": "New email address.",
+                "maxLength": 254,
+                "type": "string"
+              },
+              "expectedLastEditTime": {
+                "description": "The lastEditTime from find_patient. A patient changed since then is refused.",
+                "format": "date-time",
+                "maxLength": 40,
+                "type": "string"
+              },
+              "language": {
+                "description": "New language for their messages, as a code such as en or it.",
+                "maxLength": 10,
+                "type": "string"
+              },
+              "name": {
+                "description": "New full name.",
+                "maxLength": 160,
+                "minLength": 1,
+                "type": "string"
+              },
+              "patientId": {
+                "description": "Id of the patient, from find_patient.",
+                "maxLength": 24,
+                "minLength": 24,
+                "pattern": "^[0-9a-f]{24}$",
+                "type": "string"
+              },
+              "phone": {
+                "description": "New mobile number, with the country code when known.",
+                "maxLength": 40,
+                "type": "string"
+              }
+            },
+            "required": ["expectedLastEditTime", "patientId"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "changedFields": {
+                "items": {
+                  "enum": ["name", "phone", "email", "language"],
+                  "type": "string"
+                },
+                "maxItems": 4,
+                "type": "array"
+              },
+              "patient": {
+                "additionalProperties": false,
+                "properties": {
+                  "clinicId": {
+                    "anyOf": [
+                      {
+                        "maxLength": 24,
+                        "minLength": 24,
+                        "pattern": "^[0-9a-f]{24}$",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "id": {
+                    "anyOf": [
+                      {
+                        "maxLength": 24,
+                        "minLength": 24,
+                        "pattern": "^[0-9a-f]{24}$",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "language": {
+                    "anyOf": [
+                      {
+                        "maxLength": 16,
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "lastEditTime": {
+                    "anyOf": [
+                      {
+                        "maxLength": 40,
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "name": {
+                    "maxLength": 200,
+                    "type": "string"
+                  }
+                },
+                "required": ["clinicId", "id", "language", "lastEditTime", "name"],
+                "type": "object"
+              },
+              "status": {
+                "enum": ["updated"],
+                "type": "string"
+              }
+            },
+            "required": ["changedFields", "patient", "status"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": true,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": false,
+            "title": "Update a patient's contact details"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": false
+          },
+          "meta": {
+            "securitySchemes": [
+              {
+                "scopes": ["doctofam:write"],
+                "type": "oauth2"
+              }
+            ]
+          },
+          "digest": "sha256:a6d67d737d05e7de2d09733408fd26499f635fd31fe0b4e55be44982c5049c04"
+        }
+      ],
+      "resources": [
+        {
+          "uri": "skill://doctofam/clinic-administration/SKILL.md",
+          "name": "clinic-administration",
+          "title": "clinic-administration skill",
+          "description": "Run a DoctoFam medical practice's front desk — free consultation times, how busy each day is, prices, rooms, doctors and closures, and booking, moving or cancelling a patient's appointment, adding a patient or changing their contact details, and checking or correcting stock. Use when a practice owner, manager or receptionist asks about any of these. Never use it for patient records, clinical information, medical advice, diagnosis, triage, prescribing, or treatment decisions.",
+          "mimeType": "text/markdown",
+          "digest": "sha256:a052fb9c958e676dcb3b9aca2969b4e0278bb135ca61c059b38bd6223d4ee9b0"
+        },
+        {
+          "uri": "skill://doctofam/doctofam/SKILL.md",
+          "name": "doctofam",
+          "title": "doctofam skill",
+          "description": "Query and manage a medical or dental practice with the `doctofam` CLI — clinics, patients, appointments, invoices, payments, the procedure catalog and webhook subscriptions on app.doctofam.com. Use when asked to look up or edit patients, read or book appointments, check invoices and payments, review procedures and their prices, wire up webhooks, or anything involving the `doctofam` command or app.doctofam.com data.",
+          "mimeType": "text/markdown",
+          "digest": "sha256:b8f22f07ae82304113061ed8d710fccd09e1afa010b94bde7a73b280c01f9661"
+        },
+        {
+          "uri": "ui://doctofam/clinic-overview-v2.html",
+          "name": "doctofam-clinic-overview",
+          "description": "An inline DoctoFam view that presents a tenant-scoped, administrative-only clinic overview.",
+          "mimeType": "text/html;profile=mcp-app",
+          "digest": "sha256:6e83ca914cc69ab79104f899965c67d432f29500f259c9af5d63d65f7423f1cc"
+        },
+        {
+          "uri": "ui://doctofam/schedule-summary-v1.html",
+          "name": "doctofam-schedule-summary",
+          "description": "An inline DoctoFam view that presents non-identifying, tenant-scoped administrative schedule counts.",
+          "mimeType": "text/html;profile=mcp-app",
+          "digest": "sha256:222e2c25733b4a87730e27483cccd9d4a4f5a7e6e1b1375f9df1cd364f9f83ab"
+        }
+      ],
+      "digest": "sha256:c469a090f0399acce8505be929b8f481b428351b15b3088418bc216f84e83797"
+    }
+  }
+}

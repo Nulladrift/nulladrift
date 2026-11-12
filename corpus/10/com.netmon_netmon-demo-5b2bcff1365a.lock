@@ -1,0 +1,1659 @@
+{
+  "lockfileVersion": 2,
+  "subjects": {
+    "com.netmon/netmon-demo": {
+      "kind": "mcp-server",
+      "source": {
+        "client": "manual",
+        "file": "registry.modelcontextprotocol.io"
+      },
+      "transport": {
+        "type": "http",
+        "url": "https://netmon.com/mcp-demo/mcp"
+      },
+      "protocol": {
+        "era": "legacy",
+        "version": "2025-06-18"
+      },
+      "serverInfo": {
+        "name": "netmon7-demo",
+        "title": "Netmon (demo)",
+        "version": "1.0.0"
+      },
+      "capabilities": {
+        "logging": {},
+        "prompts": {
+          "listChanged": false
+        },
+        "resources": {
+          "listChanged": false,
+          "subscribe": false
+        },
+        "tools": {
+          "listChanged": false
+        }
+      },
+      "instructions": "This is the public Netmon demo server. It answers with a recorded snapshot of a\nfictional 90-device network across three sites, not a live appliance, so results\nare stable and no argument can reach real infrastructure. Tools that would probe\nthe network on a real appliance (ping, traceroute, port_map, snmp_walk_run) replay\na recorded probe of the demo fleet.\n\nDevice ids worth starting from: 273 (Brain, the firewall), 272 (Pinky, a Windows\nagent host), 8 (Yakko, a switch), 10 (Dot, a NAS), 17 (Wakko, a hypervisor).\nTry overwatch_summary first, then device_get, syslog_search or eve_search.\n\nA real appliance serves these same tools over OAuth 2.1 at https://<appliance>/mcp.\nSee https://netmon.com/mcp-server/.",
+      "tools": [
+        {
+          "name": "agent_disk_usage",
+          "description": "Path-scoped folder-tree disk usage report from a Netmon agent — the 'D: drive is at 95%, what's eating it?' question. Wraps POST /api/getFolderUsageFromPath which RPCs into the agent's GETFOLDERUSAGEPATH command and returns the immediate-children size breakdown for the given path.\n\nRequired parameters: device_id (the agent-enrolled device) and path (a Windows path on that device, e.g. \"D:\\\\\" or \"C:\\\\Users\"). Backslashes must be escaped in JSON strings — the LLM should pass \"D:\\\\\" not \"D:\\\".\n\nDrill-down pattern: start at the drive root, identify the largest child, recurse with that child as the new path. The agent does not produce a recursive tree in one shot — that's a deliberate latency cap.\n\nRead-only by design. The agent's write paths (DELETEFILE, DELETEFOLDER, EXECUTEPS) are on the permanent deny-list at the top of tool_handler.cpp and not wrapped — even a future operator with the broadest possible PAT must not be able to drive deletions or shell exec from an LLM.\n\nLatency: BLOCKING; the upstream endpoint has a 120s timeout. Large folders may take real wall-clock time.\n\nPermission: devices. Windows-only — depends on agent enrollment (see CLAUDE.md agent enrollment section). Linux/macOS hosts have no agent-side equivalent of GETFOLDERUSAGEPATH.\n\nExample: agent_disk_usage({device_id: 42, path: \"D:\\\\Users\"})",
+          "inputSchema": {
+            "properties": {
+              "device_id": {
+                "description": "Agent-enrolled device id.",
+                "type": "integer"
+              },
+              "path": {
+                "description": "Windows path on the device, e.g. \"D:\\\\\" or \"C:\\\\Users\". Backslashes must be JSON-escaped.",
+                "type": "string"
+              }
+            },
+            "required": ["device_id", "path"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": true,
+            "title": "Browse Agent Disk Usage"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:d78e9aa663fe1290d8ae40c48dc2f4cabcb4769e3e214a89ed8e0235d34cca02"
+        },
+        {
+          "name": "agent_processes",
+          "description": "List running processes on an agent-managed device — live read via the agent tunnel. Wraps POST /api/getDeviceProcesses (permission: devices).\n\nReturns rows as reported by GETPS: (process id, name, parent, memory, etc. — exact shape depends on the agent version).\n\nCommon diagnostic patterns: pair with agent_services to answer 'is the SQL Server service running but stuck?'; correlate top memory/cpu processes with eventlog_search criticals.\n\nRead-only by design — the process-kill endpoint (KILLPS) is deliberately NOT exposed via mcpmond. Server-side timeout is 60s; expect 400 if the device is offline or not enrolled.\n\nExample: agent_processes({device_id: 42})",
+          "inputSchema": {
+            "properties": {
+              "device_id": {
+                "description": "Device id of the agent-enrolled host to query.",
+                "type": "integer"
+              }
+            },
+            "required": ["device_id"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": true,
+            "title": "List Windows Processes"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:e3a0d5458469fe6d66a7928e70c57d9f5ba2aa0e87e61fd231c4795c81524536"
+        },
+        {
+          "name": "agent_services",
+          "description": "List Windows services on an agent-managed device — live read via the WMI tunnel. Wraps POST /api/getDeviceServices (permission: devices).\n\nReturns rows of {Name, State, DisplayName} as reported by Win32_Service. Use this to answer 'is service X running on host Y' without trawling event logs. Read-only by design — the service-control endpoints (start/stop/restart) are deliberately NOT exposed via mcpmond.\n\nLatency: server-side timeout is 60s — agents on slow links may approach that. Returns 400 if the device is offline or not agent-enrolled.\n\nExample: agent_services({device_id: 42})",
+          "inputSchema": {
+            "properties": {
+              "device_id": {
+                "description": "Device id of the agent-enrolled host to query.",
+                "type": "integer"
+              }
+            },
+            "required": ["device_id"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": true,
+            "title": "List Windows Services"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:6d26439525f34f660b3ead6eb1b32b284412bc35da8d8775ed9d0933087148c3"
+        },
+        {
+          "name": "alerts_history",
+          "description": "Authoritative 'what fired and when' stream — wraps the `alert_history` table (one row per incident, both legacy and modern) and `alert_outlet_log` (per-dispatch ledger keyed by history_id).\n\nDefault mode: lists incidents newest-first. Each row is one incident with opened_at / last_event_at / resolved_at framing the lifecycle, plus aggregated outlet_types[], dispatch_count, and failed_count. `status` is computed from resolved_at: 'open' if null, 'resolved' otherwise.\n\nDrill-down mode: pass `incident_id` (the `alert_history.id`, NOT `alert_id`) to switch the call to /api/alert-history/{id}/log and return the per-outlet dispatch ledger for that one incident. Use this for 'did the email actually go' / 'what did the webhook payload look like' / 'which outlets failed' follow-ups.\n\nFilters (default mode, all client-side, AND-combined): status (open|resolved|all, default all), severity (int or array — scheme is 1-5, lower=worse), device_id, source (legacy|modern|all), hours (1-168, default 24, applied against last_event_at), search (substring on alert_label/subject).\n\nImportant caps: the upstream endpoint returns at most 500 rows ordered by last_event_at DESC. We can't reach older rows than that. `meta.upstream_cap` reports this so the LLM can warn the user when results may be truncated. `severity_label` is added server-side so the LLM doesn't memorize the scale.\n\nPagination is over the post-filter result. Tag-scope is enforced by Laravel — tag-restricted users see only incidents for devices in their slug set.\n\nPermission: alerts. Examples:\n  alerts_history({status: 'open', severity: [1,2], hours: 1})\n  alerts_history({device_id: 42, hours: 24})\n  alerts_history({incident_id: 9182})  // dispatch ledger",
+          "inputSchema": {
+            "properties": {
+              "device_id": {
+                "description": "Restrict to one device id.",
+                "type": "integer"
+              },
+              "end_time": {
+                "description": "ISO-8601 UTC; pairs with start_time.",
+                "type": "string"
+              },
+              "hours": {
+                "description": "Lookback window applied against last_event_at (default 24).",
+                "maximum": 168,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "incident_id": {
+                "description": "If set, switches to per-incident dispatch-ledger mode (returns alert_outlet_log rows). This is alert_history.id, NOT alert_id.",
+                "type": "integer"
+              },
+              "page": {
+                "description": "1-indexed page number (default 1).",
+                "minimum": 1,
+                "type": "integer"
+              },
+              "per_page": {
+                "description": "Rows per page (default 50, max 200).",
+                "maximum": 200,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "search": {
+                "description": "Case-insensitive substring on alert_label / subject.",
+                "type": "string"
+              },
+              "severity": {
+                "description": "Severity int or array of ints (1-5, lower=worse)."
+              },
+              "source": {
+                "description": "Filter by source axis. Default 'all'.",
+                "enum": ["legacy", "modern", "all"],
+                "type": "string"
+              },
+              "start_time": {
+                "description": "ISO-8601 UTC; pairs with end_time.",
+                "type": "string"
+              },
+              "status": {
+                "description": "Filter by lifecycle state. Default 'all'.",
+                "enum": ["open", "resolved", "all"],
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Alert Incident History"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:95206776b2a07477bf7269682ee916df645ede97aabdc418dc530f9c398261d1"
+        },
+        {
+          "name": "alerts_list",
+          "description": "List configured alert definitions across both axes of the rule engine. Modern alerts (table `alerts`, class-scoped: syslog_log / event_log / eve_log / device_down / storage) and legacy alerts (per-device tracker thresholds, surfaced via the `_hell` view) are fetched, normalized, merged, filtered, and paginated.\n\nWraps GET /api/alerts (modern) and POST /api/getAlerts (legacy). Both endpoints return their full catalog; this tool applies the filters and pagination client-side, so the LLM doesn't need to know which axis a filter applies to.\n\nOutput rows carry a `source` discriminator and a synthetic `id` string (e.g. \"modern:42\" / \"legacy:17\") so dedup is unambiguous; the original numeric id is on `raw_id`. Modern rows carry `class`, `severity`, and last-evaluated stats. Legacy rows carry `type` (tracker kind), `device_id`, and `tracker_name`.\n\nModern rows carry NO throttle / renotify fields, on purpose: since 21.93 no modern class consults them (log-stream classes are one-fire and edge-triggered per event key; device_down and storage are stateful and diff open incidents), so they explain nothing about when a modern alert re-fires. Do not claim a modern alert is flap-damped or on a renotify timer — it isn't. Legacy trackers DO still renotify on a timer, but that config lives on the trigger and is not returned here either.\n\n`last_result_count` is NOT the same measure across classes. For syslog_log / event_log / eve_log it is the raw match count from the last evaluation BEFORE edge-trigger dedup — a steady nonzero means the pattern keeps matching, NOT that anything was notified (repeat matches of an already-seen occurrence are suppressed). For device_down it is a level: devices currently down and in scope, so nonzero means an outage is open right now. For storage it is likewise a level: volumes currently low (or held open because their reading is unreadable/stale) and in scope. Never sum or compare the two. `last_evaluated_at` is the last scheduler tick that touched the alert; legacy rows have no equivalent. For what actually fired and was delivered, use alerts_history.\n\nFilters (all optional, AND-combined): scope (modern|legacy|all, default all), class (modern only — silently ignored on legacy rows), severity (int or array), enabled (bool), device_id (legacy only — modern alerts are class-wide), search (case-insensitive substring on label).\n\nPagination: per_page defaults to 50 (max 200), page is 1-indexed. `meta.total` is the post-filter count; `meta.has_more` flags more pages. tag-scoped server-side at the legacy axis (legacy rows for devices outside the user's slug set are filtered by Laravel before this tool sees them).\n\nPermission: alerts. Example: alerts_list({severity: 1, enabled: true, search: \"router\", per_page: 20})",
+          "inputSchema": {
+            "properties": {
+              "class": {
+                "description": "Modern-only filter on the alert class (silently ignored on legacy rows).",
+                "enum": ["syslog_log", "event_log", "eve_log", "device_down", "storage"],
+                "type": "string"
+              },
+              "device_id": {
+                "description": "Legacy-only: restrict to a single device id. Ignored on modern rows.",
+                "type": "integer"
+              },
+              "enabled": {
+                "description": "Restrict to enabled (true) or disabled (false) alerts.",
+                "type": "boolean"
+              },
+              "page": {
+                "description": "1-indexed page number (default 1).",
+                "minimum": 1,
+                "type": "integer"
+              },
+              "per_page": {
+                "description": "Rows per page (default 50, max 200).",
+                "maximum": 200,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "scope": {
+                "description": "Which axis to query: 'modern' (alerts table), 'legacy' (_hell view), or 'all' (default).",
+                "enum": ["modern", "legacy", "all"],
+                "type": "string"
+              },
+              "search": {
+                "description": "Case-insensitive substring match on label.",
+                "type": "string"
+              },
+              "severity": {
+                "description": "Severity int or array of ints. Modern uses 1-5 (lower=worse). Legacy varies by tracker type; passing an int filters both axes."
+              }
+            },
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "List Alert Definitions"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:c62ce731d16d509b4f7db7c9f02ec701aa593a027a9d6a9005f7fe7ba6ab5691"
+        },
+        {
+          "name": "arp_lookup",
+          "description": "Performs an ARP lookup to find the MAC address for a given Local IP address. A suitable network interface is automatically selected. The list of all suitable interfaces found is also returned.",
+          "inputSchema": {
+            "properties": {
+              "target_ip": {
+                "description": "The target Local IP address to look up.",
+                "type": "string"
+              }
+            },
+            "required": ["target_ip"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": true,
+            "title": "ARP Lookup"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:c9134116e36f37c11b5eca9b3a4e59ec0aac493ec430ec90b7b117f7abf21c58"
+        },
+        {
+          "name": "arp_table",
+          "description": "Lists hosts observed on the local LAN(s) via the ARP table — the 'what devices have we seen recently?' question. Wraps POST /api/getArpTable, which collapses arptable + _dns into one row per IP with hostname + monitored-device id resolution attached.\n\nDistinct from `arp_lookup` (single-IP MAC resolution at the current moment): this is the historical view over the last N hours. Use it for 'who's on the LAN today' / 'is there a new device' / 'where did this IP last appear' questions.\n\nEach row: {id, ip, mac, timestamp, hostname, device_id}. device_id is non-null when the IP corresponds to a monitored Netmon device; hostname comes from _dns (PTR + custom overrides). Rows are deduped by IP — only the latest seen entry per IP within the window is returned.\n\nPermission: devices. Tag-scoping is NOT applied here — ARP is subnet-level, not device-level, so it doesn't have a tag anchor. Operators see the whole LAN regardless of tag scope.\n\nExamples:\n  arp_table({})                       // last 24h, no filter\n  arp_table({hours: 1, search: \"10.0.0\"})\n  arp_table({search: \"laptop\"})",
+          "inputSchema": {
+            "properties": {
+              "hours": {
+                "description": "Lookback hours (1-168). Default 24.",
+                "maximum": 168,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "search": {
+                "description": "Substring (server-side ILIKE) on ip / mac / hostname. Empty matches all.",
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Get ARP Table"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:55d6a003914c1119c742bfa4d6f2711fedffc5e4485b1468c9cdabd479c35011"
+        },
+        {
+          "name": "capture_get",
+          "description": "Read-only single-capture detail. Wraps GET /api/captures/{id}. If the capture is still active (status=starting|running) the upstream endpoint refreshes status from netmond's IPC before responding, so packets/bytes counters are live.\n\nReturns the same row shape as capture_list rows, plus freshly-refreshed counters when applicable.\n\nRead-only is deliberate. capture_stop / capture_delete / capture_download are NOT wrapped. The chunks endpoint (GET /api/captures/{id}/chunks) is also not wrapped — pcapng bytes are an extcap-shaped payload, not an LLM-shaped one.\n\nPermission: capture. Example:\n  capture_get({id: 17})",
+          "inputSchema": {
+            "properties": {
+              "id": {
+                "description": "Capture id (captures.id).",
+                "type": "integer"
+              }
+            },
+            "required": ["id"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Get Packet Capture Status"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:3ff1acd055fb0352f279512e6c1cd16c7134d4f812de0beaaf9d3740d8df44cd"
+        },
+        {
+          "name": "capture_list",
+          "description": "Read-only listing of packet captures. Wraps GET /api/captures. Operators see their own captures; admin (sa) sees all. The upstream endpoint returns the 200 most-recent rows ordered by id desc.\n\nUse this for 'is there a capture running on device X?' / 'do we have packet evidence for the incident?' / 'what captures finished today?' questions. Pair with capture_get to drill into one row.\n\nEach row carries: id, user_id, device_id, label, status (starting|running|stopped|expired|failed), filter (jsonb), started_at, ended_at, expires_at, packets, bytes, byte_cap.\n\nFilters (client-side, AND-combined): device_id, status, search (substring on label).\n\nRead-only is deliberate: capture creation, stop, delete, and pcapng download endpoints are NOT wrapped. PCAP bytes aren't an LLM-shaped payload anyway.\n\nPermission: capture. Examples:\n  capture_list({})\n  capture_list({status: 'running'})\n  capture_list({device_id: 42, status: 'stopped'})",
+          "inputSchema": {
+            "properties": {
+              "device_id": {
+                "description": "Restrict to one device id.",
+                "type": "integer"
+              },
+              "page": {
+                "description": "1-indexed page number (default 1).",
+                "minimum": 1,
+                "type": "integer"
+              },
+              "per_page": {
+                "description": "Rows per page (default 50, max 200).",
+                "maximum": 200,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "search": {
+                "description": "Case-insensitive substring on label.",
+                "type": "string"
+              },
+              "status": {
+                "description": "Restrict by lifecycle state.",
+                "enum": ["starting", "running", "stopped", "expired", "failed"],
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "List Packet Captures"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:642f375ffcdca95e6eee96fa417c63b2db239413d87eac9a74085d25a98d08e7"
+        },
+        {
+          "name": "device_find",
+          "description": "Find devices matching a substring of label or ip_address. Convenience wrapper for GET /api/devices?search=<q>; equivalent to device_list({search: q}).\n\nUse device_list directly when you need tag/status filters or relation includes. device_find is the one-arg shortcut for \"does anything look like X?\".\n\nPagination: per_page defaults to 25 (max 200), page defaults to 1. Permission: devices.\n\nExample: device_find({q: \"switch\"})",
+          "inputSchema": {
+            "properties": {
+              "page": {
+                "description": "1-indexed page number (default 1).",
+                "minimum": 1,
+                "type": "integer"
+              },
+              "per_page": {
+                "description": "Rows per page (default 25, max 200).",
+                "maximum": 200,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "q": {
+                "description": "Substring to match (case-insensitive) against label or ip_address.",
+                "type": "string"
+              }
+            },
+            "required": ["q"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Find Devices by Name or IP"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:146e446e87180d9a9123ef8ea3c8f66286d1f65b0128a5d839ae26a101d487eb"
+        },
+        {
+          "name": "device_get",
+          "description": "Fetch one device with its related state: tags, alerts, the ping / oid / interface / port / disk trackers configured on it, its SNMP walk trackers, and a netflow rollup. Wraps GET /api/device/{id} (permission: devices).\n\n**Bulk payloads are opt-in, and that is a change from how this tool used to behave.** It returned every log row every tracker collected in the window, inline: one 8-hour call on an ordinary host measured ~127 KB — 85 KB of oid log rows across 12 trackers, 35 KB for a single ping tracker's 479 samples — so pulling three hosts to \"see the state\" could spend 300 KB of context before any reasoning started. By default each tracker now returns its identity and latest value (which is what state questions need) plus `log_count`, the number of rows sitting in the window.\n\ninclude_logs:true puts the rows back. Pair it with max_log_rows (default 200 per tracker, newest kept) so one chatty tracker cannot swamp the response; a tracker that got cut carries logs_truncated:true next to the untrimmed log_count. When the question is \"is this metric degrading?\" rather than \"what happened at 14:05?\", device_metric_summary answers it from fixed-window stats and ships no rows at all.\n\ninclude_walk_data:true returns the stored SNMP walk payloads, omitted for the same reason: one configured walk tracker reaches ~72 KB of JSON on its own. Without the flag each walk row keeps id / oid / interval / timestamp plus walk_entries, the payload's top-level entry count.\n\nWhat stays unbounded: the tracker rows themselves. Both flags govern each tracker's history, never how many trackers come back — a switch with 190 monitored interfaces returns 190 interface rows in summary mode too. interfaces_search pages interface metadata across the fleet if that is the real question.\n\nWindow: `hours` (1-168, default 8) or explicit start_time+end_time (ISO-8601 UTC). It scopes the netflow rollup and log_count as well as the rows themselves, so it still matters with include_logs off. The appliance monitors itself as the device holding ip_address 127.0.0.1 — resolve that one by IP (device_find), never by assuming id 1; the id is whatever the sequence allocated.\n\nUse device_list or device_find to locate an id first.\n\nExamples:\n  device_get({id: 42}) — state only, the cheap default\n  device_get({id: 42, hours: 24, include_logs: true, max_log_rows: 50})",
+          "inputSchema": {
+            "properties": {
+              "end_time": {
+                "description": "ISO-8601 UTC; pairs with start_time.",
+                "type": "string"
+              },
+              "hours": {
+                "description": "Time window for log data and the netflow rollup (1-168). Default 8.",
+                "maximum": 168,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "id": {
+                "description": "Device id. Use device_list or device_find to locate.",
+                "type": "integer"
+              },
+              "include_logs": {
+                "description": "Return each tracker's log rows inline. Default false — trackers come back as identity + latest value + log_count, which is enough for state questions and roughly an order of magnitude smaller. Turn it on only when you need the individual samples, and cap it with max_log_rows.",
+                "type": "boolean"
+              },
+              "include_walk_data": {
+                "description": "Return the stored payload of each SNMP walk tracker. Default false — a single walk row can be ~72 KB. Without it each walk keeps id/oid/interval/timestamp and walk_entries (top-level entry count).",
+                "type": "boolean"
+              },
+              "max_log_rows": {
+                "description": "Per-tracker ceiling on returned log rows when include_logs is true (1-2000, default 200). Keeps the newest rows; a trimmed tracker is flagged with logs_truncated:true and still reports the full in-window log_count. Ignored when include_logs is false.",
+                "maximum": 2000,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "start_time": {
+                "description": "ISO-8601 UTC; pairs with end_time (overrides hours).",
+                "type": "string"
+              }
+            },
+            "required": ["id"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Get Device Details"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:d0e2f6f035c7e8e020a53482ac75d55f0d108e0c2bb26497e15cfa6b5f5a009d"
+        },
+        {
+          "name": "device_list",
+          "description": "List monitored devices. Wraps GET /api/devices (permission: devices); user's tag-scope is enforced server-side.\n\nFilters (all optional, combinable):\n  - tag: tag slug, e.g. \"snmp-up\" or \"switches\". Slug is the stable lowercase-hyphen form; tag names with spaces won't match.\n  - status: \"up\" or \"down\" (based on latest ping).\n  - search: substring match on label + ip_address (case-insensitive).\n\nRelation flags (all default false — opt in only what you need to keep the response small): tags, alerts, ping, oids, walks, interfaces, ports, disks.\n\nPagination: per_page defaults to 25 (max 200), page defaults to 1. meta.pagination.has_more tells you whether more pages exist.\n\nExample: device_list({tag: \"snmp-up\", per_page: 10})",
+          "inputSchema": {
+            "properties": {
+              "alerts": {
+                "description": "Include alerts relation on each device row (default false).",
+                "type": "boolean"
+              },
+              "disks": {
+                "description": "Include disks relation on each device row (default false).",
+                "type": "boolean"
+              },
+              "interfaces": {
+                "description": "Include interfaces relation on each device row (default false).",
+                "type": "boolean"
+              },
+              "oids": {
+                "description": "Include oids relation on each device row (default false).",
+                "type": "boolean"
+              },
+              "page": {
+                "description": "1-indexed page number (default 1).",
+                "minimum": 1,
+                "type": "integer"
+              },
+              "per_page": {
+                "description": "Rows per page (default 25, max 200). Start small — call again with page=2 if has_more is true.",
+                "maximum": 200,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "ping": {
+                "description": "Include ping relation on each device row (default false).",
+                "type": "boolean"
+              },
+              "ports": {
+                "description": "Include ports relation on each device row (default false).",
+                "type": "boolean"
+              },
+              "search": {
+                "description": "Substring match on label or ip_address (case-insensitive).",
+                "type": "string"
+              },
+              "status": {
+                "description": "Filter by latest ping status: \"up\" or \"down\".",
+                "enum": ["up", "down"],
+                "type": "string"
+              },
+              "tag": {
+                "description": "Filter by tag slug (stable hyphenated form, e.g. \"snmp-up\"). Empty returns everything.",
+                "type": "string"
+              },
+              "tags": {
+                "description": "Include tags relation on each device row (default false).",
+                "type": "boolean"
+              },
+              "walks": {
+                "description": "Include walks relation on each device row (default false).",
+                "type": "boolean"
+              }
+            },
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "List Devices"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:5ac398ba5ecbaafeec9a06308560a1d7536d3446659a99abd736b4175f5ffd2c"
+        },
+        {
+          "name": "device_metric_summary",
+          "description": "Day / week / month / all-time summary stats for a single device-tracker, by metric type. Multi-backend: pass `metric` to pick which upstream endpoint to hit.\n\nmetric='latency' → wraps POST /api/latency/stats (icmpingId).\n  Returns: dayAvgLatency, weekAvgLatency, monthAvgLatency, allTimeAvgLatency (ms); dayAvgLoss, weekAvgLoss, monthAvgLoss, allTimeAvgLoss (%); dayPingCount/weekPingCount/etc.; dayUptime/weekUptime/etc. (% successful pings); currentLatency, currentLoss, monitoringDuration (humanized).\n\nmetric='disk' → wraps POST /api/disk/stats (diskId).\n  Returns: dayGrowthKB, weekGrowthKB, monthGrowthKB, allTimeGrowthKB (negative = filling); estimatedFillTime (humanized projection from 7-day slope); plus current available/used measurements.\n\n**This is a fixed-window summary, not time-buckets.** Comparing day vs month tells the LLM 'is this metric degrading?'. For the raw samples underneath it, call device_get({id, hours: N, include_logs: true}) — the log rows are opt-in there because they are the expensive half of that response.\n\nDiscovery: `target_id` is a TRACKER id, never a device id, and device_get is the only tool that hands one out. Both sit nested in its response and both survive its default summary shape — they are tracker identity, not log rows, so no flag is needed to see them:\n  latency → device.ping.icmping_id. `ping` is a single object, not a list: a device has at most one icmping tracker, and its key is icmping_id, not id.\n  disk    → device.disks[].id, one entry per monitored volume (agent-collected or SNMP). Most devices carry none — an empty array means there is no disk tracker to summarize, not that the lookup failed.\n\nPort-stats has no equivalent endpoint upstream and is omitted; if one lands later, add a third metric backend.\n\nPermission: devices. Tag-scoped server-side via Devices::withUserTags() before stats are computed.\n\nExamples:\n  device_metric_summary({metric: 'latency', target_id: 17})\n  device_metric_summary({metric: 'disk',    target_id: 42})",
+          "inputSchema": {
+            "properties": {
+              "metric": {
+                "description": "Which metric backend to query: 'latency' (icmping tracker) or 'disk' (disk_servers tracker).",
+                "enum": ["latency", "disk"],
+                "type": "string"
+              },
+              "target_id": {
+                "description": "Tracker id, NOT a device id. For latency it is device.ping.icmping_id from device_get({id}); for disk it is device.disks[].id from the same response. The numbering spaces are unrelated, so passing a device id silently returns whatever tracker happens to hold that id — or a 404 when none does.",
+                "type": "integer"
+              }
+            },
+            "required": ["metric", "target_id"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Summarize Device Metrics"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:ecb86424231dd3d77de37aace5294cca2eb4efaff736d67651eb74152fdc2981"
+        },
+        {
+          "name": "eve_get",
+          "description": "Fetch a single Suricata EVE event by id, decoded server-side. Wraps GET /api/eve/get/{id} (requires permission: logs). Returns an envelope: summary (signature/category/action/gid:sid:rev/severity/app_proto), endpoints, app_layer (Suricata's http/dns/tls/smb/... objects as labelled fields), flow, payload (printable text + length; the base64 bytes are omitted here), decoded (protocol-aware parse of the payload: HTTP start line/headers/body, DNS sections, TLS negotiation, SMB command detail, or a raw summary), findings (ranked high/medium/low/info: cleartext credentials, injection shapes, weak ciphers, lateral-movement pipes, ...), metadata, and the raw record. Use eve_search to locate ids.",
+          "inputSchema": {
+            "properties": {
+              "id": {
+                "description": "Event id (from eve_search results).",
+                "type": "integer"
+              }
+            },
+            "required": ["id"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Get Suricata IDS Event"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:402b5aeeb3a48e00b7d4decd4f13242bc3bc41bf1d8597b7f47505eedc2a8c57"
+        },
+        {
+          "name": "eve_search",
+          "description": "Search Suricata EVE-format IDS events. Wraps GET /api/eve/list (permission: logs); tag-scoped server-side.\n\nSeverity is Suricata-native: 1=high, 2=medium, 3=low/info — a 3-point scale, NOT syslog's 0-7. Takes names or ints: 'high'=1, 'medium'=2, 'low'/'info'/'informational'=3. Single value or an array, which may mix the two forms (e.g. [\"high\", 2]).\n\nIP filters: passing only src_ip or only dst_ip matches either side (OR); pass both to AND them together. `device_id` is a convenience — the controller resolves it to the device's IP and matches src_ip OR dst_ip (eve_log has no device_id column).\n\nWindow: `hours` (1-168, default 24) OR `start_time`+`end_time`. `limit` defaults to 50 (max 500). `total` is the full match count — narrow via severity/IP/signature_id when truncated.\n\nExample: eve_search({severity: \"high\", hours: 2})",
+          "inputSchema": {
+            "properties": {
+              "device_id": {
+                "description": "Restrict to a single device id (translated to src_ip/dst_ip server-side).",
+                "type": "integer"
+              },
+              "dst_ip": {
+                "description": "Destination IP. Matches either side when src_ip is absent.",
+                "type": "string"
+              },
+              "dst_port": {
+                "type": "integer"
+              },
+              "end_time": {
+                "description": "ISO-8601 UTC; must pair with start_time.",
+                "type": "string"
+              },
+              "hours": {
+                "description": "Lookback hours (1-168). Default 24.",
+                "maximum": 168,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "iface": {
+                "description": "Capture interface.",
+                "type": "string"
+              },
+              "limit": {
+                "maximum": 500,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "proto": {
+                "description": "Protocol name (e.g. 'TCP', 'UDP').",
+                "type": "string"
+              },
+              "severity": {
+                "description": "Severity name(s) or int(s) on Suricata's 3-point scale: 'high'=1, 'medium'=2, 'low'/'info'/'informational'=3. Single value or array; names and ints may be mixed."
+              },
+              "signature_id": {
+                "description": "Suricata signature id(s). Single int or array."
+              },
+              "src_ip": {
+                "description": "Source IP. Matches either side when dst_ip is absent.",
+                "type": "string"
+              },
+              "src_port": {
+                "type": "integer"
+              },
+              "start_time": {
+                "description": "ISO-8601 UTC; must pair with end_time.",
+                "type": "string"
+              },
+              "vlan": {
+                "type": "integer"
+              }
+            },
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Search Suricata IDS Events"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:0571f5f0c1189dfc6f1610b476b5c2f108dfa97e27c57c1809eed6aa9d523025"
+        },
+        {
+          "name": "eventlog_search",
+          "description": "Search Windows Event Log entries ingested from Netmon agents. Wraps GET /api/eventlog/list (permission: logs); tag-scoped server-side.\n\nSeverity is the raw Windows EventRecord.Level: 'logalways'=0 (what Security-channel audit events carry), 'critical'=1, 'error'=2, 'warning'=3, 'information'=4, 'verbose'=5 — pass names or ints. Note 0 is NOT Information.\n\nWindow: `hours` (1-168, default 24) OR `start_time`+`end_time`. `limit` defaults to 50 (max 500). `total` in the response is the full match count — if it exceeds `limit`, narrow the window or add severity/source/message filters rather than bumping limit.\n\nExample: eventlog_search({severity: \"error\", hours: 4})",
+          "inputSchema": {
+            "properties": {
+              "device_id": {
+                "description": "Restrict to a single device id.",
+                "type": "integer"
+              },
+              "end_time": {
+                "description": "ISO-8601 UTC; must pair with start_time.",
+                "type": "string"
+              },
+              "event_id": {
+                "description": "Windows Event ID(s). Single int or array."
+              },
+              "hours": {
+                "description": "Lookback window in hours (1-168). Default 24.",
+                "maximum": 168,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "limit": {
+                "description": "Max rows returned (1-500). Default 50.",
+                "maximum": 500,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "log": {
+                "description": "Event log channel name (e.g. 'Application', 'System', 'Security').",
+                "type": "string"
+              },
+              "message": {
+                "description": "Substring match against the event data field.",
+                "type": "string"
+              },
+              "severity": {
+                "description": "Severity name(s) or int(s). See tool description for the Windows-specific scheme."
+              },
+              "source": {
+                "description": "Event source name.",
+                "type": "string"
+              },
+              "start_time": {
+                "description": "ISO-8601 UTC; must pair with end_time.",
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Search Windows Event Log"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:58e4952e344ff7e89569e4d10a5d3fa3d7027baa5415d0241bf04d431b225119"
+        },
+        {
+          "name": "flow_summary",
+          "description": "Summarize one host's network conversations: top peers, top ports, and a client-vs-service-side split, each with a residual \"other\" bucket plus overall totals. Wraps GET /api/aggnetflow/summary (permission: vne). Use this to characterize a host before pulling rows — netflow_search returns the individual conversations once a rollup here points at an interesting peer or port.\n\nSource is the windowed flow view: the raw table's live tail (the last ~15 minutes — cleanup_netflow deletes raw rows as it rolls them up) unioned with the aggregated history (agg_netflow, retained 4 weeks), so one call covers right-now through a month back with no gap at the rollup boundary.\n\nByte totals are IN-WINDOW estimates, not lifetime totals. The window predicate is OVERLAP — a conversation crossing either edge still matches — but each matching row contributes only its bytes pro-rated to the window (uniform-rate attribution), so the totals approximate window traffic instead of bounding it from above. Still never quote a byte figure as a rate.\n\nDirection is normalized on both arms (the lower port of each conversation becomes dst_port — raw-tail rows are re-oriented the same way on read) and the rollup folds BOTH directions into one row, so sent-vs-received bytes do not exist in this data. The direction split is as_source (host was the client side) vs as_destination (host was the service side), each carrying bidirectional bytes.\n\n`conversations` counts rows, not distinct conversations — a long-lived conversation contributes one row per 15-minute roll-up tick, plus per-flow rows for its not-yet-rolled-up raw tail.\n\nWindow: `hours` (default 24, max 168) OR start_time+end_time; an explicit window is held to the same 168-hour ceiling server-side — agg_netflow is BRIN-indexed on time now, but a summary still aggregates every overlapping row under a 10s statement timeout. A window too wide comes back as an error asking you to narrow it, not as partial data.\n\n`limit` is the top-N per rollup (default 20, max 100); what falls outside it is reported in that rollup's `other` bucket, so totals always reconcile.\n\nTag-scoped server-side on the conversation ENDPOINTS: for a tag-restricted caller every returned conversation has an in-tag device on one side. The requested host gets no separate membership test, so naming an out-of-scope host is allowed and simply returns the subset of its conversations that touch a device you can already see.\n\nExample: flow_summary({ip: '10.0.0.5', hours: 24, limit: 10})",
+          "inputSchema": {
+            "properties": {
+              "end_time": {
+                "description": "ISO-8601 UTC; pairs with start_time.",
+                "type": "string"
+              },
+              "hours": {
+                "description": "Lookback hours (1-168). Default 24.",
+                "maximum": 168,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "ip": {
+                "description": "REQUIRED. The host to summarize. Matched on either side of the conversation (src_ip OR dst_ip) — no direction needs to be known or guessed.",
+                "type": "string"
+              },
+              "limit": {
+                "description": "Top-N entries per rollup (1-100). Default 20. The remainder is summarized in each rollup's `other` bucket.",
+                "maximum": 100,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "start_time": {
+                "description": "ISO-8601 UTC; pairs with end_time. The span is still capped at 168 hours.",
+                "type": "string"
+              }
+            },
+            "required": ["ip"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Summarize NetFlow Traffic"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:1d595f5ff2cc10f9a3b5cda7e917d006a8d6d4195c4e70ed7e08530caa435199"
+        },
+        {
+          "name": "get_network_entity_info",
+          "description": "Retrieves WHOIS, GeoIP and DNS information for a public IP address or hostname. A hostname is resolved to an IP for the GeoIP lookup (`resolved_ip`, when resolution succeeds); an IP gets a reverse DNS lookup (`hostname`, when a PTR exists).\n\n`whois` comes from whois.iana.org and nowhere else. For an address IANA returns the RIR referral record, so its `organisation` is the regional registry that administers the block (ARIN, RIPE, APNIC, LACNIC, AFRINIC) — NOT the ISP, hosting company or assignee. For a hostname it is the TLD registry, not the domain owner. Never report either as the operator; a `refer` or `whois` field only names the RIR's own whois server, which this tool does not query.\n\n`geoip` is the geolocation provider's response passed through verbatim, so the key set varies with provider tier and with whether the answer came from cache. Treat every field as optional — including `isProxy`, `asn` and `asnOrganization`, which may simply be absent. The whole `geoip` key is omitted for addresses that are not globally routable and when the lookup is unavailable.\n\nTo judge hosting/datacenter versus residential or small-business ISP, reason from the evidence actually returned:\n- The `hostname` PTR pattern: a provider-branded label under a hosting or cloud domain reads as datacenter, whereas the address itself embedded in the name under a consumer ISP's domain reads as subscriber. A missing PTR is weak evidence in either direction.\n- `geoip.isProxy` when present: true points to a VPN, proxy or hosting exit.\n- `geoip.asnOrganization` (and `asn`) when present: a cloud, colocation or hosting provider points to a datacenter; an access or eyeball ISP points to residential.\n\nLabel that classification as a heuristic and name the evidence you used for it. If no PTR came back and no ASN fields are present, say the evidence is insufficient rather than guessing.",
+          "inputSchema": {
+            "properties": {
+              "entity_identifier": {
+                "description": "The IP address or hostname to query.",
+                "type": "string"
+              }
+            },
+            "required": ["entity_identifier"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": true,
+            "title": "Look Up WHOIS, GeoIP and DNS"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:fc270d2b1a9cdda79608b3a0dc398a14d66d56d81867394b795a54276a54dc8a"
+        },
+        {
+          "name": "interfaces_search",
+          "description": "Cross-device interface metadata listing — answers 'what interfaces are tracked across the fleet, named like X, on device Y?'. Wraps GET /api/interfaces/all, which returns logging-enabled interfaces across every device the user can see (tag-scoped server-side via withUserTags).\n\n**Metadata only.** Each row carries: id, device_id, device_label, name, interface, description. The upstream endpoint does NOT return status, octets, errors, MTU, or speed — for per-interface stats, the LLM should follow up with device_get(id, interfaces=true) on the specific device, which surfaces the latest snapshot of those metrics. We don't fabricate the missing fields here.\n\nFilters (client-side, AND-combined): device_id (limit to one device), search (case-insensitive substring on name / description / interface / device_label).\n\nPagination: per_page defaults to 50 (max 200). On installs with tens of thousands of interfaces, page through results — the upstream endpoint returns the full list in one shot.\n\nPermission: devices. Examples:\n  interfaces_search({device_id: 42})\n  interfaces_search({search: \"WAN\"})\n  interfaces_search({search: \"Te1/0\", per_page: 10})",
+          "inputSchema": {
+            "properties": {
+              "device_id": {
+                "description": "Restrict to one device id.",
+                "type": "integer"
+              },
+              "page": {
+                "description": "1-indexed page number (default 1).",
+                "minimum": 1,
+                "type": "integer"
+              },
+              "per_page": {
+                "description": "Rows per page (default 50, max 200).",
+                "maximum": 200,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "search": {
+                "description": "Case-insensitive substring on name / description / interface / device_label.",
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Search Network Interfaces"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:9c53e121f9befdb69b0e5265c4d2499d9d1121b12ab88ca768576c575e4c3e0a"
+        },
+        {
+          "name": "log_severity_summary",
+          "description": "Count log events grouped by severity over a time window. One tool, three backends — pass `stream` to pick which.\n\nstream='syslog'   → wraps /api/syslog/sevSum   (severity 0-7, syslog scheme)\nstream='eventlog' → wraps /api/eventlog/sevSum (severity 0-5, Windows scheme)\nstream='eve'      → wraps /api/eve/sevSum      (severity 1-3, Suricata scheme)\n\nUse this for triage before pulling rows: 'how many criticals on host X today' returns one tight rollup instead of 1000 sample rows. Every result includes both the numeric key and a `label` so the LLM doesn't have to memorize three different scales.\n\nWindow: `hours` (1-168, default 24) OR `start_time`+`end_time` (ISO-8601 UTC). Optional `device_id` narrows to one device — for eve, the controller translates this to a src_ip OR dst_ip match automatically (eve_log has no device_id column).\n\nALL-ZERO IS NOT THE SAME AS CLEAN. A dead feed and a quiet network produce byte-identical answers here, so every response carries `meta.stream_health`:\n  active  — events landed inside your window; the counts mean what they say.\n  stale   — your window is empty, but the stream produced up to `last_event_at`, before it. The feed is alive and the empty window is real.\n  silent  — nothing in your window AND nothing in the 168h before it. Never report 'clean' from this state; `note` names the producer to check first.\n  unknown — freshness could not be established. The zeros prove nothing.\nstale/silent come from re-asking the same stream over a window that strictly contains yours (one extra call, and only when every bucket is zero). No staleness threshold is guessed: `stale` means exactly 'the newest event predates the window you asked for', which on a 1-hour window is unremarkable. `checked_back_hours` and `events_before_window` say how much history the verdict rests on.\n\nPermission: logs. Tag-scoped server-side.\n\nExample: log_severity_summary({stream: 'syslog', hours: 1, device_id: 42})",
+          "inputSchema": {
+            "properties": {
+              "device_id": {
+                "description": "Restrict to a single device id (for eve, translated to src_ip/dst_ip server-side).",
+                "type": "integer"
+              },
+              "end_time": {
+                "description": "ISO-8601 UTC; pairs with start_time.",
+                "type": "string"
+              },
+              "hours": {
+                "description": "Lookback hours (1-168). Default 24.",
+                "maximum": 168,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "start_time": {
+                "description": "ISO-8601 UTC; pairs with end_time.",
+                "type": "string"
+              },
+              "stream": {
+                "description": "Which log stream to summarize: 'syslog', 'eventlog', or 'eve'.",
+                "enum": ["syslog", "eventlog", "eve"],
+                "type": "string"
+              }
+            },
+            "required": ["stream"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Summarize Log Severities"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:1414f42f1a9d90298b0c37435f262dfd74155bdf2fe2eaae4b948abe961c7602"
+        },
+        {
+          "name": "maintenance_windows_list",
+          "description": "Lists maintenance windows — the suppression schedules that gate alert dispatch. Use when a user asks 'why didn't this page me' or 'is this device under maintenance right now' — a quiet alert may be inside a window rather than truly silent.\n\nTwo modes:\n  - Global catalog (default): wraps GET /api/alerts/maintenance-windows. Returns every window with its schedule fields.\n  - Per-legacy-alert: pass `alert_id` to wrap GET /api/alerts/legacy/{id}/maintenance-windows, returning only the windows attached to that legacy alert handler.\n\nPer CLAUDE.md, modern alerts (class=syslog_log/event_log/eve_log) attach windows through `alert_routing_rules`, not directly — the per-alert path is legacy-only by route constraint. If you need to inspect modern-alert suppression, look at the routing rule attached to the rule, not the alert.\n\nEach row carries: id, label, recurrence_unit (day|week|month|dawom), schedule_hour, schedule_dow (0=Sun..6=Sat), schedule_day_of_month, schedule_month, duration_minutes, plus a human-readable `description` (e.g. 'Weekly on Tue at 14:00 UTC for 60 min') so the LLM doesn't reinterpret the cron-style fields.\n\nNote: this tool does NOT compute whether a window is active *right now* — that depends on the server's local clock and the interpretation of dawom rules. The LLM should use the description + duration to reason about it. If you need a reliable yes/no, ask alertmond directly via its IPC (out of scope for mcpmond).\n\nPermission: alerts. Examples:\n  maintenance_windows_list({})  // global catalog\n  maintenance_windows_list({alert_id: 17})  // legacy alert 17 only",
+          "inputSchema": {
+            "properties": {
+              "alert_id": {
+                "description": "If set, switches to per-legacy-alert mode (alert_handlers.id). Modern alerts use routing rules instead.",
+                "type": "integer"
+              }
+            },
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "List Maintenance Windows"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:64fbab5d832ccf63a0801712dc84877b094a7a2053a1f9746dca418c8fe14ee8"
+        },
+        {
+          "name": "netflow_raw_search",
+          "description": "Search raw NetFlow records (per-flow, not aggregated). Wraps GET /api/netflow/list (permission: vne).\n\nHORIZON — read this before choosing a window: the raw table holds only about 15 MINUTES. cleanup_netflow (pg_cron, every 15 min) rolls flows into agg_netflow and DELETEs every netflow row whose end_time is older than 15 minutes. `hours` accepts 1-168, but no data older than that horizon exists to match, so a 24-hour request coming back empty is the expected outcome, not a fault. For anything beyond the last few minutes use netflow_search (the aggregated view).\n\nWithin the horizon this is the drill-down: when netflow_search shows that 10.0.0.5 sent a lot of bytes to 8.8.8.8, this tool returns the actual flow rows, with the per-flow packet counts, scalar src_port and exact timing that the rollup discards. (vlan and the iface columns survive the rollup — netflow_search filters on those too.)\n\nIP / port filters: `src_ip`, `dst_ip`, `src_port` and `dst_port` are each STRICT equality on that one column and NEVER match the opposite side. Use the compound `ip` (src_ip OR dst_ip) or `port` (src_port OR dst_port) when you don't know which side the host or service was on — reaching for src_ip instead silently drops every flow where the host was the destination. Passing both src_ip and dst_ip ANDs them into a single direction.\n\nWindow: `hours` (1-168, default 24) OR `start_time`+`end_time` (ISO-8601 UTC), matched by OVERLAP (start_time < end AND end_time > start) — any flow ACTIVE during the window matches, including flows straddling either edge and live flows whose end_time is padded a little into the future. `limit` defaults to 50 (max 500). Tag-scoped server-side on the conversation ENDPOINTS — src_ip / dst_ip against the caller's in-tag device IPs, not flow_src.\n\nExample: netflow_raw_search({ip: '10.0.0.5', dst_port: 443, hours: 1})",
+          "inputSchema": {
+            "properties": {
+              "dst_ip": {
+                "description": "Strict equality on dst_ip alone — never matches a host sitting on the src side. Use `ip` unless you know the direction.",
+                "type": "string"
+              },
+              "dst_port": {
+                "description": "Strict equality on dst_port alone. Use `port` unless you know the direction.",
+                "type": "integer"
+              },
+              "end_time": {
+                "description": "ISO-8601 UTC; pairs with start_time.",
+                "type": "string"
+              },
+              "flow_src": {
+                "description": "IP of the device that exported the flow.",
+                "type": "string"
+              },
+              "hours": {
+                "description": "Lookback hours (1-168). Default 24.",
+                "maximum": 168,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "in_iface": {
+                "description": "Ingress SNMP ifIndex as exported by flow_src, e.g. \"5\". A number, not an interface name and not an interfaces.id.",
+                "type": "string"
+              },
+              "ip": {
+                "description": "Compound: matches src_ip OR dst_ip. Prefer this over src_ip/dst_ip whenever the host's side is unknown.",
+                "type": "string"
+              },
+              "limit": {
+                "description": "Max rows (1-500). Default 50.",
+                "maximum": 500,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "out_iface": {
+                "description": "Egress SNMP ifIndex, e.g. \"7\". A number, not an interface name.",
+                "type": "string"
+              },
+              "port": {
+                "description": "Compound: matches src_port OR dst_port. Prefer this when the service's side is unknown.",
+                "type": "integer"
+              },
+              "protocol": {
+                "description": "IP protocol NUMBER, e.g. \"6\" (TCP), \"17\" (UDP), \"1\" (ICMP). The column is a smallint — protocol names are rejected by the database.",
+                "type": "string"
+              },
+              "src_ip": {
+                "description": "Strict equality on src_ip alone — never matches a host sitting on the dst side. Use `ip` unless you know the direction.",
+                "type": "string"
+              },
+              "src_port": {
+                "description": "Strict equality on src_port alone. Use `port` unless you know the direction.",
+                "type": "integer"
+              },
+              "start_time": {
+                "description": "ISO-8601 UTC; pairs with end_time.",
+                "type": "string"
+              },
+              "vlan": {
+                "type": "integer"
+              }
+            },
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Search Raw NetFlow"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:ab36e92654b4bc9a858bbb063d23633ebe74c6b8d1881419a0121b46620c2e30"
+        },
+        {
+          "name": "netflow_search",
+          "description": "Search the FULL NetFlow history: the raw flow table (the last ~15 minutes) unioned with the aggregated rollup (4 weeks of history), windowed and pro-rated server-side. Wraps GET /api/aggnetflow/list (permission: vne). For per-flow packet counts and exact timing, use netflow_raw_search instead — that's the right drill-down once this tool surfaces an interesting src/dst pair, but it only reaches back about 15 minutes.\n\nIP filters: `src_ip` and `dst_ip` are STRICT equality on that one column and NEVER match the opposite side. When you don't already know which side of the conversation the host sat on, use the compound `ip` filter (src_ip OR dst_ip) — reaching for src_ip instead silently drops every conversation where the host was the destination. Passing both src_ip and dst_ip ANDs them into a single direction.\n\nPort filters: `dst_port` is strict equality; `src_port` is matched with ANY against the aggregated src_ports[] array, because this table has no scalar src_port column. The compound `port` matches dst_port OR src_ports[] ANY.\n\nWindow semantics: the predicate is OVERLAP — any flow ACTIVE during the window matches, including one straddling either edge — and every row carries TWO byte figures: window_bytes (the row's bytes pro-rated to the query window, assuming a uniform rate) and bytes (the row's own full count: for an aggregated row a SUM, with start_time a MIN and end_time a MAX over every flow folded in). Sum window_bytes for in-window bandwidth — quoting bytes for that over-reports edge-straddling conversations. is_raw marks which arm of the union produced a row. There is no packets column here. Direction is normalized on BOTH arms: the lower-numbered port of each conversation becomes dst_port (raw rows are re-oriented the same way on read), so dst_ip is the service side and src_ip the client side regardless of who sent the first packet.\n\nWindow: `hours` (default 24) OR `start_time`+`end_time`; this tool always sends an explicit window, so the controller's no-window fallback (conversations still open right now) never applies. `limit` defaults to 50; `total` is the full match count. Narrow via IP/port/protocol when truncated.\n\nTag-scoped server-side on the conversation ENDPOINTS — src_ip / dst_ip against the caller's in-tag device IPs, not flow_src.\n\nExample: netflow_search({ip: '10.0.0.5', dst_port: 443, hours: 1})",
+          "inputSchema": {
+            "properties": {
+              "dst_ip": {
+                "description": "Strict equality on dst_ip alone — never matches a host sitting on the src side. Use `ip` unless you know the direction.",
+                "type": "string"
+              },
+              "dst_port": {
+                "description": "Destination port (strict equality). After rollup this is the LOWER port of the conversation, i.e. the service port.",
+                "type": "integer"
+              },
+              "end_time": {
+                "description": "ISO-8601 UTC; pairs with start_time.",
+                "type": "string"
+              },
+              "flow_src": {
+                "description": "IP of the device that exported the flow.",
+                "type": "string"
+              },
+              "hours": {
+                "description": "Lookback hours (1-168). Default 24.",
+                "maximum": 168,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "in_iface": {
+                "description": "Ingress SNMP ifIndex on the exporting device, e.g. \"5\". A number, not an interface name and not an interfaces.id.",
+                "type": "string"
+              },
+              "ip": {
+                "description": "Compound: matches src_ip OR dst_ip. Prefer this over src_ip/dst_ip whenever the host's side is unknown.",
+                "type": "string"
+              },
+              "limit": {
+                "description": "Max rows (1-500). Default 50.",
+                "maximum": 500,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "out_iface": {
+                "description": "Egress SNMP ifIndex, e.g. \"7\". A number, not an interface name.",
+                "type": "string"
+              },
+              "port": {
+                "description": "Compound: matches dst_port OR src_port (via src_ports[] ANY).",
+                "type": "integer"
+              },
+              "protocol": {
+                "description": "IP protocol NUMBER, e.g. \"6\" (TCP), \"17\" (UDP), \"1\" (ICMP). The column is an integer — protocol names are rejected by the database.",
+                "type": "string"
+              },
+              "src_ip": {
+                "description": "Strict equality on src_ip alone — never matches a host sitting on the dst side. Use `ip` unless you know the direction.",
+                "type": "string"
+              },
+              "src_port": {
+                "description": "Source port (matched via ANY against the aggregated src_ports[] array).",
+                "type": "integer"
+              },
+              "start_time": {
+                "description": "ISO-8601 UTC; pairs with end_time.",
+                "type": "string"
+              },
+              "vlan": {
+                "description": "VLAN id.",
+                "type": "integer"
+              }
+            },
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Search Aggregated NetFlow"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:4ed93f8020db1f9adca3be3e2d7c932966b8307f9dc639c507486d1ed689b230"
+        },
+        {
+          "name": "overwatch_summary",
+          "description": "High-level network health snapshot for 'how's the network?' style questions. Wraps GET /api/devices?alerts=1&tags=1 (requires permission: devices) and aggregates in-tool: device count, active alert count (total + by severity when present on the alert row), and the top-N devices by alert count. Drill into specific devices with device_get.",
+          "inputSchema": {
+            "properties": {
+              "top_n": {
+                "description": "How many 'loudest' devices to return (1-50). Default 10.",
+                "maximum": 50,
+                "minimum": 1,
+                "type": "integer"
+              }
+            },
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Overwatch Health Summary"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:4684b9f5404da6c8b064d7598b2ba47cc249297665b9fe5ba0fa8f75b0edf0db"
+        },
+        {
+          "name": "ping",
+          "description": "Ping a target host from the Netmon server. Wraps POST /api/getPingInfo/{target} (permission: tools).\n\nThe probe runs ON the netmon server, not on the mcpmond host — so reachability reflects what netmon can see, which is what matters for monitoring questions.\n\nReturns {address, latency (avg ms), status (true=reachable), hostname (PTR lookup; falls back to the bare address when the host has no reverse record)}.\n\nA host that does not answer is a normal result, not an error: status is false, latency is null, and two extra fields appear — reason (packet_loss = probes sent, nothing came back; unreachable = the network answered with an ICMP unreachable; unresolved = the name does not resolve) and detail (the ping line that decided it). A down host still gets its hostname resolved. status null means the probe itself failed and reachability is UNKNOWN — never read that as down.\n\nServer fixes count at 4 packets; for longer-running tests use the system tools UI.\n\nExample: ping({target: \"8.8.8.8\"})",
+          "inputSchema": {
+            "properties": {
+              "target": {
+                "description": "IP address or hostname to ping.",
+                "type": "string"
+              }
+            },
+            "required": ["target"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": true,
+            "title": "Ping Host"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:f2bc13b6a3c6c4101da384fd1a2f0f98d4f59cad9afbe7423fb19e4847bdd96a"
+        },
+        {
+          "name": "port_map",
+          "description": "Nmap port scan against a single host from the Netmon server. Wraps POST /api/getPortscanInfo (permission: tools).\n\nServer runs `nmap -oX - -p <ports> --open <ip>` and returns the parsed result. The probe originates from netmon, not from wherever mcpmond runs — so what's reachable here is what netmon can reach.\n\nSingle targets only (single IP or hostname). The backing endpoint does not accept CIDR or ranges. If port_range is omitted, scans 1-1024.\n\nReturns the nmap host element as JSON: status, address, and ports[] with state/service/product/version. Latency: scans can take ~30-90s depending on port count and target responsiveness; client timeout is 120s.\n\nExample: port_map({target: \"192.168.1.1\", port_range: \"22,80,443\"})",
+          "inputSchema": {
+            "properties": {
+              "port_range": {
+                "description": "Optional. Ports to scan, e.g. '80', '22,80,443', '1-1024'. Defaults to '1-1024'.",
+                "type": "string"
+              },
+              "target": {
+                "description": "Single IP address or hostname to scan. CIDR/ranges are not supported by the backing endpoint.",
+                "type": "string"
+              }
+            },
+            "required": ["target"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": true,
+            "title": "Scan Open Ports"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:7fe034438387b142cca34646cb4762ce211837493b43bd637da33f0907c0a969"
+        },
+        {
+          "name": "search_ip",
+          "description": "Find every mention of a specific IP across Netmon's log and telemetry streams: syslog, Windows eventlog, Suricata EVE, aggregated NetFlow, and ARP.\n\nReturns one bucket per stream with {total, samples}. Streams that 4xx (e.g. 403 from tag-scope) show up in `skipped` so a partial result is still actionable. The syslog/eventlog streams match the IP via an unindexed message substring scan; on a high-volume install they can time out and land in `skipped` with guidance (narrow `hours`, or use syslog_search/eventlog_search with a device_id) rather than stalling the call.\n\nParams:\n  - ip (required): IPv4 or IPv6 to correlate.\n  - hours: lookback window (1-168, default 24).\n  - per_stream: sample row cap per stream (1-100, default 10). The `total` per stream is always the full match count.\n  - streams: narrow the fan-out to a subset — any of ['syslog','eventlog','eve','netflow','arp']. Omit for all.\n\nPermission + tag-scope checks run server-side; a tag-restricted user sees only rows for devices in their tag set.\n\nExample (narrow + short window): search_ip({ip: \"10.10.1.25\", hours: 1, streams: [\"syslog\"], per_stream: 5})",
+          "inputSchema": {
+            "properties": {
+              "hours": {
+                "default": 24,
+                "description": "Lookback window in hours (1-168). Default 24.",
+                "maximum": 168,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "ip": {
+                "description": "IPv4 or IPv6 address to correlate (e.g. '10.10.1.25').",
+                "type": "string"
+              },
+              "per_stream": {
+                "default": 10,
+                "description": "Max sample rows returned per stream (1-100). The `total` field per stream always reflects the full match count even when samples are truncated. Default 10.",
+                "maximum": 100,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "streams": {
+                "description": "Subset of streams to query. Omit to fan out to all. Valid values: 'syslog', 'eventlog', 'eve', 'netflow', 'arp'.",
+                "items": {
+                  "enum": ["syslog", "eventlog", "eve", "netflow", "arp"],
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "required": ["ip"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Search All Streams for an IP"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:453d9e55abed8fbd162c7347a79873b9bd0350d7a2658b7ecce2a981bf4ff2ad"
+        },
+        {
+          "name": "snmp_test",
+          "description": "Probe a device for SNMP reachability using the Netmon snmptest binary. Wraps POST /api/testSnmp (requires permission: write_devices). BLOCKING — can run up to 60 seconds while the server waits for the target to respond. Provide a valid snmpconfig object: for v1/v2 include snmp_version + snmp_community; for v3 include snmp_version=3 plus authuser/authpass/authprot and optionally privpass/privprot and snmp_v3_security. Returns the upstream {status, message} verbatim under `data`.",
+          "inputSchema": {
+            "properties": {
+              "ip": {
+                "description": "Target IPv4 or IPv6 address.",
+                "type": "string"
+              },
+              "snmpconfig": {
+                "description": "SNMP config. v1/v2: { snmp_version: 1|2, snmp_port?: int, snmp_community: string }. v3: { snmp_version: 3, snmp_port?: int, snmp_v3_security?: 'noAuthNoPriv'|'authNoPriv'|'authPriv', authuser, authpass, authprot: 'MD5'|'SHA', privpass, privprot: 'DES'|'AES' }.",
+                "type": "object"
+              }
+            },
+            "required": ["ip", "snmpconfig"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": true,
+            "title": "Test SNMP Credentials"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:b6245ad12fb2ff1498cf2d7ad6438f611dd3c9a6bd7892e5c1660bfd939e5422"
+        },
+        {
+          "name": "snmp_walk_last",
+          "description": "Fetch the most recent stored SNMP walk for a device (cached in tools_walks). Wraps GET /api/getLastWalk/{device} (permission: tools). Cheap single-row read.\n\nAlways try this first when an SNMP walk is needed. Only fall back to snmp_walk_run if the cached row is missing or the data is too stale for the question (the controller does not stamp a freshness header — judge from the walk's own timestamps if present).\n\nReturns the raw walk row including device_id and the captured OID payload. Empty walk = device has never been walked.\n\nExample: snmp_walk_last({device_id: 42})",
+          "inputSchema": {
+            "properties": {
+              "device_id": {
+                "description": "Device id to look up the most recent stored walk for.",
+                "type": "integer"
+              }
+            },
+            "required": ["device_id"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Get Cached SNMP Walk"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:86afe2eebf5c38912ceee0a2d1e81f5977faafe4c2520a8f4fca47df27634f13"
+        },
+        {
+          "name": "snmp_walk_run",
+          "description": "Trigger a FRESH SNMP walk against a device. Wraps POST /api/getSNMPWalkInfo/{deviceId} (permission: tools).\n\nSLOW and SIDE-EFFECTING. Server-side this shells out to walktool with a 1200s (20 minute) timeout and writes the result into the tools_walks table. Always try snmp_walk_last first; only call this when the cached walk is missing or known to be stale.\n\nMCP tool timeout is 1200s to match the server-side cap. If the device has many OIDs the call will take real wall-clock time — let it run; do not retry on timeout without first checking snmp_walk_last (the writeback may have completed even if the HTTP response stalled).\n\nExample: snmp_walk_run({device_id: 42})",
+          "inputSchema": {
+            "properties": {
+              "device_id": {
+                "description": "Device id to walk. Server resolves SNMP credentials from the device row.",
+                "type": "integer"
+              }
+            },
+            "required": ["device_id"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": false,
+            "title": "Run Fresh SNMP Walk"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:1eca041edd1343b78c9e536d1877a5e2bdca94cc529693e8b15c2f9d14b4a105"
+        },
+        {
+          "name": "speedtest_history",
+          "description": "Recent WAN speedtest results — answers 'is the internet healthy?'. Wraps GET /api/getSpeedTestHistory. Returns rows ordered by timestamp desc.\n\nEach row carries the upstream's SpeedtestLog shape — typically {id, timestamp, download_mbps, upload_mbps, latency_ms, jitter_ms, server, ...}, but any new columns added on the Laravel side flow through automatically. The tool doesn't reshape the row contents — just filters by time window and limits the return.\n\nLower priority than ping/traceroute/netflow for general 'internet slow' investigations, but the right tool when the user specifically asks about WAN throughput trends or recent speedtest runs.\n\nFilters (client-side): hours (1-720, default 168 = 7d), limit (1-100, default 25). The upstream endpoint returns the full history with no server-side cap — narrow with hours rather than fetching unbounded.\n\nPermission: tools. Example: speedtest_history({hours: 24})",
+          "inputSchema": {
+            "properties": {
+              "hours": {
+                "description": "Lookback hours (1-720). Default 168 (7 days).",
+                "maximum": 720,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "limit": {
+                "description": "Max rows returned (1-100). Default 25.",
+                "maximum": 100,
+                "minimum": 1,
+                "type": "integer"
+              }
+            },
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Speedtest History"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:5adaa687ecf537c37cf434ee720de9b38efc4686102d690a609eb4d8244de2d1"
+        },
+        {
+          "name": "syslog_facets",
+          "description": "Top-N value counts for ONE syslog field over a window — 'what are the top actions/reasons on this FortiGate in the last 2 hours' in a single call, instead of pulling rows and counting them yourself. Wraps GET /api/syslog/facets (permission: logs); tag-scoped server-side.\n\ngroup_by takes one of two kinds of field:\n\n  COLUMN (indexed, may run fleet-wide — device_id optional):\n    facility, severity, source\n\n  MESSAGE FIELD (parsed out of the message text at read time — device_id REQUIRED):\n    action, reason, devname, type, subtype, level, logdesc, msg,\n    service, policyid, srccountry, dstcountry, srcintf, dstintf,\n    user, group, status, app, appcat, vpntunnel, eventtype, proto\n\nMessage fields have no index and cannot get one — they are pulled out of free text — so every message pivot is a sequential scan of the window (~37x the per-row cost of a column pivot). device_id is mandatory for them and the server rejects a fleet-wide message pivot outright.\n\n`devname` and `source` are DIFFERENT keys and are deliberately not merged: `source` is the column syslog arrived with (a relay may have rewritten it to its own name), `devname` is what the device wrote about itself inside the message. Ask for the one you mean.\n\nWindow: `hours` (1-168, default 24) OR `start_time`+`end_time` (ISO-8601 UTC); a window wider than 168h is refused either way. `limit` is the top-N cut (1-50, default 20).\n\nReading the result: `facets` is the top-N; `other` is everything below the cut, so facets + other sums to `matched_rows`. `rows_without_field` counts rows in the window where the field is absent entirely — a large value is normal (a FortiGate emits many message types) and is NOT a failure.\n\nErrors are structured, and two of them are instructions:\n  error='window_too_large' — the row pre-check refused before scanning. Lower `hours` (halve it and retry) or add/narrow device_id. `rows_in_window` and `max_rows` tell you how far over you are. Do NOT retry the same window.\n  error='query_timeout' — the scan passed the 10s server budget. Same remedy: narrow the window, or pivot a column instead.\n\nExample: syslog_facets({group_by: \"action\", device_id: 372, hours: 2})",
+          "inputSchema": {
+            "properties": {
+              "device_id": {
+                "description": "Device id to pivot within. Required for every message-field group_by; optional for facility/severity/source.",
+                "type": "integer"
+              },
+              "end_time": {
+                "description": "ISO-8601 UTC. Must be paired with start_time.",
+                "type": "string"
+              },
+              "group_by": {
+                "description": "Field to pivot on. Columns: facility, severity, source (device_id optional). Message fields: action, reason, devname, type, subtype, level, logdesc, msg, service, policyid, srccountry, dstcountry, srcintf, dstintf, user, group, status, app, appcat, vpntunnel, eventtype, proto (device_id REQUIRED).",
+                "enum": ["facility", "severity", "source", "action", "reason", "devname", "type", "subtype", "level", "logdesc", "msg", "service", "policyid", "srccountry", "dstcountry", "srcintf", "dstintf", "user", "group", "status", "app", "appcat", "vpntunnel", "eventtype", "proto"],
+                "type": "string"
+              },
+              "hours": {
+                "description": "Lookback window in hours (1-168). Default 24.",
+                "maximum": 168,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "limit": {
+                "description": "Top-N cut (1-50). Default 20; the rest is folded into `other`.",
+                "maximum": 50,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "start_time": {
+                "description": "ISO-8601 UTC (e.g. 2026-04-23T10:00:00Z). Must be paired with end_time.",
+                "type": "string"
+              }
+            },
+            "required": ["group_by"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Syslog Facet Breakdown"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:28b91ffa7bbd06fadf10f3016e9d3c183f0289b1ffbd630a948bc36fea855ef5"
+        },
+        {
+          "name": "syslog_search",
+          "description": "Search syslog messages from network devices. Wraps GET /api/syslog/list (permission: logs); tag-scoped server-side.\n\nFilters (all optional): device_id, severity (name or int 0-7), facility (int 0-23), source (exact host/IP), message (substring).\n\nWindow: `hours` (1-168, default 24) OR `start_time`+`end_time` (ISO-8601 UTC). `limit` defaults to 50 (max 500). The response's `total` is the full match count — if it exceeds `limit`, narrow the window or add severity/message filters rather than bumping limit unboundedly.\n\nExample: syslog_search({severity: \"error\", hours: 2, limit: 20})",
+          "inputSchema": {
+            "properties": {
+              "device_id": {
+                "description": "Restrict to a single device id.",
+                "type": "integer"
+              },
+              "end_time": {
+                "description": "ISO-8601 UTC. Must be paired with start_time.",
+                "type": "string"
+              },
+              "facility": {
+                "description": "Syslog facility int(s) 0-23. Accepts single or array."
+              },
+              "hours": {
+                "description": "Lookback window in hours (1-168). Default 24.",
+                "maximum": 168,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "limit": {
+                "description": "Max rows returned (1-500). Default 50.",
+                "maximum": 500,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "message": {
+                "description": "Substring match against message text (case-insensitive).",
+                "type": "string"
+              },
+              "severity": {
+                "description": "One severity or an array. Strings (e.g. 'error') or ints 0-7."
+              },
+              "source": {
+                "description": "Source host/IP string match (exact).",
+                "type": "string"
+              },
+              "start_time": {
+                "description": "ISO-8601 UTC (e.g. 2026-04-23T10:00:00Z). Must be paired with end_time.",
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Search Syslog"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:de16c783279411ac93ee909afc768e35b40d8c12595c8a3b8a70c281249ff80d"
+        },
+        {
+          "name": "tags_list",
+          "description": "List tag definitions. The slug is the stable identifier used everywhere device-tag scoping is enforced (e.g. alert_routing_rules.tag_filters, device_list({tag: ...})). The display name is for humans.\n\nWraps GET /api/tags. Returns every tag the caller has visibility to (Laravel does not tag-restrict the catalog itself — operators see all tags and use the slugs that match their visible devices). Tag rows are typically O(10s) per install.\n\nOptional `type` filter: 'device' tags decorate devices and are the most common (these are what device_list({tag: ...}) matches against). 'status' tags are reserved for system-derived states. 'other' is a catch-all. Default 'all' returns every type.\n\nPermission: devices. Example flow: a user says 'check our routers' → call tags_list({type: 'device', search: 'router'}) → pick a slug → call device_list({tag: 'router', status: 'down'}).",
+          "inputSchema": {
+            "properties": {
+              "search": {
+                "description": "Case-insensitive substring on slug or name.",
+                "type": "string"
+              },
+              "type": {
+                "description": "Filter by tag type. Default 'all'.",
+                "enum": ["device", "status", "other", "all"],
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "List Tags"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:69bd23565b039cbf21e46da48c83718a0e3d8b68cc1607bf7957b4297531cfda"
+        },
+        {
+          "name": "top_bandwidth",
+          "description": "Top NetFlow conversations over the last N minutes — the 'who's eating bandwidth right now?' question. Wraps GET /api/getTopBandwidth/{mins}, the same query that powers the dashboard live widget.\n\nUse this for short-window 'right now' inquiries. For longer windows (hours-to-days) or filtered top-talkers, use netflow_search instead — that tool has the rich filter set; this one is the live snapshot.\n\nServer-side cap: top 20 conversations by in-window bytes descending. We don't expose `top_n` — the upstream endpoint hardcodes the limit and there's no value in lying about that to the LLM.\n\nEach row: {src_host, src_id, src_ip, dst_host, dst_id, dst_ip, bytes, bps}. Hostnames come from the _dns view (PTR + custom overrides); src_id/dst_id are populated when the IP matches a monitored device. bytes is the conversation's in-window share (pro-rated), and bps is averaged across the window — not a live rate.\n\nPermission: vne. Examples:\n  top_bandwidth({minutes: 5})\n  top_bandwidth({minutes: 60})",
+          "inputSchema": {
+            "properties": {
+              "minutes": {
+                "description": "Lookback window in minutes (1-1440 / 24h). Default 5. Matched by OVERLAP across the raw and aggregated flow tables with bytes pro-rated to the window, so long lookbacks are honest — not capped by the ~15-minute raw horizon.",
+                "maximum": 1440,
+                "minimum": 1,
+                "type": "integer"
+              }
+            },
+            "required": [],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Top Bandwidth Talkers"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:f629954cbfbd5516b789d7e4c3589fa7c67800f77fa451522b97359ab9c362dd"
+        },
+        {
+          "name": "traceroute",
+          "description": "Traceroute to a target from the Netmon server. Wraps POST /api/getTracerouteInfo/{target} (permission: tools).\n\nThe probe runs ON the netmon server — hops reflect the path FROM netmon TO the target, not from wherever mcpmond is running. Server runs `traceroute --mtu -m 10 -q 2 -w 1` so you get up to 10 hops with MTU discovery; longer paths get truncated. PTR lookups happen server-side.\n\nReturns rows of {hop, address, latency (ms or null on timeout), hostname, mtu (or null)}.\n\nExample: traceroute({target: \"1.1.1.1\"})",
+          "inputSchema": {
+            "properties": {
+              "target": {
+                "description": "IP address or hostname to trace.",
+                "type": "string"
+              }
+            },
+            "required": ["target"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": true,
+            "title": "Run Traceroute"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:976b69fc7e001dc60d0b32005da0a813cabe3c44ec8582705f7ad70cb99b32c6"
+        }
+      ],
+      "prompts": [
+        {
+          "name": "host_postmortem",
+          "description": "Per-host deep-dive playbook: identity → log severity fan-out → in-host state (agent or SNMP) → traffic context. Builds a timeline.",
+          "arguments": [
+            {
+              "name": "device_id",
+              "description": "Device id to investigate. Required.",
+              "required": true
+            },
+            {
+              "name": "hours",
+              "description": "Lookback window in hours, 1-168 (default 24). Values outside that range are clamped, since every log tool caps its window at 168h.",
+              "required": false
+            }
+          ],
+          "digest": "sha256:bb2d4d3011df923eca036aafc86482692efa8053fca964c3f7e27f772c0013d0"
+        },
+        {
+          "name": "security_review",
+          "description": "EVE-driven security playbook: triage Suricata alerts, pivot on repeat-offender IPs, correlate with system logs. Stops probing on suspected compromise.",
+          "arguments": [
+            {
+              "name": "severity",
+              "description": "EVE severity floor (default \"high\"; accepts high/medium/low or 1/2/3). Expanded into the numeric set eve_search matches on.",
+              "required": false
+            },
+            {
+              "name": "hours",
+              "description": "Lookback window in hours, 1-168 (default 24). Values outside that range are clamped, since every log tool caps its window at 168h.",
+              "required": false
+            }
+          ],
+          "digest": "sha256:cb6519d51d8c2cac8e2353bb0398ef2657d5d27d9255a4ca0c32b5cef377b55c"
+        },
+        {
+          "name": "triage",
+          "description": "Cold-start network-issue triage playbook: fleet rollup → log severity fan-out → device drill-down. Pass device_id to skip fleet-wide steps.",
+          "arguments": [
+            {
+              "name": "device_id",
+              "description": "Optional device id to narrow triage from fleet-wide to a single host.",
+              "required": false
+            },
+            {
+              "name": "hours",
+              "description": "Lookback window in hours, 1-168 (default 4). Values outside that range are clamped, since every log tool caps its window at 168h.",
+              "required": false
+            }
+          ],
+          "digest": "sha256:6f3dbe7cf188d1f1d9430bff041312942681284e9aa7a78c996e95d3f0d8bb94"
+        }
+      ],
+      "digest": "sha256:7279b79006776e1d472216eae38acd66a62c228eb666c592201fc086d2aac0e9"
+    }
+  }
+}

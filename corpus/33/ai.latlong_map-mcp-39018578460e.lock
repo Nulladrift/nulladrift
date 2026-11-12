@@ -1,0 +1,1053 @@
+{
+  "lockfileVersion": 2,
+  "subjects": {
+    "ai.latlong/map-mcp": {
+      "kind": "mcp-server",
+      "source": {
+        "client": "manual",
+        "file": "registry.modelcontextprotocol.io"
+      },
+      "transport": {
+        "type": "http",
+        "url": "https://geocp.latlong.ai/mcp/"
+      },
+      "protocol": {
+        "era": "legacy",
+        "version": "2025-11-25"
+      },
+      "serverInfo": {
+        "name": "latlong-maps",
+        "version": "1.0.0"
+      },
+      "capabilities": {
+        "logging": {},
+        "tools": {
+          "listChanged": true
+        }
+      },
+      "instructions": "LatLong Maps MCP Server — Usage Guide\n\n## Authentication\nAll tool calls require a valid token. For HTTP transport, send the \"X-Authorization-Token\" header. For stdio transport, set the \"X_AUTHORIZATION_TOKEN\" environment variable in your MCP client config.\n\n## SVG artifacts\nMap tools return a version-pinned signed \"svg_url\" and \"svg_expires_at\"; the default TTL is about 8 hours and is configurable by the server. Do not expect raw SVG markup in tool JSON.\n\nTo display the map to the user:\n1. ALWAYS render the svg_url as a clickable image using markdown: ![Map](svg_url)\n2. The URL is a direct link to an SVG file — it renders in any browser or image viewer.\n3. Include the image inline in your response so the user sees the map immediately.\n4. Copy svg_url EXACTLY, character for character, including EVERY query parameter (versionId, Expires, Key-Pair-Id, Signature). Never shorten, clean up, re-encode or drop any part of it. The signature covers the whole URL: removing or changing even one parameter makes the link return \"AccessDenied\".\n\nExample response format:\n![Map](https://d2lgkljoid5eer.cloudfront.net/svg/...)\n\nFor saving locally: fetch the URL without altering its query string:\n\"curl --fail --location --output map.svg <svg_url>\"\n\n## Download links (file_url)\ngeocode, reverse_geocode, pincode_lookup and compute_column return file_url, a signed link to the result\nCSV/XLSX. The same rule applies as for svg_url: copy file_url EXACTLY, including EVERY query parameter\n(versionId, Expires, Key-Pair-Id, Signature), e.g. [Download the CSV](file_url). A link cut at \".csv\" or\n\".xlsx\" returns \"AccessDenied\". When the user asked for a file, always give them file_url.\n\n## Chaining Policy\n- When a result carries a \"guidance\" object, prefer its numbered menu and its next_actions over improvising a follow-up.\n- An action with \"arguments_from\" names an object already in the exchange. Use that object as the base request and overlay the small \"arguments\" map on top. \"render_map_input\" means the field of that name in the result you just received; \"previous_call_input\" means the arguments you just sent. Never rebuild a data table by hand.\n- An action with a label but no arguments is an invitation, not a complete call: you still have to supply the missing choice.\n- If you do not understand an action, ignore the whole guidance object rather than acting on part of it.\n- Do not invent tools, output formats, or capabilities. get_capabilities reports which tools are actually available in this process — treat its available_tools list as authoritative over anything below.\n\n## Tools\n\n### 1. get_capabilities\nReturns the server's capability matrix: supported map types (choropleth, categorical), output formats (SVG is the default; PNG and both are opt-in), classification methods, feature flags, and available_tools — the tools actually registered in this process. Call this first to discover what the server can do.\n\n## Recommended Workflows\n\n### Upload-then-map workflow\n1. Call upload_file with file_name, file_size, and question to get a signed upload URL.\n2. Run the curl command from the response to upload the file bytes.\n3. Read the curl response for file_key, columns, and row preview.\n4. If the response is 'sheet_selection_required' (multi-sheet XLSX), note the returned file_key and sheet names. Pass file_key + sheet directly to question_to_map (or any other tool that accepts file_key) — do not call upload_file again.\n5. Call question_to_map with the returned file_key and question: {\"question\": \"...\", \"file_key\": \"mcp-uploads/<user-id>/2026/01/15/<uuid>.csv\"}\n6. For subsequent questions on the same file, reuse the same file_key — do not re-upload. The server re-fetches the file from S3 on each call.\n\n## Data Format\nPass data as an array of row objects (key-value maps). Each row must contain at least the geo_column and value_column fields.\n\nExample:\n{\"data\": [{\"state\": \"Maharashtra\", \"population\": 123456789}, {\"state\": \"Karnataka\", \"population\": 67562686}], \"map_type\": \"choropleth\", \"geo_type\": \"state\", \"geo_column\": \"state\", \"value_column\": \"population\"}\n\n## Parameters (question_to_map)\n\n- map_type: \"choropleth\" (numeric values) or \"categorical\" (qualitative classes)\n- geo_type: \"state\", \"district\", \"city\", \"ac\", \"pc\", \"scr\", \"rto\", \"pincode\"\n- geo_column: Column name containing geographic names\n- value_column: Column name containing values to color-code\n- label_column: Optional column for categorical map labels\n- state_hint: Optional array of state names to scope sub-state matching\n- filters: Optional row filter object\n- style: Optional style object (see Style Options)\n- mid_aa_order: Administrative level for mid-order boundary overlay\n- query: Optional natural-language description of the desired map\n- output_format: \"svg\" (default), \"png\", or \"both\"\n- viewport_mode: \"india\" (default, full India extent) or \"fit_data\" (zoom to matched regions)\n- title: Optional map title, drawn above the map (name the indicator, place and year)\n- tooltip: Set true to enable labels and data display on the map\n- no_cache: Set true to bypass SVG engine cache and get fresh render\n\n## Style Options\nPass via the \"style\" object. All keys are optional.\n\n### Coloring\n- palette: Named color palette string (e.g. \"blue\", \"green\", \"red\", \"ll_green_7\", \"ll_blue_7\", \"ll_red_7\", \"sunrise\", \"aurora\")\n- distribution: \"continuous\" (smooth gradient) or \"steps\" (discrete class breaks)\n- distribution_mode: \"auto\" (default: equal interval, or natural breaks for skewed data), \"jenks\", \"quantile\", \"linear\", \"custom\". \"natural_breaks\", \"equal_interval\" and \"manual\" are accepted as aliases\n- steps_count: Number of class breaks (default 5; 7 for data with both signs)\n- midpoint: Centre of the colour scale. Classes mirror around it and only values at the midpoint get the middle colour\n- color / colour: Any colour name or hex for the map (\"teal\", \"#1a7f37\"); \"N shades\" in the question sets the number of classes\n\n### How colours are chosen\n1. The user's choice wins: a palette or colour in style, or a colour named in the question (\"in green\", \"7 shades of red\", \"red to green\").\n2. Otherwise the server judges the data: whether higher is better (money, hospitals, EVs, literacy → green), worse (deaths, famine, crime → red) or neutral (population, rainfall → blue), and whether a traffic light (red → amber → yellow → green) or a single-colour ramp reads best.\n3. The eye goes to the high end: the strongest colour is always the highest value, also when every value is negative. Data on both sides of 0 is centred on 0, with 0 its own class.\nCategorical maps: political parties get their own colours; ranked or good/bad categories go green (good) → amber → red (bad); other categories get distinct soft colours.\n- custom_palette_start_color / custom_palette_end_color: Hex colors for custom palette gradient\n- single_color: Hex color to fill all regions (overrides palette)\n- category_colors: Object mapping category → hex color (for categorical maps)\n\n### Legend & Labels\n- legend_show: Boolean\n- legend_title: String\n- show_labels: Boolean (default: on for maps of up to 60 regions)\n- show_data: Boolean\n- font_family: Label font family (default: Montserrat)\n- font_size: Name label size in px (default 16, or 12 on maps of 21+ regions). Never below 12; smaller values are raised to 12\n- data_font_size: Value label size in px (default 0.82 × font_size). Never below 12\n- label_styles / data_styles: {font_family, font_size (default 16), font_weight (100–900), color (hex or \"auto\"), auto_light_color, auto_dark_color, halo_width (0–10, default 3), is_italic} for region names / values\n- show_callout_labels: false keeps names that don't fit off the map instead of placing them outside with a leader line\n- callout_mode: \"all\" (default) or \"clean\" (only short, tidy callouts; other small regions show their name on hover; the default for pincode and crowded maps)\n- font_size_mode: \"fixed\" (default, one size; names that don't fit become callouts) or \"fit\" (names shrink to fit their region)\n- Label requests in the query are understood too: \"bigger labels\", \"bold names\", \"labels in navy\", \"no outline\", \"labels are hard to read\", \"only label the top 5\", \"don't put labels outside the map\"\n\n### Stroke\n- child_stroke: {color, width} — border style for region paths\n- parent_stroke: {aa_order, color, width} — parent boundary overlay\n- mid_aa_order: Administrative level for mid-order boundary overlay\n\n## Server Behavior\n- Stateless: each call is independent with no session persistence\n- SVG is the default output format and is returned through svg_url\n- Font: Montserrat is the default font\n- Circuit breaker protects against SVG engine outages\n- LLM fallback: if AI model is unavailable, renders with default styling\n\n## Data Analysis Tools\n\nThese tools work with uploaded data. Default response is always a rendered map (SVG URL). Data tables only when explicitly asked.\n\n### Response Format Guide (for the LLM client presenting to users)\n\nWhen presenting results to the user, ALWAYS include ALL THREE parts:\n\n1. **MAP** (primary) — the rendered SVG map. Display it inline or as a viewable link.\n2. **TABLE** (supporting) — a brief top-5 summary table of key regions with values. A preview of up to 20 rows is included directly in the map response under computed_data when the data is your own uploaded file (not a DB-backed query) — use those numbers, formatted with commas (e.g. 15,245), with the metric name and unit. If computed_data is absent (a DB-backed request), or you need more than its 20 rows, say so and either offer the \"get_data\" follow-up in guidance.next_actions for a different sort/subset, or note that the user's own uploaded file has the complete data. Never invent placeholder values.\n3. **EXPLANATION** (narrative) — 2-3 sentences explaining: what the map shows, any geographic complexity (e.g. \"GHMC crosses multiple districts\", \"Delhi NCR spans multiple states\"), top/bottom performers, and key insight.\n\nExample for \"Show sales by state from my uploaded file\" (a numeric value_column):\n- MAP TYPE: CHOROPHLETH (color gradient by value — states with higher sales are darker)\n- MAP: India (or the matched states) colored by the sales value per state\n- TABLE: Top 5 states by sales, with values formatted (e.g. 15,245) — from the computed_data preview in the response\n- EXPLANATION: \"This map shows sales by state from your uploaded data. Geo-matching covered N of M states. Maharashtra leads at 15,245, followed by...\"\n\nExample for \"Show party affiliation by constituency from my uploaded file\" (a qualitative/category value_column):\n- MAP TYPE: CATEGORICAL (a distinct color per category — NOT choropleth)\n- MAP: The matched constituencies colored by their category value\n- TABLE: Category breakdown (e.g. counts per party) — from the computed_data preview in the response\n- EXPLANATION: \"This map shows [category] by constituency from your uploaded data. [Category A] leads with N constituencies, followed by...\"\n- NOTE: For \"which is more common\" or \"distribution of X\" questions with a text/category column, use map_type=\"categorical\" with that column as value_column\n\n### upload_file\nUpload a CSV or XLSX file for ingestion under policy (auth, size cap, malware scan, injected-intent scan) and receive a signed upload URL plus a file_key. This is step 1 of the upload-then-map workflow.\n\nStep 1 — request a signed upload URL:\n- Pass file_name (must end in .csv or .xlsx), file_size (bytes), and question (your analysis question).\n- The response contains: status=\"upload_required\", upload_url, curl (a ready-to-run curl command), file_key, and question.\n\nStep 2 — upload the file bytes:\n- Run the curl command from the response. It POSTs the raw file bytes to the signed upload_url.\n- The curl response contains: file_key, columns, rows (bounded preview), row_count, warnings, and optionally intent + guidance.\n- The 'intent' field (when present) carries the geo-match service's detected geo_column, geo_level, value_column, map_type, and confidence. It is advisory — forward these into question_to_map as geo_column, value_column, geo_level, and render_params.map_type to skip auto-detection and render immediately.\n- The 'guidance' field (when present) contains a ready-to-fire question_to_map action with all detected parameters pre-filled. Use it directly if the intent looks correct.\n- The 'question' field echoes back the question you passed in step 1.\n- For multi-sheet XLSX: the curl response is 'sheet_selection_required' with a file_key and sheets list. Pass file_key and sheet to question_to_map (or any other tool that accepts file_key) — do not call upload_file again. The server parses the chosen sheet from S3 on that call.\n\nAfter upload: pass the returned file_key to question_to_map to render a map from the full dataset. The server fetches and parses the file from S3 internally — no need to pass raw rows. When the upload verdict includes intent + guidance, forward the detected columns into question_to_map for a zero-round-trip render.\n\nThe file_key is reusable — for additional questions on the same file, just pass the same file_key again. Do not re-upload the file.\n\nLookups on a file (no map wanted): when the user gives a file and asks for pincodes, cities, coordinates or a\ncomputed column (\"generate a csv\", \"add the city for each row\"), upload it, then call geocode, reverse_geocode,\npincode_lookup or compute_column with the file_key. Those tools write the result into the file and return\nfile_url and a preview. Ignore the upload response's question_to_map guidance in that case. Never read the file\nyourself and loop single lookups, and never write the result CSV yourself.\n\n### question_to_map\nRender a geographic map from your uploaded data. This is step 2 of the upload-then-map workflow.\n\nPass the file_key from upload_file: {\"question\": \"show total by pincode\", \"file_key\": \"mcp-uploads/<user-id>/2026/01/15/<uuid>.csv\"}\nThe server fetches and parses the full file from S3 — no need to pass raw rows. The same file_key can be reused across multiple question_to_map calls without re-uploading.\n\nAlternatively, pass rows directly as 'data' (e.g. from the upload_file preview): {\"question\": \"show total by pincode\", \"data\": [<rows>]}\n\nRules:\n- geo_column and value_column are preferred if easily identifiable from the column names, but not required — the server auto-detects them using a geo-match service.\n- When the upload_file verdict includes an 'intent' block, forward geo_column, value_column, geo_level, and render_params.map_type from it into question_to_map to skip auto-detection entirely.\n- Hints: geo_column usually contains place names (state, district, city, pincode, constituency) or numeric codes (pincode=560049); value_column usually contains the metric to plot (sales, count, total, percentage) or a category (party affiliation, status, type).\n- If value_column is 'total' and doesn't exist in data, all numeric columns are summed automatically.\n- String value columns render as categorical maps (each distinct value gets its own color).\n- Supported geo types: state, district, pincode, rto, city, ac, pc.\n- Default output is a rendered SVG map. When the data is your own upload, a bounded preview (up to 20 rows) of the underlying data is included in the map response as computed_data — use it for a supporting table. Say \"data\", \"table\", or \"numbers\" in the question to instead get a data-mode response focused on the numbers (a different sort/subset, still capped at 20 rows). If the request involves internal DB data, no preview is included — request a data-mode question for the numbers.\n- When the server cannot detect columns (service unavailable or no geo column found), it returns a 'clarification_required' response with classified column candidates and suggested next actions — never guesses.\n\nClarification responses:\n- When the server cannot determine which columns to use, it returns a 'clarification_required' response instead of an error.\n- The response includes a 'columns' list (classified as geo, quantitative, qualitative, or identifier), 'suggested_geo_columns', 'suggested_value_columns', and 'guidance' with ready-to-use next actions.\n- Pick a geo_column and value_column from the suggestions (or ask your user) and re-call question_to_map with those explicit parameters.\n\nPoints mode (plotting markers instead of shaded regions):\n- Triggers automatically when the file has latitude/longitude columns and the question asks to plot/pin/mark locations (e.g. \"plot my stores\", \"show me the outlet locations\", \"mark these\"). No geo_column or value_column needed — coordinate columns are detected the same way reverse_geocode detects them.\n- The boundary lines drawn beneath the markers, and how far the map zooms, are chosen automatically from where the points actually land — it tightens to a single state or district for a local cluster, and falls back to an all-India view for a nationwide spread. Name a level explicitly in the question (\"plot by assembly constituency\", \"rto wise\", \"by pincode\") to force it.\n- A response may report points that fall outside every boundary at the chosen level (offshore coordinates, or lat/lon swapped) in its warnings — check for that before telling the user every point plotted.\n- Works directly on lat/lon columns already in the uploaded file, whether they came from a prior geocode call or were already in the source data.\n\n### geocode\nTurn addresses in an uploaded CSV/XLSX into latitude/longitude. Requires a file_key from upload_file.\n\nSingle place, no file: {\"address\": \"India Gate, New Delhi\"} returns latitude, longitude, address,\npincode, city, district, state and landmark in one call — use it for questions like \"what is the pincode of X\" or \"where is X\".\nDo not combine address with file_key or column options. status 'not_found' means no match: tell the user\nit could not be found rather than supplying a value yourself.\n\nCall: {\"file_key\": \"mcp-uploads/<user-id>/2026/01/15/<uuid>.csv\"} and let the server detect the address column,\nor name it yourself: {\"file_key\": \"...\", \"address_column\": \"Shipping Address\"}\n\nColumn selection:\n- address_column names one column; address_columns names several (each is geocoded separately).\n- compose_columns is an ordered list to join into one address per row, for files where the address is\n  split across columns (e.g. [\"Street\",\"District\",\"State\",\"PIN\"]). Mutually exclusive with address_column(s).\n- Anything you pass explicitly is used as-is and skips detection entirely.\n\nClarification responses — this tool asks rather than guesses, because every row costs an API call:\n- status 'clarification_required' with reason 'multiple_candidates' means the file has more than one\n  address column. Show the candidates (each has a score and evidence) and ask the user which to geocode.\n  The guidance actions include one per column plus one for all of them.\n- reason 'low_score' means a single weak candidate — ask the user to confirm it.\n- reason 'compose_confirm' means the file has structured columns (District/State/PIN) and no single\n  full-address column. 'proposed_order' is the suggested join; confirm it or send your own compose_columns.\n  Columns marked eligible=false (RTO/SCR/AC/PC) are electoral or administrative overlays, not postal parts.\n- reason 'no_candidates' or 'detect_unavailable' means you must name the column; 'all_columns' lists them.\n- Answer by re-calling geocode with the chosen columns. Never invent a column name.\n\nLarge files run as a background job:\n- Small requests (<= GEOCODE_MAX_SYNC_ADDRESSES, default 200 addresses) return the finished file directly.\n- Larger ones return status 'accepted' with a job_id. Poll by calling geocode with ONLY that job_id\n  ({\"job_id\": \"gc_...\"}) — never with file_key as well. Each poll returns status, total, completed,\n  failed, and progress_percent computed from finished work only.\n- Statuses: accepted/running (keep polling), completed (file_key ready), completed_partial (some rows\n  were never reached and carry geocode_status=pending), interrupted (paused after a sustained upstream\n  failure — poll again to resume from where it stopped, already-done work is not repeated),\n  failed (reason explains why).\n- Polling etiquette: poll a few times with a short gap between polls. If the job is still\n  accepted/running after 2-3 polls, do NOT keep blocking — tell the user it is processing, report the\n  latest progress_percent (X of N addresses), and note that they can ask you to check again whenever\n  they like and are free to do other things meanwhile. Keep the job_id so a later check is one poll\n  away. Early polls may briefly show 0 done before the first progress flush lands; that is normal, not\n  a stall.\n- Retrying an identical call is safe: the job id is derived from the request, so a retry rejoins the\n  running job or returns the already-written file instead of geocoding everything a second time.\n  Pass force_new: true only when you genuinely want a fresh run.\n\nResult:\n- The result is written back to the SAME uploaded file as a new version, not a new object: file_key in\n  the response equals the file_key you passed. Pass it to question_to_map with a plotting question (e.g.\n  \"plot these locations\") to render the new latitude/longitude columns as markers — points mode detects\n  them automatically, no geo_column or value_column needed — or hand the user file_url (below) to\n  download the file directly.\n- file_url is a signed, time-limited CDN link to the geocoded file, for direct download by a human or\n  client. It may be absent if a link could not be generated — in that case a warning says so and file_key\n  still works with question_to_map. Do not treat a missing file_url as a failure.\n- Each geocoded column adds latitude, longitude, latlong, and geocode_status, prefixed by the source\n  column name (e.g. shipping_address_latitude) so results stay attributable when a file is geocoded more\n  than once. Existing columns are never overwritten; re-geocoding a file appends a new set alongside any\n  prior results (a warning notes this).\n- Geocoding returns coordinates only — no pincode. When the user asked for pincodes (or addresses) of the\n  places in a file, follow the 'add_pincodes' guidance action: reverse_geocode on the same file_key with the\n  latitude_column / longitude_column geocode just wrote. The same file then gains address and pincode columns.\n- For a multi-sheet XLSX, only the geocoded sheet is modified; all other sheets are preserved unchanged.\n- geocode_status per row: ok, not_found (no match — retrying will not help), error (transport failure —\n  worth retrying), empty_address. Individual failures never stop the other rows.\n- Large files: total addresses = rows x address columns and is capped by GEOCODE_MAX_ADDRESSES; the call\n  is rejected up front rather than part-way through if it would exceed the limit.\n- After geocoding, the response includes a \"map these points\" next action, but the results are also\n  useful standalone — the file_url download is enough on its own if the user just wanted coordinates. If\n  the user seems unsure what to do next, mention you can also download the file to a location for them,\n  or answer basic questions about the results directly from the file.\n\n### reverse_geocode\nTurn latitude/longitude in an uploaded CSV/XLSX into addresses. Requires a file_key from upload_file.\n\nSingle point, no file: {\"latitude\": 28.6129, \"longitude\": 77.2295} (decimal degrees) returns address,\npincode, city, district, state and landmark — use it for \"which pincode / city is this point\". A point outside the supported region is refused with OUT_OF_BOUNDS, which also says\nwhen latitude and longitude look swapped. status 'not_found' means no match: tell the user rather than\nsupplying a value yourself.\n\nCall: {\"file_key\": \"...\"} and let the server detect the coordinate columns, or name them:\n  {\"file_key\": \"...\", \"latitude_column\": \"lat\", \"longitude_column\": \"lng\"}\n  {\"file_key\": \"...\", \"latlong_column\": \"coords\"}            // one column: \"12.9148,77.5949\"\n  {\"file_key\": \"...\", \"coordinate_pairs\": [                   // several sets in one call\n      {\"latitude_column\": \"pickup_lat\",  \"longitude_column\": \"pickup_lng\"},\n      {\"latitude_column\": \"drop_lat\",    \"longitude_column\": \"drop_lng\"}]}\n\nClarification responses — this tool asks rather than guesses, because every coordinate costs an API call:\n- 'multiple_candidates': the file has more than one coordinate set. Show the candidates (each has a score\n  and evidence) and ask which to resolve; guidance includes one action per pair plus one for all of them.\n- 'low_score': a single weak candidate — ask the user to confirm it.\n- 'no_candidates': name the columns; 'all_columns' lists what is available.\n- 'out_of_bounds': too many coordinates fall outside the supported region. This deployment is configured\n  for India only. Either the columns are wrong (name the correct ones) or the data cannot be processed —\n  there is no override flag.\n- 'low_precision': coordinates have no decimal places, so addresses may be ~111 km off. This one is NOT\n  answered by naming a column: re-call with accept_low_precision: true to proceed, after telling the user\n  what the warning says.\n\nBehaviour worth knowing:\n- Latitude and longitude that are clearly reversed are swapped automatically, and the response says so.\n- Rows that are empty, unparseable, or outside the region are skipped without an API call and reported in\n  'skipped_by_reason'. Row count out always equals row count in.\n- Explicitly named columns are still bounds- and precision-checked. Unlike geocode, wrong coordinates\n  return confidently wrong addresses instead of failing loudly, so the checks are not skipped.\n- Columns written by an earlier geocode run are excluded from auto-detection; name them to resolve those.\n\nResult:\n- The resolved file is written back over the uploaded file. The response carries file_key, a signed\n  file_url, a <=20-row preview, and counts — not the full rows.\n- Each pair adds address, pincode, landmark and reverse_geocode_status columns, plus building_name when\n  any row returned one, plus latitude/longitude when the input was a single combined column.\n- reverse_geocode_status per row: ok, not_found, error, empty_coordinates, invalid_coordinates,\n  out_of_bounds, pending (only in a partially delivered file).\n\nLarge files:\n- At or below BULK_GEOCODE_THRESHOLD (default 50) coordinates the work runs inline and returns the file.\n- Above it, the request is registered with the bulk processing service and the response is\n  status=accepted with a job_id. Poll by calling reverse_geocode with ONLY that job_id, about every\n  5 minutes. The same statuses and polling rules as geocode apply.\n\n### territory_mapping — Long-running territory planning pipeline\nGiven a branch file uploaded with upload_file (CSV/XLSX), a catchment distance in kilometres, and a catchment level (\"village\" or \"pincode\"), computes each branch's isochrone (catchment), finds admin areas that overlap it by ≥50%, groups, bunches and sequences them per catchment, computes driving distances, and returns a signed URL to an XLSX workbook (download_url) plus one map per branch (maps).\n\nPer catchment (branch):\n- Overlaps are kept: a village/pincode inside several catchments appears under EVERY one of those branches. For such shared units, closest_branch names the branch nearest by driving distance (straight-line where the distance call failed); it is blank for units in only one catchment.\n- Grouping: the catchment is split into 5 wedges of 72° around the branch (together 360°); group_number is 1-5 by wedge.\n- Bunching: within each wedge, units are split into bunches of 1-5 neighbouring units (by centre point); bunch_number is 1..N, bunch 1 nearest the branch.\n- Trips: each bunch is sequenced via the Trips API; trip_number is the 1-5 visit order inside the bunch.\n\nBecause the pipeline can take minutes for a large file, this tool is HYBRID ASYNC with three modes:\n1. START: file_key + catchment_distance_km (+ optional catchment_type, render_map=false to skip the maps) returns a job_id IMMEDIATELY. The server runs the pipeline in the background.\n2. POLL: job_id alone returns the current phase, percent, warnings, and (on completion) download_url and maps.\n3. RESUME: job_id + catchment_type together answers a clarification (see below) and re-dispatches the pipeline.\nWhile the job runs, every response carries poll_after_seconds=10: wait 10 seconds, then poll again with job_id. Do not poll faster. Expect phase transitions: pending → validating → isochroning → overlapping → grouping → bunching → routing → distancing → rendering_map → writing_output → complete (or failed, or awaiting_catchment_type).\n\ncatchment_type is OPTIONAL at start. If the caller doesn't supply it, the server asks the geo-match service which columns of the branch file hold places, right after ingest: one column of pincodes means pincode, one column of villages means village. Other place columns (a state column, branch names that are also district names) never decide it. A catchment_type / area_type / mapping_type column, if present, also counts; its value must be the same for every row. If geo-match cannot be reached, only a column whose values are all pincodes is recognised. Resolution order:\n- Caller supplied it, the file agrees, says nothing or is unclear → use the caller's value.\n- Caller didn't supply it, the file clearly says one → use the file's value.\n- Caller supplied it AND the file clearly says the other → do NOT silently pick one; pause for clarification.\n- The file is unclear (several pincode/village columns, a pincode and a village column, or its columns disagree) and the caller didn't say → pause for clarification.\n- Neither caller nor file specifies it → pause for clarification. Nothing is ever assumed.\n- A catchment_type / area_type / mapping_type column with mixed village/pincode values across rows → hard failure, error_code=AMBIGUOUS_CATCHMENT_TYPE (a self-contradictory file is a data problem, not something to ask about).\n\nState: when geo-match finds a state column, the branches' state comes from it; otherwise from each branch's latitude/longitude. Either way, branches in more than one state fail with MULTI_STATE_NOT_SUPPORTED.\n\nWhen the job pauses, phase=awaiting_catchment_type and the poll response carries clarification_needed=true plus a plain-language clarification_message (and guidance offering both \"village\" and \"pincode\" as next actions). This is NOT an error — error_code stays empty. Answer by calling territory_mapping again with that same job_id plus the chosen catchment_type; the server validates the job is actually awaiting an answer (JOB_NOT_AWAITING_CATCHMENT_TYPE otherwise), records the choice, and re-dispatches the pipeline, which re-ingests (idempotent) and proceeds straight through from validating.\n\nFlow: upload_file → upload the bytes → territory_mapping{file_key, catchment_distance_km[, catchment_type]} → territory_mapping{job_id} until phase=complete or phase=awaiting_catchment_type → if awaiting, territory_mapping{job_id, catchment_type} to resume → territory_mapping{job_id} until phase=complete.\n\nConstraints:\n- One state per job. Multi-state branch files are rejected with MULTI_STATE_NOT_SUPPORTED (split the file and start one job per state).\n- Multi-sheet XLSX: the first sheet is read.\n- When the server lacks the territory database, Redis, Latlong or S3, the tool returns TERRITORY_UNAVAILABLE with the missing dependency.\n- A per-branch overlap query that exceeds the server's statement timeout fails the job with OVERLAP_TIMEOUT (a database configuration problem, not a data problem).\n\nMaps: maps lists one SVG per branch in the output ({branch_id, branch_name, district, map_url}), also on the workbook's Maps sheet. Each map shows the branch as a red pin and its units' boundaries, shaded by group_number and labelled with s_no; units shared with other catchments are hatched green when this branch is their closest_branch and red when another branch is closer. render_map=false at start skips the maps. Map style (optional, at start): style_request carries the user's own words for the colours (e.g. \"groups in pink shades\", \"far overlaps in blue\") — only the 5 group colours and the near/far hatch colours change, applied exactly as asked, to every branch map in the job (pincode maps; village maps keep the default look). map_title replaces the title. If the requested colours make the hatching hard to see, warnings carry a \"Suggestion:\" — pass it on to the user. Show the user the map_url values. A map that could not be drawn is missing from maps with a warning naming the branch; the workbook is still complete.\n\nOutput workbook (XLSX): the Territory sheet has one row per (branch, qualifying village/pincode) — a shared unit appears once per branch whose catchment it is in. Columns (in order): s_no, branch_name, branch_id, state, village_name, pincode, driving_distance_km, area_type, group_number, bunch_number, trip_number, closest_branch. s_no numbers each branch's rows 1..N in visit order (group, bunch, trip) and matches the labels on its map. The Maps sheet has branch_id, branch_name, district, map_url.\n\n### pincode_lookup\nLook up one Indian pincode, no file: {\"pincode\": \"560019\"} returns city, district, state, and the post\noffices it covers (office name, type, taluk, latitude, longitude). Use it for \"which city / state is\npincode X\". A pincode is 6 digits not starting with 0; anything else is refused with INVALID_INPUT.\nstatus 'not_found' means the pincode does not exist: tell the user rather than supplying a value yourself.\n\nA file of pincodes: upload it (upload_file), then {\"file_key\": \"...\"} (add \"pincode_column\" if you know it).\nUse it for \"find the city / state of these pincodes\" — not one single lookup per row. Every row gains city, district, state and pincode_status columns; the file is\nwritten back over file_key as a new version, and the reply has file_url (download link), a <=20-row preview\nand counts. Show the user the preview and offer file_url.\n- One lookup per unique pincode, not per row. Blank cells and invalid codes are skipped without a call\n  (pincode_status empty_pincode / invalid_pincode); not_found rows are reported in the warnings.\n- 'clarification_required': multiple_candidates (several pincode-like columns), low_score (six-digit\n  codes in a column not named like a pincode — confirm first), no_candidates (name the column). Answer by\n  re-calling with pincode_column.\n- Large files return status 'accepted' with a job_id: poll {\"job_id\": \"...\"} alone, with the same\n  statuses and polling rules as geocode.\n\nWhich tool for a file:\n- place names / addresses -> pincode: geocode, then its 'add_pincodes' action (reverse_geocode).\n- coordinates -> pincode: reverse_geocode.\n- pincodes -> city / district / state: pincode_lookup with file_key.\n\n### compute_column\nAdd a column computed from the file's numeric columns, then map it. Use it whenever the user asks to map a\nratio, difference, total, percentage or comparison of columns (\"profit per capita\", \"revenue minus cost\",\n\"share as a percentage\") — never calculate the values yourself and pass them as data.\n1. Call compute_column: {\"file_key\": \"...\", \"expression\": \"(revenue - cost) / population\", \"result_column\": \"profit_per_capita\"}\n   - Operators: + - * / % and parentheses. Column names are matched case-insensitively and may contain spaces.\n     Quote a name that looks like a number in square brackets or backticks: \"[2023] - [2020]\" (a bare number\n     that is not a column name stays a number).\n   - Blank cells and missing-data markers (-, NA, N/A) give that row an empty result; the rest are still computed.\n   - A comparison (> < >= <= ==) must be the whole expression between two operands, e.g. \"revenue > cost\";\n     the column is true/false. For \"a - b > 0\", compute a - b first, then compare that column.\n2. The reply carries a NEW file_key; the uploaded file is unchanged. Map it with\n   question_to_map {\"file_key\": <new file_key>, \"value_column\": <result_column>, \"question\": \"...\"}.\n   Further computations can run on the new file_key.\nINVALID_EXPRESSION lists the file's numeric columns; correct the expression with those names and retry.\nIf it is still refused, tell the user the error. Never compute the values yourself, write a new CSV, or\nupload a rewritten file to work around it.\nnull_count rows had a blank or non-numeric input or divided by zero; mention them if there are many.\n\n## Token/Credit Usage\nEach call consumes credits from your monthly budget. SVG render = 10 credits, analysis = 2 credits.\nEvery response includes a \"usage\" field showing this_call cost and monthly remaining balance.",
+      "tools": [
+        {
+          "name": "compute_column",
+          "description": "Add a column computed from arithmetic over an uploaded file's numeric columns, then map it. Pass file_key, expression and result_column, e.g. {\"file_key\": \"...\", \"expression\": \"(revenue - cost) / population\", \"result_column\": \"profit_per_capita\"}.\n\nOperators: + - * / % and parentheses, or a single comparison (> < >= <= ==) between two operands. Column names are matched case-insensitively and may contain spaces; quote a name that looks like a number with backticks, e.g. `2023` - `2020`. A row whose referenced cells are blank or a missing-data marker (-, NA, N/A), or that divides by zero, gets an empty value.\n\nThe uploaded file is never changed: the reply carries a NEW file_key holding a copy with the column added. To map it, call question_to_map with that file_key and value_column = result_column. Use this instead of calculating values yourself. If it is refused, tell the user the error; do not calculate the values yourself or upload a rewritten file.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "expression": {
+                "description": "arithmetic over column names, e.g. (revenue - cost) / population; operators + - * / % and parentheses, or one comparison > < >= <= ==",
+                "type": "string"
+              },
+              "file_key": {
+                "type": "string"
+              },
+              "result_column": {
+                "type": "string"
+              },
+              "sheet": {
+                "type": "string"
+              }
+            },
+            "required": ["expression", "file_key"],
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:b3c4a310568d3f0c53a25ef6a0a6515317d1896a19939cd7ebd6cdb23b0c400a"
+        },
+        {
+          "name": "geocode",
+          "description": "Geocode addresses from an uploaded CSV or XLSX file into latitude/longitude. Pass a file_key from upload_file.\n\nSingle place, no file: pass only address (e.g. {\"address\": \"India Gate, New Delhi\"}). The reply carries latitude, longitude, address, pincode, city, district, state and landmark. status=not_found means no match; tell the user rather than answering yourself.\n\nColumn selection: if you know it, pass address_column (or address_columns for several). Otherwise the server asks the geo-match service to detect it. When the answer is not unambiguous — several address columns, a weak match, or only structured columns like District/State/PIN that must be combined — the response is status=clarification_required with candidates and ready-to-fire guidance actions. Present the choice to the user and re-call with their answer; never invent a column name.\n\nThe result overwrites the same file_key as a new version, plus a small preview, not the full rows. Pass that file_key to question_to_map to map the coordinates, or hand the user file_url (a signed download link, when present) to fetch the file directly.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "address": {
+                "type": "string"
+              },
+              "address_column": {
+                "type": "string"
+              },
+              "address_columns": {
+                "items": {
+                  "type": "string"
+                },
+                "type": ["null", "array"]
+              },
+              "compose_columns": {
+                "items": {
+                  "type": "string"
+                },
+                "type": ["null", "array"]
+              },
+              "file_key": {
+                "type": "string"
+              },
+              "force_new": {
+                "type": "boolean"
+              },
+              "job_id": {
+                "type": "string"
+              },
+              "sheet": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:32ba02c4be4aa81a4be44eb2fe483db06a3340b249a7dd9b0f485fd91a601672"
+        },
+        {
+          "name": "get_capabilities",
+          "description": "Return the server's capability matrix: supported map types, geo types, output formats, classification methods, and the list of tools available in this process (which varies by configuration). Call this first to discover what the server can do.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "type": "object"
+          },
+          "outputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "auto_level_detection": {
+                "type": "boolean"
+              },
+              "available_indices": {
+                "items": {
+                  "type": "string"
+                },
+                "type": ["null", "array"]
+              },
+              "available_tools": {
+                "items": {
+                  "type": "string"
+                },
+                "type": ["null", "array"]
+              },
+              "classification_methods": {
+                "items": {
+                  "type": "string"
+                },
+                "type": ["null", "array"]
+              },
+              "default_output": {
+                "type": "string"
+              },
+              "geo_detection": {
+                "type": "boolean"
+              },
+              "geo_levels": {
+                "items": {
+                  "type": "string"
+                },
+                "type": ["null", "array"]
+              },
+              "guidance": {
+                "additionalProperties": false,
+                "properties": {
+                  "allow_freeform": {
+                    "type": "boolean"
+                  },
+                  "next_actions": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "arguments": {
+                          "additionalProperties": true,
+                          "type": "object"
+                        },
+                        "arguments_from": {
+                          "type": "string"
+                        },
+                        "id": {
+                          "type": "string"
+                        },
+                        "label": {
+                          "type": "string"
+                        },
+                        "reason": {
+                          "type": "string"
+                        },
+                        "tool": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["id", "label", "tool"],
+                      "type": "object"
+                    },
+                    "type": ["null", "array"]
+                  },
+                  "next_steps_text": {
+                    "type": "string"
+                  }
+                },
+                "required": ["allow_freeform", "next_actions", "next_steps_text"],
+                "type": ["null", "object"]
+              },
+              "index_modes": {
+                "items": {
+                  "type": "string"
+                },
+                "type": ["null", "array"]
+              },
+              "map_types": {
+                "items": {
+                  "type": "string"
+                },
+                "type": ["null", "array"]
+              },
+              "output_formats": {
+                "items": {
+                  "type": "string"
+                },
+                "type": ["null", "array"]
+              },
+              "png_supported": {
+                "type": "boolean"
+              },
+              "stateless_only": {
+                "type": "boolean"
+              },
+              "svg_default": {
+                "type": "boolean"
+              }
+            },
+            "required": ["auto_level_detection", "available_indices", "available_tools", "classification_methods", "default_output", "geo_detection", "geo_levels", "index_modes", "map_types", "output_formats", "png_supported", "stateless_only", "svg_default"],
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:6299b88055df17ff257a4e85a57843aa34ab84294119600705c043c1d509af0d"
+        },
+        {
+          "name": "pincode_lookup",
+          "description": "Look up Indian pincodes: city, district and state.\n\nOne pincode, no file: {\"pincode\": \"560019\"} also returns the post offices it covers with their coordinates. status=not_found means the pincode does not exist; tell the user rather than answering yourself.\n\nA file (including a local CSV the user names): upload it with upload_file first, then pass file_key (and pincode_column if you know it). Do not look the rows up one by one or write the result file yourself — this tool writes it. Every row gains city, district, state and pincode_status columns; the file is written back over file_key as a new version and file_url is a download link. Show the user the preview and offer the link. Each unique pincode costs one lookup. A clarification_required reply asks which column holds the pincodes. Large files return status=accepted with a job_id: poll {\"job_id\": \"...\"} until completed.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "file_key": {
+                "type": "string"
+              },
+              "force_new": {
+                "type": "boolean"
+              },
+              "job_id": {
+                "type": "string"
+              },
+              "pincode": {
+                "description": "one 6-digit Indian pincode, e.g. \"560019\" (a number is accepted too)"
+              },
+              "pincode_column": {
+                "type": "string"
+              },
+              "sheet": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:0e87af4cc1283b21ebe0057ada487f19189fe7940dc84128ed5d374383fd4cc9"
+        },
+        {
+          "name": "question_to_map",
+          "description": "Render a geographic map from your data. Call upload_file first to ingest a CSV/XLSX file, then pass the returned file_key: {\"question\": \"show total by pincode\", \"file_key\": \"mcp-uploads/<user-id>/2026/01/15/<uuid>.csv\"}. The file_key is reusable — for additional questions on the same file, pass the same file_key again without re-uploading.\n\nAlternatively, pass rows directly as 'data' (e.g. from the upload_file preview): {\"question\": \"show total by pincode\", \"data\": [<rows>]}\n\ngeo_column and value_column are preferred if easily identifiable from the column names, but not required — the server auto-detects them using a geo-match service that matches your data against known Indian geographies (states, districts, ACs, PCs, pincodes, RTOs, cities).\nHints: geo_column usually contains place names (state, district, city, pincode, constituency) or numeric codes (pincode=560049); value_column usually contains the metric to plot (sales, count, total, percentage) or a category (party affiliation, status, type).\nIf value_column is 'total' and doesn't exist in data, all numeric columns are summed automatically. String value columns render as categorical maps (each distinct value gets its own color, e.g. party affiliation). If the server cannot determine which columns to use, it returns a 'clarification_required' response with suggested columns and guidance — pick a geo_column and value_column from the suggestions and re-call.\nSupported geo types: state, district, pincode, rto, city, ac, pc.\n\nPoints mode: if your file has latitude/longitude columns (e.g. from a prior geocoding step, or coordinates you already had) and your question asks to plot/pin/mark locations (\"plot my stores\", \"show me the outlet locations\", \"mark these points\"), the server detects the coordinate columns automatically and renders markers instead of shaded regions — no geo_column/value_column needed. The boundary lines drawn beneath the markers and how far the map zooms are chosen automatically from where the points actually fall (tightens to a state or district for a local cluster, falls back to all-India for a nationwide spread); you can also name a level explicitly (\"plot by assembly constituency\", \"rto wise\") to force it. A response may report points that fall outside every boundary (e.g. offshore or swapped lat/lon) — check for that in the warnings.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "data": {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "type": ["null", "array"]
+              },
+              "detected_geo": {
+                "additionalProperties": false,
+                "properties": {
+                  "column": {
+                    "type": "string"
+                  },
+                  "confidence": {
+                    "type": "number"
+                  },
+                  "geo_type": {
+                    "type": "string"
+                  },
+                  "matched_count": {
+                    "type": "integer"
+                  },
+                  "parent": {
+                    "type": "string"
+                  },
+                  "total_count": {
+                    "type": "integer"
+                  }
+                },
+                "required": ["column", "confidence", "geo_type", "matched_count", "total_count"],
+                "type": ["null", "object"]
+              },
+              "enrich_with": {
+                "additionalProperties": false,
+                "properties": {
+                  "columns": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": ["null", "array"]
+                  },
+                  "join_on": {
+                    "type": "string"
+                  },
+                  "table": {
+                    "type": "string"
+                  }
+                },
+                "required": ["columns", "table"],
+                "type": ["null", "object"]
+              },
+              "file_key": {
+                "type": "string"
+              },
+              "geo_column": {
+                "type": "string"
+              },
+              "geo_level": {
+                "type": "string"
+              },
+              "map_type": {
+                "type": "string"
+              },
+              "output_format": {
+                "type": "string"
+              },
+              "question": {
+                "type": "string"
+              },
+              "render_params": {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              "sheet": {
+                "type": "string"
+              },
+              "state_hint": {
+                "items": {
+                  "type": "string"
+                },
+                "type": ["null", "array"]
+              },
+              "style": {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              "table": {
+                "type": "string"
+              },
+              "value_column": {
+                "type": "string"
+              }
+            },
+            "required": ["question"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "aggregation_applied": {
+                "additionalProperties": false,
+                "properties": {
+                  "aggregated_rows": {
+                    "type": "integer"
+                  },
+                  "grouped_by": {
+                    "type": "string"
+                  },
+                  "method": {
+                    "type": "string"
+                  },
+                  "note": {
+                    "type": "string"
+                  },
+                  "original_rows": {
+                    "type": "integer"
+                  }
+                },
+                "required": ["aggregated_rows", "method", "note", "original_rows"],
+                "type": ["null", "object"]
+              },
+              "clarification": {
+                "additionalProperties": false,
+                "properties": {
+                  "columns": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "class": {
+                          "type": "string"
+                        },
+                        "name": {
+                          "type": "string"
+                        },
+                        "type": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["class", "name", "type"],
+                      "type": "object"
+                    },
+                    "type": ["null", "array"]
+                  },
+                  "guidance": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "allow_freeform": {
+                        "type": "boolean"
+                      },
+                      "next_actions": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "arguments": {
+                              "additionalProperties": true,
+                              "type": "object"
+                            },
+                            "arguments_from": {
+                              "type": "string"
+                            },
+                            "id": {
+                              "type": "string"
+                            },
+                            "label": {
+                              "type": "string"
+                            },
+                            "reason": {
+                              "type": "string"
+                            },
+                            "tool": {
+                              "type": "string"
+                            }
+                          },
+                          "required": ["id", "label", "tool"],
+                          "type": "object"
+                        },
+                        "type": ["null", "array"]
+                      },
+                      "next_steps_text": {
+                        "type": "string"
+                      }
+                    },
+                    "required": ["allow_freeform", "next_actions", "next_steps_text"],
+                    "type": ["null", "object"]
+                  },
+                  "message": {
+                    "type": "string"
+                  },
+                  "status": {
+                    "type": "string"
+                  },
+                  "suggested_geo_columns": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": ["null", "array"]
+                  },
+                  "suggested_value_columns": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": ["null", "array"]
+                  }
+                },
+                "required": ["columns", "message", "status", "suggested_geo_columns", "suggested_value_columns"],
+                "type": ["null", "object"]
+              },
+              "computed_data": {
+                "additionalProperties": false,
+                "properties": {
+                  "columns": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": ["null", "array"]
+                  },
+                  "returned_rows": {
+                    "type": "integer"
+                  },
+                  "rows": {
+                    "items": {
+                      "additionalProperties": true,
+                      "type": "object"
+                    },
+                    "type": ["null", "array"]
+                  },
+                  "sort_column": {
+                    "type": "string"
+                  },
+                  "sort_order": {
+                    "type": "string"
+                  },
+                  "total_rows": {
+                    "type": "integer"
+                  }
+                },
+                "required": ["columns", "returned_rows", "rows", "total_rows"],
+                "type": ["null", "object"]
+              },
+              "confidence": {
+                "type": "number"
+              },
+              "guidance": {
+                "additionalProperties": false,
+                "properties": {
+                  "allow_freeform": {
+                    "type": "boolean"
+                  },
+                  "next_actions": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "arguments": {
+                          "additionalProperties": true,
+                          "type": "object"
+                        },
+                        "arguments_from": {
+                          "type": "string"
+                        },
+                        "id": {
+                          "type": "string"
+                        },
+                        "label": {
+                          "type": "string"
+                        },
+                        "reason": {
+                          "type": "string"
+                        },
+                        "tool": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["id", "label", "tool"],
+                      "type": "object"
+                    },
+                    "type": ["null", "array"]
+                  },
+                  "next_steps_text": {
+                    "type": "string"
+                  }
+                },
+                "required": ["allow_freeform", "next_actions", "next_steps_text"],
+                "type": ["null", "object"]
+              },
+              "level_resolution": {
+                "additionalProperties": false,
+                "properties": {
+                  "aggregations": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "columns": {
+                          "items": {
+                            "type": "string"
+                          },
+                          "type": ["null", "array"]
+                        },
+                        "dataset": {
+                          "type": "string"
+                        },
+                        "from_level": {
+                          "type": "string"
+                        },
+                        "method": {
+                          "type": "string"
+                        },
+                        "to_level": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["columns", "dataset", "from_level", "method", "to_level"],
+                      "type": "object"
+                    },
+                    "type": ["null", "array"]
+                  },
+                  "alternatives": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": ["null", "array"]
+                  },
+                  "datasets": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "geo_col": {
+                          "type": "string"
+                        },
+                        "level": {
+                          "type": "string"
+                        },
+                        "rows": {
+                          "type": "integer"
+                        },
+                        "source": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["geo_col", "level", "rows", "source"],
+                      "type": "object"
+                    },
+                    "type": ["null", "array"]
+                  },
+                  "method": {
+                    "type": "string"
+                  },
+                  "reason": {
+                    "type": "string"
+                  },
+                  "resolved_level": {
+                    "type": "string"
+                  }
+                },
+                "required": ["datasets", "method", "resolved_level"],
+                "type": ["null", "object"]
+              },
+              "map": {
+                "additionalProperties": false,
+                "properties": {
+                  "active_count": {
+                    "type": "integer"
+                  },
+                  "dimensions": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "height": {
+                        "type": "integer"
+                      },
+                      "width": {
+                        "type": "integer"
+                      }
+                    },
+                    "required": ["height", "width"],
+                    "type": ["null", "object"]
+                  },
+                  "expires_at": {
+                    "type": "string"
+                  },
+                  "format": {
+                    "type": "string"
+                  },
+                  "geo_scope": {
+                    "type": "string"
+                  },
+                  "html_url": {
+                    "type": "string"
+                  },
+                  "join_summary": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "matched": {
+                        "type": "integer"
+                      },
+                      "total": {
+                        "type": "integer"
+                      },
+                      "unmatched": {
+                        "type": "integer"
+                      }
+                    },
+                    "required": ["matched", "total", "unmatched"],
+                    "type": ["null", "object"]
+                  },
+                  "mime_type": {
+                    "type": "string"
+                  },
+                  "preview_image_base64": {
+                    "type": "string"
+                  },
+                  "render_id": {
+                    "type": "string"
+                  },
+                  "subtitle": {
+                    "type": "string"
+                  },
+                  "svg_url": {
+                    "type": "string"
+                  },
+                  "title": {
+                    "type": "string"
+                  },
+                  "total_count": {
+                    "type": "integer"
+                  },
+                  "total_value": {
+                    "type": "string"
+                  },
+                  "url": {
+                    "type": "string"
+                  },
+                  "value_label": {
+                    "type": "string"
+                  }
+                },
+                "required": ["format", "render_id", "url"],
+                "type": ["null", "object"]
+              },
+              "mode": {
+                "type": "string"
+              },
+              "points_plotted": {
+                "type": "integer"
+              },
+              "points_rejected": {
+                "type": "integer"
+              },
+              "rejected_rows": {
+                "items": {
+                  "type": "string"
+                },
+                "type": ["null", "array"]
+              },
+              "resolution_method": {
+                "type": "string"
+              },
+              "resolved_params": {
+                "additionalProperties": false,
+                "properties": {
+                  "geo_column": {
+                    "type": "string"
+                  },
+                  "geo_type": {
+                    "type": "string"
+                  },
+                  "map_type": {
+                    "type": "string"
+                  },
+                  "state_hint": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": ["null", "array"]
+                  },
+                  "style": {
+                    "additionalProperties": true,
+                    "type": "object"
+                  },
+                  "value_column": {
+                    "type": "string"
+                  }
+                },
+                "required": ["geo_column", "geo_type", "map_type", "value_column"],
+                "type": ["null", "object"]
+              },
+              "usage": {
+                "additionalProperties": false,
+                "properties": {
+                  "breakdown": {
+                    "additionalProperties": {
+                      "type": "integer"
+                    },
+                    "type": "object"
+                  },
+                  "month_limit": {
+                    "type": "integer"
+                  },
+                  "month_remaining": {
+                    "type": "integer"
+                  },
+                  "month_used": {
+                    "type": "integer"
+                  },
+                  "this_call": {
+                    "type": "integer"
+                  }
+                },
+                "required": ["breakdown", "month_limit", "month_remaining", "month_used", "this_call"],
+                "type": ["null", "object"]
+              },
+              "warnings": {
+                "items": {
+                  "type": "string"
+                },
+                "type": ["null", "array"]
+              }
+            },
+            "required": ["mode"],
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:9501b7f11b62123d58350b6650fa2993a5a54344356b77b7bcd8991fd00d1447"
+        },
+        {
+          "name": "reverse_geocode",
+          "description": "Turn latitude/longitude coordinates in an uploaded CSV or XLSX into addresses. Pass a file_key from upload_file.\n\nSingle point, no file: pass only latitude and longitude in decimal degrees (e.g. {\"latitude\": 28.6129, \"longitude\": 77.2295}). The reply carries address, pincode, city, district, state and landmark. status=not_found means no match; tell the user rather than answering yourself.\n\nColumn selection: pass latitude_column and longitude_column, or latlong_column for a single combined column, or coordinate_pairs for several sets. Otherwise the server detects them. When the answer is not unambiguous — several coordinate columns, a weak match, coordinates outside the supported region, or coarse whole-number values — the response is status=clarification_required. Present the choice to the user and re-call with their answer.\n\nResults are written back into the uploaded file: the response carries file_key, a signed file_url, and a small preview. Each pair adds address, pincode, landmark and status columns.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "accept_low_precision": {
+                "type": "boolean"
+              },
+              "coordinate_pairs": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "latitude_column": {
+                      "type": "string"
+                    },
+                    "latlong_column": {
+                      "type": "string"
+                    },
+                    "longitude_column": {
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
+                },
+                "type": ["null", "array"]
+              },
+              "file_key": {
+                "type": "string"
+              },
+              "force_new": {
+                "type": "boolean"
+              },
+              "job_id": {
+                "type": "string"
+              },
+              "latitude": {
+                "description": "one point's latitude in decimal degrees, e.g. 28.6129 (a string is accepted too)"
+              },
+              "latitude_column": {
+                "type": "string"
+              },
+              "latlong_column": {
+                "type": "string"
+              },
+              "longitude": {
+                "description": "one point's longitude in decimal degrees, e.g. 77.2295 (a string is accepted too)"
+              },
+              "longitude_column": {
+                "type": "string"
+              },
+              "sheet": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:8c77be831da0c66e913278e90cd7886c818ac90120eba5c2c2fdc4771fecde65"
+        },
+        {
+          "name": "territory_mapping",
+          "description": "Run the territory-management pipeline on a branch file uploaded via upload_file. Hybrid async with three modes: pass file_key to START a job (returns a job_id immediately); pass only job_id on subsequent calls to POLL progress; pass job_id AND catchment_type together to RESUME a job that paused for clarification. The pipeline validates that all branches are in one state, computes each branch's isochrone at catchment_distance_km, finds villages (catchment_type='village') or pincodes (catchment_type='pincode') that overlap the isochrone by ≥50%. A village/pincode inside several catchments is kept under EVERY branch (never deduplicated), and the last column closest_branch names the nearest branch by driving distance for those shared units (blank otherwise). Each catchment is split into 5 wedges of 72° (group_number 1-5); each wedge is split into bunches of 1-5 neighbouring units (bunch_number 1..N); each bunch is sequenced via the Trips API (trip_number 1-5); s_no numbers each branch's rows 1..N in that order. Returns a signed URL to an XLSX (download_url) with a Territory sheet of rows and a Maps sheet, and maps: one SVG per branch (map_url) with the branch at the centre, its units shaded by group_number and labelled by s_no, overlaps hatched green (this branch is closest) or red (another branch is closer); render_map=false skips the maps. Optional at start: style_request (the user's words for the map colours, e.g. 'groups in pink shades'; only the 5 group colours and the near/far hatch colours change, applied exactly as asked, pincode maps only) and map_title (replaces the map title). If requested colours make the hatching hard to see, warnings carry a suggestion to pass on to the user. catchment_type is OPTIONAL at start: if omitted, the geo-match service detects the branch file's place columns (a pincode column means pincode, a village column means village), and a catchment_type / area_type / mapping_type column also counts (must be uniform across rows). If the file is unclear (several such columns) or neither the caller nor the file specifies it — or they disagree — the job pauses in phase=awaiting_catchment_type and the poll response carries clarification_needed=true with a clarification_message instead of an error; answer by calling again with that same job_id plus the chosen catchment_type to resume. A file with mixed village/pincode values in its own column fails outright with AMBIGUOUS_CATCHMENT_TYPE. While a job runs, each response carries poll_after_seconds=10: wait 10 seconds, then poll again. Expect phase transitions: validating → isochroning → overlapping → grouping → bunching → routing → distancing → rendering_map → writing_output → complete (or awaiting_catchment_type, from which a resume call re-enters at validating). Flow: upload_file → upload bytes → territory_mapping{file_key,…} → territory_mapping{job_id} until phase=complete or phase=awaiting_catchment_type → if awaiting, territory_mapping{job_id, catchment_type} to resume → territory_mapping{job_id} until phase=complete.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "catchment_distance_km": {
+                "type": "number"
+              },
+              "catchment_type": {
+                "type": "string"
+              },
+              "file_key": {
+                "type": "string"
+              },
+              "job_id": {
+                "type": "string"
+              },
+              "map_title": {
+                "type": "string"
+              },
+              "render_map": {
+                "type": ["null", "boolean"]
+              },
+              "style_request": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "outputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "clarification_message": {
+                "type": "string"
+              },
+              "clarification_needed": {
+                "type": "boolean"
+              },
+              "download_url": {
+                "type": "string"
+              },
+              "error_code": {
+                "type": "string"
+              },
+              "error_message": {
+                "type": "string"
+              },
+              "guidance": {
+                "additionalProperties": false,
+                "properties": {
+                  "allow_freeform": {
+                    "type": "boolean"
+                  },
+                  "next_actions": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "arguments": {
+                          "additionalProperties": true,
+                          "type": "object"
+                        },
+                        "arguments_from": {
+                          "type": "string"
+                        },
+                        "id": {
+                          "type": "string"
+                        },
+                        "label": {
+                          "type": "string"
+                        },
+                        "reason": {
+                          "type": "string"
+                        },
+                        "tool": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["id", "label", "tool"],
+                      "type": "object"
+                    },
+                    "type": ["null", "array"]
+                  },
+                  "next_steps_text": {
+                    "type": "string"
+                  }
+                },
+                "required": ["allow_freeform", "next_actions", "next_steps_text"],
+                "type": ["null", "object"]
+              },
+              "job_id": {
+                "type": "string"
+              },
+              "maps": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "branch_id": {
+                      "type": "string"
+                    },
+                    "branch_name": {
+                      "type": "string"
+                    },
+                    "district": {
+                      "type": "string"
+                    },
+                    "map_url": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["branch_id", "map_url"],
+                  "type": "object"
+                },
+                "type": ["null", "array"]
+              },
+              "percent": {
+                "type": "integer"
+              },
+              "phase": {
+                "type": "string"
+              },
+              "poll_after_seconds": {
+                "type": "integer"
+              },
+              "processed_branches": {
+                "type": "integer"
+              },
+              "state": {
+                "type": "string"
+              },
+              "total_branches": {
+                "type": "integer"
+              },
+              "warnings": {
+                "items": {
+                  "type": "string"
+                },
+                "type": ["null", "array"]
+              }
+            },
+            "required": ["job_id", "percent", "phase"],
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:49a2446456332e93f8eb27b27e184277db7b836d1e4cd4b362452dc73a78d8ba"
+        },
+        {
+          "name": "upload_file",
+          "description": "Upload a CSV or XLSX file for server-side ingestion under policy (auth, size cap, malware scan, injected-intent scan) and receive a file_key. This is the first step for ANY tool that works on the user's file: question_to_map, geocode, reverse_geocode, pincode_lookup and compute_column all take the returned file_key. When the user names a local CSV/XLSX and wants results added to it (pincodes, cities, coordinates, a computed column), upload it here rather than reading it yourself.\n\nStep 1: Call upload_file with file_name, file_size, and question. The response contains a signed upload_url and a curl command — run the curl command to POST the file bytes. The curl response contains file_key, columns, a row preview, and optionally 'intent' (geo-match service detected geo_column, geo_level, value_column, map_type, confidence) and 'guidance' (a ready-to-fire question_to_map action with all detected parameters pre-filled). Forward the intent fields into question_to_map to skip auto-detection and render immediately.\n\nFor multi-sheet XLSX: the curl response is 'sheet_selection_required' with a file_key and sheets list. Pass file_key and sheet to question_to_map (or any other tool that accepts file_key) — do not call upload_file again.\n\nAfter upload, pass the returned file_key to question_to_map to render a map from the full dataset. The file_key is reusable — for additional questions on the same file, pass the same file_key again without re-uploading. When the upload response includes 'guidance', use its next_actions directly for a zero-round-trip render.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "file_key": {
+                "type": "string"
+              },
+              "file_name": {
+                "type": "string"
+              },
+              "file_size": {
+                "type": "integer"
+              },
+              "question": {
+                "type": "string"
+              },
+              "sheet": {
+                "type": "string"
+              }
+            },
+            "required": ["file_name", "file_size"],
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:b8ec8e24e1fc20a0b1c9334a69ad0795aa99a29d1ad879cd581a79e439b24519"
+        }
+      ],
+      "digest": "sha256:92c6c3a160768dec5985276c0d166bbe8f729bf7a6e0857e49d493a1137ea37f"
+    }
+  }
+}

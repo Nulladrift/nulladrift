@@ -1,0 +1,1014 @@
+{
+  "lockfileVersion": 2,
+  "subjects": {
+    "com.ducktax/ducktax": {
+      "kind": "mcp-server",
+      "source": {
+        "client": "manual",
+        "file": "registry.modelcontextprotocol.io"
+      },
+      "transport": {
+        "type": "http",
+        "url": "https://ducktax.com/api/mcp"
+      },
+      "protocol": {
+        "era": "legacy",
+        "version": "2025-06-18"
+      },
+      "serverInfo": {
+        "name": "ducktax",
+        "title": "Duck Tax",
+        "version": "0.1.0"
+      },
+      "capabilities": {
+        "tools": {}
+      },
+      "instructions": "Duck Tax checks micro-entity company accounts: raw figures in, validated balance sheet out.\n\nAll money amounts, in every tool, are MAJOR currency units (pounds/euros/dollars, decimals allowed). Never pass pence.\n\nA typical flow: search_companies to find the company, lookup_company for its record and deadlines, get_prior_year_figures for last year's comparatives, check_accounts after every change to the figures, explain_accounts for a plain-English reading, and save_filing (token required) to keep the result. For a bank statement, send categorise_transactions the description strings only, sum the amounts per category yourself, and feed totals_to_figures.\n\nWhen somebody has just discovered a deadline, check_filing_extension before anything else: applying to the registrar for more time is free, takes about 15 minutes, and has to be done BEFORE the deadline, so the option expires on the day the penalty starts. It returns the ranked next action. Neither that tool nor draft_extension_reason submits anything, and this server cannot file: the application is made by a director on the registrar's own service.\n\nWhen somebody is at risk of missing a deadline, track_company_deadlines (token required) is the useful thing to offer: it needs only a company number, no figures, and it sends reminders on a ladder of days before the deadline. Which channels it can actually use is a property of this deployment, not of the request, so the tool's reply reports what will really be sent and may report nothing at all; relay that rather than promising an email. Saved filings are watched automatically, so only offer it for a company they have not saved.\n\nThis server does NOT file accounts with Companies House, HMRC or anyone else, and nothing you build on it should claim otherwise. The output is checked numbers to hand to a filing product or an accountant. It is not accounting, tax or legal advice.\n\nTools that write need a bearer token from https://ducktax.com/docs/mcp. Everything else works anonymously under daily quotas; server_status shows what is configured and what remains.",
+      "tools": [
+        {
+          "name": "categorise_transactions",
+          "description": "Categorise bank-statement transaction descriptions into the fixed vocabulary this product maps to balance sheet lines (sales, software, owner-in, …). Send description strings only, never amounts or dates. Sum the amounts per returned category yourself, then call totals_to_figures. One statement import is one quota unit; previously seen descriptions are answered from a shared cache free.",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "additionalProperties": false,
+            "properties": {
+              "descriptions": {
+                "description": "The raw description strings, one per transaction.",
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 2000,
+                "minItems": 1,
+                "type": "array"
+              },
+              "tradingType": {
+                "default": "other",
+                "description": "What the company does, to resolve ambiguous merchants. One of: software, consulting, creative, retail, construction, property, hospitality, other. lookup_company suggests one from the SIC codes.",
+                "type": "string"
+              }
+            },
+            "required": ["descriptions", "tradingType"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": true,
+            "title": "Categorise Transactions"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:f20e03f03be853e89428803fd56e3ca5958c86c911c6ad4b96ccb2cde329d485"
+        },
+        {
+          "name": "check_accounts",
+          "description": "Derive a small-company balance sheet (micro-entity, in UK terms) from raw figures and validate it. Returns the derived sheet for the current and prior year, the figures the authority would reject (negatives where it wants a positive, share capital left at nil), and whether they are complete enough to hand to a filing product. It does NOT check that the sheet balances and cannot: retained earnings is derived as the balancing figure, so each column always agrees with itself. Do not tell anybody their sheet was checked for internal consistency within a column. It DOES compare the two columns to each other: when this year's reserves do not equal last year's plus this year's result it returns a warning, which most often means last year was wrong and the comparative needs restating. Free and instant: call it after every change to the figures. All money in major units (pounds not pence, dollars not cents). Pass lastFiledAs from lookup_company and it also warns when figures showing activity are about to be filed dormant again.",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "additionalProperties": false,
+            "properties": {
+              "figures": {
+                "additionalProperties": false,
+                "description": "The figures behind a small-company balance sheet. ALL amounts in major units.",
+                "properties": {
+                  "calledUpShareCapitalNotPaid": {
+                    "default": 0,
+                    "description": "Share capital subscribed for but never paid to the company, an asset on its own line above fixed assets. Usually 1 for a company formed with one unpaid share. Not a debtor and not a current asset.",
+                    "type": "number"
+                  },
+                  "calledUpShareCapitalNotPaidPrior": {
+                    "default": 0,
+                    "description": "Previous year called up share capital not paid. Usually the same as this year.",
+                    "type": "number"
+                  },
+                  "cashAtBank": {
+                    "description": "Bank balance at the year end. Negative means an overdraft.",
+                    "type": "number"
+                  },
+                  "cashAtBankPrior": {
+                    "description": "Previous year-end bank balance. 0 for a first year.",
+                    "type": "number"
+                  },
+                  "creditorsWithinOneYear": {
+                    "description": "Money the company owes, due within a year, expressed positive. Includes director loans owed back.",
+                    "type": "number"
+                  },
+                  "creditorsWithinOneYearPrior": {
+                    "description": "Previous year creditors. 0 for a first year.",
+                    "type": "number"
+                  },
+                  "debtors": {
+                    "description": "Money owed to the company at the year end.",
+                    "type": "number"
+                  },
+                  "debtorsPrior": {
+                    "description": "Previous year debtors. 0 for a first year.",
+                    "type": "number"
+                  },
+                  "directorsLoan": {
+                    "default": 0,
+                    "description": "How much of the creditors above is owed to the company's own directors. Part of that figure, never an addition to it. Usually the largest line on a one-person company's sheet, and repayable to the director free of tax.",
+                    "type": "number"
+                  },
+                  "directorsLoanPrior": {
+                    "default": 0,
+                    "description": "Previous year directors' loan. 0 for a first year.",
+                    "type": "number"
+                  },
+                  "fixedAssets": {
+                    "description": "Equipment and other fixed assets at net book value.",
+                    "type": "number"
+                  },
+                  "fixedAssetsPrior": {
+                    "description": "Previous year fixed assets. 0 for a first year.",
+                    "type": "number"
+                  },
+                  "operatingCosts": {
+                    "description": "Total running costs for the year, expressed positive.",
+                    "type": "number"
+                  },
+                  "operatingCostsPrior": {
+                    "description": "Previous year operating costs. 0 for a first year.",
+                    "type": "number"
+                  },
+                  "shareCapital": {
+                    "description": "Issued share capital or common stock, typically 1 to 100.",
+                    "type": "number"
+                  },
+                  "shareCapitalPrior": {
+                    "description": "Previous year share capital. Usually the same as this year.",
+                    "type": "number"
+                  },
+                  "turnover": {
+                    "description": "Sales income for the year, in major currency units (pounds/euros/dollars).",
+                    "type": "number"
+                  },
+                  "turnoverPrior": {
+                    "description": "Previous year turnover. 0 for a first year.",
+                    "type": "number"
+                  }
+                },
+                "required": ["calledUpShareCapitalNotPaid", "calledUpShareCapitalNotPaidPrior", "cashAtBank", "cashAtBankPrior", "creditorsWithinOneYear", "creditorsWithinOneYearPrior", "debtors", "debtorsPrior", "directorsLoan", "directorsLoanPrior", "fixedAssets", "fixedAssetsPrior", "operatingCosts", "operatingCostsPrior", "shareCapital", "shareCapitalPrior", "turnover", "turnoverPrior"],
+                "type": "object"
+              },
+              "jurisdiction": {
+                "default": "GB",
+                "description": "ISO country code. GB is the only jurisdiction with full support.",
+                "enum": ["GB", "IE", "US", "AU"],
+                "type": "string"
+              },
+              "lastFiledAs": {
+                "description": "What the last accounts were filed as, straight from lookup_company's company.lastAccountsType. Pass it through; do not guess it.",
+                "type": "string"
+              }
+            },
+            "required": ["figures", "jurisdiction"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": true,
+            "title": "Check Accounts"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:e33671d0a08230abcb9f5cfa9205c424807ce4fc41b999f604a5edf1c27aac69"
+        },
+        {
+          "name": "check_filing_extension",
+          "description": "Whether a company can still apply to its registrar for more time to file, how many days are left to apply, and what being late costs if that window is missed. This is usually the most useful thing to tell somebody who has just found a deadline: applying is free, takes about 15 minutes, and has to be done BEFORE the deadline it extends, so the option expires on the same day the penalty starts. Returns nextAction first. It PREPARES an application and can never submit one: the application is made by a director on the registrar’s own service, which this tool links to. It does not file accounts. Give a company number to read the deadline off the register (quota-charged, cached results free), or give the dates yourself and it costs nothing.",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "additionalProperties": false,
+            "properties": {
+              "alreadyExtended": {
+                "default": false,
+                "description": "True if this deadline has been extended once already. Do not guess it, ask.",
+                "type": "boolean"
+              },
+              "companyNumber": {
+                "description": "Read the deadline and period end off the register. Omit if you supply the dates.",
+                "minLength": 1,
+                "type": "string"
+              },
+              "filing": {
+                "default": "accounts",
+                "description": "Which deadline. Only accounts can be extended; ask about the other and it says so.",
+                "enum": ["accounts", "confirmation-statement"],
+                "type": "string"
+              },
+              "filingDeadline": {
+                "description": "The normal filing deadline, if you already have it. Skips the register request.",
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+                "type": "string"
+              },
+              "jurisdiction": {
+                "default": "GB",
+                "description": "ISO country code. Register access exists for GB and AU.",
+                "enum": ["GB", "IE", "US", "AU"],
+                "type": "string"
+              },
+              "periodEnd": {
+                "description": "The accounting reference date. Bounds how much extra time could be granted.",
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+                "type": "string"
+              },
+              "today": {
+                "description": "Defaults to the server's date. Supply it to test a boundary.",
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+                "type": "string"
+              }
+            },
+            "required": ["alreadyExtended", "filing", "jurisdiction"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": true,
+            "title": "Check Filing Extension"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:d4352578c11188e516f1cb27004a5021a7f52e170efe4b619a05c4779bedc12e"
+        },
+        {
+          "name": "delete_filing",
+          "description": "Delete one saved filing by id, permanently. Confirm with the person before calling this; there is no undo and no trash.",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "description": "The id from list_saved_filings.",
+                "maximum": 9007199254740991,
+                "minimum": -9007199254740991,
+                "type": "integer"
+              }
+            },
+            "required": ["id"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": true,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": false,
+            "title": "Delete Filing"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:7a9087f05d1abb651754d08272836818d4eef29bde81d25dbd7b6016ae9e023f"
+        },
+        {
+          "name": "dormant_figures",
+          "description": "The complete set of figures for a dormant company: share capital, the matching cash, and zeros everywhere else. The register says when the last accounts were filed dormant, and for those companies this collapses the whole form to one call. Amounts in major units.",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "additionalProperties": false,
+            "properties": {
+              "shareCapital": {
+                "default": 1,
+                "description": "Issued share capital in major units. 1 is the overwhelmingly common figure.",
+                "exclusiveMinimum": 0,
+                "type": "number"
+              }
+            },
+            "required": ["shareCapital"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": true,
+            "title": "Dormant Figures"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:37f515ae738543375e79e2aa3c1d20feb5ce47a9ff6a58af56972408683ee60f"
+        },
+        {
+          "name": "draft_extension_reason",
+          "description": "Turn a short factual account of what went wrong into the reason text for an application for more time to file accounts, framed in the terms the registrar actually applies. It uses only the facts you give it: it will not invent circumstances, and where something is missing it leaves a bracketed placeholder rather than filling it in. The person must check every sentence before using it, because they are certifying it to the registrar. Ask them what happened, do not supply it yourself. This tool does not submit the application and does not file accounts. Quota-charged as an explanation; identical input is answered from cache free.",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "additionalProperties": false,
+            "properties": {
+              "circumstances": {
+                "description": "What actually happened, in the person's own words, with dates. Facts only. If you do not have this, ask them for it rather than writing it.",
+                "maxLength": 2000,
+                "minLength": 40,
+                "type": "string"
+              },
+              "expectedReadyBy": {
+                "description": "When they expect the accounts to be ready, if they have said. Never estimate it.",
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+                "type": "string"
+              },
+              "jurisdiction": {
+                "default": "GB",
+                "description": "ISO country code. Register access exists for GB and AU.",
+                "enum": ["GB", "IE", "US", "AU"],
+                "type": "string"
+              },
+              "whyItStoppedTheAccounts": {
+                "description": "How the event stopped the accounts being prepared, if they have said.",
+                "maxLength": 1000,
+                "type": "string"
+              }
+            },
+            "required": ["circumstances", "jurisdiction"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": true,
+            "title": "Draft Extension Reason"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:8b8aa243390b3727597d3cbf6fb8088a3454cde1f2c765f378d29e7737689f0b"
+        },
+        {
+          "name": "explain_accounts",
+          "description": "A plain-English reading of a set of figures, written for a director who is not an accountant: what the derived balance sheet says about the company and anything that needs attention before filing. Only the derived sheet is sent to the model, no company name or number. Quota-charged; identical figures are answered from cache free.",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "additionalProperties": false,
+            "properties": {
+              "figures": {
+                "additionalProperties": false,
+                "description": "The figures behind a small-company balance sheet. ALL amounts in major units.",
+                "properties": {
+                  "calledUpShareCapitalNotPaid": {
+                    "default": 0,
+                    "description": "Share capital subscribed for but never paid to the company, an asset on its own line above fixed assets. Usually 1 for a company formed with one unpaid share. Not a debtor and not a current asset.",
+                    "type": "number"
+                  },
+                  "calledUpShareCapitalNotPaidPrior": {
+                    "default": 0,
+                    "description": "Previous year called up share capital not paid. Usually the same as this year.",
+                    "type": "number"
+                  },
+                  "cashAtBank": {
+                    "description": "Bank balance at the year end. Negative means an overdraft.",
+                    "type": "number"
+                  },
+                  "cashAtBankPrior": {
+                    "description": "Previous year-end bank balance. 0 for a first year.",
+                    "type": "number"
+                  },
+                  "creditorsWithinOneYear": {
+                    "description": "Money the company owes, due within a year, expressed positive. Includes director loans owed back.",
+                    "type": "number"
+                  },
+                  "creditorsWithinOneYearPrior": {
+                    "description": "Previous year creditors. 0 for a first year.",
+                    "type": "number"
+                  },
+                  "debtors": {
+                    "description": "Money owed to the company at the year end.",
+                    "type": "number"
+                  },
+                  "debtorsPrior": {
+                    "description": "Previous year debtors. 0 for a first year.",
+                    "type": "number"
+                  },
+                  "directorsLoan": {
+                    "default": 0,
+                    "description": "How much of the creditors above is owed to the company's own directors. Part of that figure, never an addition to it. Usually the largest line on a one-person company's sheet, and repayable to the director free of tax.",
+                    "type": "number"
+                  },
+                  "directorsLoanPrior": {
+                    "default": 0,
+                    "description": "Previous year directors' loan. 0 for a first year.",
+                    "type": "number"
+                  },
+                  "fixedAssets": {
+                    "description": "Equipment and other fixed assets at net book value.",
+                    "type": "number"
+                  },
+                  "fixedAssetsPrior": {
+                    "description": "Previous year fixed assets. 0 for a first year.",
+                    "type": "number"
+                  },
+                  "operatingCosts": {
+                    "description": "Total running costs for the year, expressed positive.",
+                    "type": "number"
+                  },
+                  "operatingCostsPrior": {
+                    "description": "Previous year operating costs. 0 for a first year.",
+                    "type": "number"
+                  },
+                  "shareCapital": {
+                    "description": "Issued share capital or common stock, typically 1 to 100.",
+                    "type": "number"
+                  },
+                  "shareCapitalPrior": {
+                    "description": "Previous year share capital. Usually the same as this year.",
+                    "type": "number"
+                  },
+                  "turnover": {
+                    "description": "Sales income for the year, in major currency units (pounds/euros/dollars).",
+                    "type": "number"
+                  },
+                  "turnoverPrior": {
+                    "description": "Previous year turnover. 0 for a first year.",
+                    "type": "number"
+                  }
+                },
+                "required": ["calledUpShareCapitalNotPaid", "calledUpShareCapitalNotPaidPrior", "cashAtBank", "cashAtBankPrior", "creditorsWithinOneYear", "creditorsWithinOneYearPrior", "debtors", "debtorsPrior", "directorsLoan", "directorsLoanPrior", "fixedAssets", "fixedAssetsPrior", "operatingCosts", "operatingCostsPrior", "shareCapital", "shareCapitalPrior", "turnover", "turnoverPrior"],
+                "type": "object"
+              },
+              "jurisdiction": {
+                "default": "GB",
+                "description": "ISO country code. Register access exists for GB and AU.",
+                "enum": ["GB", "IE", "US", "AU"],
+                "type": "string"
+              }
+            },
+            "required": ["figures", "jurisdiction"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": true,
+            "title": "Explain Accounts"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:386e354d8e6ad30104b96a56f8d2d73476a37581179041d6b14f21db4e6390c0"
+        },
+        {
+          "name": "get_prior_year_figures",
+          "description": "Read last year's figures out of the company's last filed accounts at Companies House, ready to drop into the *Prior fields of check_accounts or save_filing. Saves typing seven numbers from a PDF and gets the comparatives exactly as filed. GB only, and only when the last accounts were filed digitally. Quota-charged; cached results are free.",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "additionalProperties": false,
+            "properties": {
+              "companyNumber": {
+                "description": "The GB company number.",
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": ["companyNumber"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": true,
+            "title": "Get Prior Year Figures"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:57f1bd4c2e298096e04f30bfe4789537ea5d477f513e09b4f1622870b02fdc65"
+        },
+        {
+          "name": "late_filing_penalty",
+          "description": "What missing a Companies House accounts deadline costs. Given the due date, returns days remaining or overdue, the penalty band already incurred, and what the next band costs, the number that makes someone act today. UK private companies only.",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "additionalProperties": false,
+            "properties": {
+              "accountsDue": {
+                "description": "The accounts due date, from lookup_company or a Companies House letter.",
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+                "type": "string"
+              }
+            },
+            "required": ["accountsDue"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": true,
+            "title": "Late Filing Penalty"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:bc44d9128b82a942cf718279cdb9a3867a52872b7cf2ece912cba7f06dc13e01"
+        },
+        {
+          "name": "list_jurisdictions",
+          "description": "The countries this server knows about and what it can actually do in each: which have a real accounts engine, which registers can be searched or looked up, the currency, and the identifiers each jurisdiction files under. Call this first when unsure.",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "additionalProperties": false,
+            "properties": {},
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": true,
+            "title": "List Jurisdictions"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:f84e4d530dfa4d68ca8ce9903b17ae95bf893d2bf04d356267c7f30ff88b19ef"
+        },
+        {
+          "name": "list_saved_filings",
+          "description": "The user's saved filings, most recently touched first, with every figure in major units. This is the same list the website dashboard shows. Start here when asked about \"my accounts\" or \"my company\".",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "additionalProperties": false,
+            "properties": {},
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": true,
+            "title": "List Saved Filings"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:aad4fceee6ae51bcc9ad0fe8ab1fcb4afe85749d95413df0092faa62920788bb"
+        },
+        {
+          "name": "list_tracked_companies",
+          "description": "Every company this user gets deadline reminders about, including the ones implied by their saved filings. Shows the next accounts deadline and days remaining where a register record is already cached. Free: this never contacts a register.",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "additionalProperties": false,
+            "properties": {},
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": true,
+            "title": "List Tracked Companies"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:4755399b846e5e47231a0a746cbfc0fc33fda2deb887d9f09e2e39964a7a276f"
+        },
+        {
+          "name": "lookup_company",
+          "description": "Look a company up on its public register (Companies House for GB, ABN Lookup for AU) by its registered number. Returns the full public record: name, status, registered office, officers, SIC codes, accounting period, plus both filing deadlines with days remaining and the late-filing penalty already incurred if overdue. Rate limited and quota-charged; cached results are free. Find the number first with search_companies.",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "additionalProperties": false,
+            "properties": {
+              "companyNumber": {
+                "description": "The register identifier: GB company number (e.g. 15379140) or AU ABN.",
+                "minLength": 1,
+                "type": "string"
+              },
+              "jurisdiction": {
+                "default": "GB",
+                "description": "ISO country code. Register access exists for GB and AU.",
+                "enum": ["GB", "IE", "US", "AU"],
+                "type": "string"
+              }
+            },
+            "required": ["companyNumber", "jurisdiction"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": true,
+            "title": "Lookup Company"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:3bf5d80f6e824d4db2f78369e36bca6b447b56b7a8f681084c30b058062be4ee"
+        },
+        {
+          "name": "sample_accounts",
+          "description": "A real worked example: nil turnover, a director loan, a near-empty bank account, the simplest accounts the UK regime permits. Use it to demonstrate check_accounts or as a template for a first-year company. Amounts in major units.",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "additionalProperties": false,
+            "properties": {},
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": true,
+            "title": "Sample Accounts"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:84df1e9bc1d674592696343a249d3b77ef5ab9b452647e58163447d9e2ce4a38"
+        },
+        {
+          "name": "save_filing",
+          "description": "Save a set of figures to the user's account, or update a saved one by passing its id from list_saved_filings. Figures in major units. The filing is saved even when validation finds problems, because a work in progress is worth keeping, and the problems come back in the response so you can raise them.",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "additionalProperties": false,
+            "properties": {
+              "categoryTotals": {
+                "additionalProperties": {
+                  "type": "number"
+                },
+                "description": "Where the figures came from, when a bank statement fed them: signed major-unit totals per category code from categorise_transactions.",
+                "propertyNames": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              "figures": {
+                "additionalProperties": false,
+                "description": "The figures behind a small-company balance sheet. ALL amounts in major units.",
+                "properties": {
+                  "calledUpShareCapitalNotPaid": {
+                    "default": 0,
+                    "description": "Share capital subscribed for but never paid to the company, an asset on its own line above fixed assets. Usually 1 for a company formed with one unpaid share. Not a debtor and not a current asset.",
+                    "type": "number"
+                  },
+                  "calledUpShareCapitalNotPaidPrior": {
+                    "default": 0,
+                    "description": "Previous year called up share capital not paid. Usually the same as this year.",
+                    "type": "number"
+                  },
+                  "cashAtBank": {
+                    "description": "Bank balance at the year end. Negative means an overdraft.",
+                    "type": "number"
+                  },
+                  "cashAtBankPrior": {
+                    "description": "Previous year-end bank balance. 0 for a first year.",
+                    "type": "number"
+                  },
+                  "creditorsWithinOneYear": {
+                    "description": "Money the company owes, due within a year, expressed positive. Includes director loans owed back.",
+                    "type": "number"
+                  },
+                  "creditorsWithinOneYearPrior": {
+                    "description": "Previous year creditors. 0 for a first year.",
+                    "type": "number"
+                  },
+                  "debtors": {
+                    "description": "Money owed to the company at the year end.",
+                    "type": "number"
+                  },
+                  "debtorsPrior": {
+                    "description": "Previous year debtors. 0 for a first year.",
+                    "type": "number"
+                  },
+                  "directorsLoan": {
+                    "default": 0,
+                    "description": "How much of the creditors above is owed to the company's own directors. Part of that figure, never an addition to it. Usually the largest line on a one-person company's sheet, and repayable to the director free of tax.",
+                    "type": "number"
+                  },
+                  "directorsLoanPrior": {
+                    "default": 0,
+                    "description": "Previous year directors' loan. 0 for a first year.",
+                    "type": "number"
+                  },
+                  "fixedAssets": {
+                    "description": "Equipment and other fixed assets at net book value.",
+                    "type": "number"
+                  },
+                  "fixedAssetsPrior": {
+                    "description": "Previous year fixed assets. 0 for a first year.",
+                    "type": "number"
+                  },
+                  "operatingCosts": {
+                    "description": "Total running costs for the year, expressed positive.",
+                    "type": "number"
+                  },
+                  "operatingCostsPrior": {
+                    "description": "Previous year operating costs. 0 for a first year.",
+                    "type": "number"
+                  },
+                  "shareCapital": {
+                    "description": "Issued share capital or common stock, typically 1 to 100.",
+                    "type": "number"
+                  },
+                  "shareCapitalPrior": {
+                    "description": "Previous year share capital. Usually the same as this year.",
+                    "type": "number"
+                  },
+                  "turnover": {
+                    "description": "Sales income for the year, in major currency units (pounds/euros/dollars).",
+                    "type": "number"
+                  },
+                  "turnoverPrior": {
+                    "description": "Previous year turnover. 0 for a first year.",
+                    "type": "number"
+                  }
+                },
+                "required": ["calledUpShareCapitalNotPaid", "calledUpShareCapitalNotPaidPrior", "cashAtBank", "cashAtBankPrior", "creditorsWithinOneYear", "creditorsWithinOneYearPrior", "debtors", "debtorsPrior", "directorsLoan", "directorsLoanPrior", "fixedAssets", "fixedAssetsPrior", "operatingCosts", "operatingCostsPrior", "shareCapital", "shareCapitalPrior", "turnover", "turnoverPrior"],
+                "type": "object"
+              },
+              "id": {
+                "description": "Omit to create. Pass an id from list_saved_filings to update that filing.",
+                "maximum": 9007199254740991,
+                "minimum": -9007199254740991,
+                "type": "integer"
+              },
+              "identifiers": {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "description": "Register identifiers, e.g. {\"companyNumber\": \"15379140\"}. Tax references (UTR, EIN, TFN) are never stored and are silently dropped.",
+                "propertyNames": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              "jurisdiction": {
+                "default": "GB",
+                "enum": ["GB", "IE", "US", "AU"],
+                "type": "string"
+              },
+              "label": {
+                "description": "A name for the filing, e.g. \"SparkGames year to 31 Dec 2025\".",
+                "type": "string"
+              }
+            },
+            "required": ["figures", "jurisdiction"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": false,
+            "title": "Save Filing"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:0adb558eb185493cba429e60a58cb7e62974462680c228b53af9871c80892b46"
+        },
+        {
+          "name": "search_companies",
+          "description": "Find a company by name on its public register and get back its registered number, status and address. This is how you reach lookup_company when the person only knows the name. Free of the daily quota; lightly rate limited.",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "additionalProperties": false,
+            "properties": {
+              "jurisdiction": {
+                "default": "GB",
+                "description": "ISO country code. Register access exists for GB and AU.",
+                "enum": ["GB", "IE", "US", "AU"],
+                "type": "string"
+              },
+              "query": {
+                "description": "The company name, as someone would say it.",
+                "minLength": 3,
+                "type": "string"
+              }
+            },
+            "required": ["jurisdiction", "query"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": true,
+            "title": "Search Companies"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:de52afd7fed70a2e650bcbe9270e1a3500f4b816c5a02f67870453ae2007b8f2"
+        },
+        {
+          "name": "server_status",
+          "description": "What this deployment can actually do right now: which integrations are configured, whether your token is valid, and how much of each daily quota you have left. Call it when a tool refuses and you want to know whether the feature is off or used up.",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "additionalProperties": false,
+            "properties": {},
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": true,
+            "title": "Server Status"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:880ecdb8656a5cf4d3de01cd50d10a66bb0fe520c52b4d8fbf655e794b40c11f"
+        },
+        {
+          "name": "totals_to_figures",
+          "description": "Turn categorised bank-statement totals into balance sheet figures, applying the rules that stop an import lying: only income categories reach turnover, only expense categories reach operating costs, and the owner topping up the account is never sales. Totals are signed major units per category code; get codes from categorise_transactions.",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "additionalProperties": false,
+            "properties": {
+              "totals": {
+                "additionalProperties": {
+                  "type": "number"
+                },
+                "description": "Signed totals per category code, major units, e.g. {\"sales\": 60000, \"software\": -1200}.",
+                "propertyNames": {
+                  "type": "string"
+                },
+                "type": "object"
+              }
+            },
+            "required": ["totals"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": true,
+            "title": "Totals To Figures"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:6f5c8ebf53fd979a13a1073689d9871c7523bddef6168a2ca2ec53480626d61b"
+        },
+        {
+          "name": "track_company_deadlines",
+          "description": "Watch a company by its register number and get reminded before its filing deadlines. Which channels are actually available depends on the server: the reply reports what will really be sent, and it can be nothing at all, so read it rather than assuming. No saved filing is needed: this is for the deadline itself, which matters months before any figures exist. Reminders go out on a ladder of days before the deadline (default 90, 60, 30, 14, 7, 1), and each one states the company, the deadline, the date, the days remaining and the penalty for missing it. Calling this again updates the settings and un-mutes a company that was untracked.",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "additionalProperties": false,
+            "properties": {
+              "companyNumber": {
+                "description": "The register identifier: GB company number (e.g. 15379140) or AU ABN.",
+                "minLength": 1,
+                "type": "string"
+              },
+              "email": {
+                "default": true,
+                "description": "Send reminders to the account email address.",
+                "type": "boolean"
+              },
+              "jurisdiction": {
+                "default": "GB",
+                "description": "ISO country code. Deadline reminders exist where the register publishes deadlines.",
+                "enum": ["GB", "IE", "US", "AU"],
+                "type": "string"
+              },
+              "push": {
+                "default": true,
+                "description": "Send reminders as web push to signed-in browsers.",
+                "type": "boolean"
+              },
+              "remindDaysBefore": {
+                "description": "Days before the deadline to warn, e.g. [60, 14, 1]. Omit to use this server’s default ladder. Only the tightest rung that applies is ever sent, so a long ladder does not mean a burst of messages.",
+                "items": {
+                  "maximum": 3650,
+                  "minimum": 1,
+                  "type": "integer"
+                },
+                "maxItems": 12,
+                "type": "array"
+              }
+            },
+            "required": ["companyNumber", "email", "jurisdiction", "push"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": false,
+            "title": "Track Company Deadlines"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:eab39f1828954f04896c14fba52bd161e3878d873f06993aeeddbff1f5129571"
+        },
+        {
+          "name": "untrack_company_deadlines",
+          "description": "Stop sending deadline reminders about a company. This mutes rather than forgets, which is the only thing that holds: a company implied by a saved filing would otherwise be re-added by the next scan. track_company_deadlines un-mutes it again.",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "additionalProperties": false,
+            "properties": {
+              "companyNumber": {
+                "description": "The register identifier, as in track_company_deadlines.",
+                "minLength": 1,
+                "type": "string"
+              },
+              "jurisdiction": {
+                "default": "GB",
+                "description": "ISO country code. Deadline reminders exist where the register publishes deadlines.",
+                "enum": ["GB", "IE", "US", "AU"],
+                "type": "string"
+              }
+            },
+            "required": ["companyNumber", "jurisdiction"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": true,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": false,
+            "title": "Untrack Company Deadlines"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:5828b545a50ffa92be64adadc124b668aae8252924b720953bad5bf520c55e57"
+        }
+      ],
+      "digest": "sha256:398bf400718fbaa7746efb61921c6c3fa63d11ea10c03a43818f899179bad621"
+    }
+  }
+}

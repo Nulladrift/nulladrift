@@ -1,0 +1,387 @@
+{
+  "lockfileVersion": 2,
+  "subjects": {
+    "com.pinch-app/grocery": {
+      "kind": "mcp-server",
+      "source": {
+        "client": "manual",
+        "file": "registry.modelcontextprotocol.io"
+      },
+      "transport": {
+        "type": "http",
+        "url": "https://pinch-app.com/api/mcp"
+      },
+      "protocol": {
+        "era": "legacy",
+        "version": "2025-06-18"
+      },
+      "serverInfo": {
+        "name": "pinch-grocery-data",
+        "version": "1.0.0"
+      },
+      "capabilities": {
+        "tools": {}
+      },
+      "instructions": "Pinch provides Australian grocery price data (Woolworths, Coles, Aldi, Harris Farm).\n\nSHOPPING LISTS (2 or more items): call build_basket ONCE with the full list of item strings. Include any size or quantity in the string (\"2L\", \"1kg\", \"12 pack\"). build_basket searches every item server-side, picks the cheapest product per item, and returns the basket with per-retailer options plus a share_url. Do NOT call decompose_product, search_products, or batch_search per item for a list. IMPORTANT: before rendering, review every pick for correctness (the search engine uses keyword matching and sometimes returns wrong products). Follow the VALIDATION instructions in the build_basket tool description.\n\nSINGLE ITEM or a price question: use search_products, get_cheapest, compare_prices, or get_price_history.\n\ndecompose_product, batch_search and save_basket are advanced tools for overriding build_basket's pick on one specific item only; do not use them for a normal shopping list.\n\nGuidance: default to cheapest-first; only filter to a brand or retailer if the user explicitly asks. A product sold loose or priced per-each (loose produce, a single bar) is a valid pick. Honour requested sizes and counts.",
+      "tools": [
+        {
+          "name": "batch_search",
+          "description": "ADVANCED / manual selection. Do NOT use this to build a shopping list: for any list of 2 or more items, call build_basket (one call, server-side, cheapest pick per item). Use batch_search only when you need the RAW candidate products for items you intend to select MANUALLY (for example, to override build_basket's pick on one item). It searches multiple items in parallel and returns raw candidate products per query (up to candidates_per_retailer per retailer) with NO filtering or scoring applied.\n\nWORKFLOW:\n1. Call batch_search with your shopping list items\n2. Review the candidates for each item. For each query, pick the single best product_id per retailer that actually matches what the user wants (correct product type, reasonable size, not a different product). If none of the candidates are a good match for a query, call batch_search again with a refined query (e.g., more specific terms, different wording)\n3. Once you have confirmed product_id selections for all items, call save_basket with your picks\n\nTIPS:\n- Set product_type to help narrow results to the right category (e.g., fresh_produce for herbs and vegetables)\n- Each candidate includes a product_categories field (JSON array of retailer category labels like 'Yoghurt', 'Herbs & Spices', 'Sausages'). Use this to distinguish the actual product type when names are ambiguous (e.g., 'oregano' the herb vs 'oregano sausages')\n- Prefer products where the name clearly matches the query intent\n- For staples (milk, eggs, bread), the cheapest option is usually the store brand\n- If results look wrong (e.g., searching 'rosemary' returns snacks instead of herbs), retry with a more specific query like 'fresh rosemary'\n- Each item includes a 'cheapest' hint with one entry per retailer. This is the cheapest candidate whose product_categories match the inferred subcategory for the query, NOT necessarily the lowest unit_price overall: a clearly off-category cheaper item (e.g., a snack bar under 'peanut butter') is deliberately excluded. When no category signal is available it falls back to the raw lowest unit_price. Treat the hint as advisory and confirm against the full candidate list and the user's intended format.\n\nAMBIGUITY: When candidates for a query span clearly different product formats (e.g., microwave rice pouches vs dry rice bags, single-serve vs family/bulk sizes, flavoured vs plain variants, fresh vs frozen), ASK the user which format they prefer before selecting a product. Compare the size field across candidates to detect this: a spread from 125g to 5kg signals format ambiguity. Do not silently pick the cheapest option when it may be the wrong format (e.g., a 250g microwave pouch when the user likely wants a 1kg bag).",
+          "inputSchema": {
+            "properties": {
+              "candidates_per_retailer": {
+                "description": "Number of candidate products to return per retailer per item (1-30, default 10). Use more candidates if you expect ambiguous results.",
+                "type": "number"
+              },
+              "items": {
+                "description": "List of grocery items to search (1-20 items).",
+                "items": {
+                  "properties": {
+                    "category": {
+                      "description": "Explicit category filter (e.g., 'Fruit & Vegetables'). Overrides product_type.",
+                      "type": "string"
+                    },
+                    "product_type": {
+                      "description": "Category hint. Set fresh_produce for fruits/vegetables/herbs, meat for raw proteins, dairy for milk/cheese/eggs/yoghurt, pantry for canned/dried/shelf-stable goods.",
+                      "enum": ["fresh_produce", "meat", "dairy", "pantry", "frozen", "drinks", "bakery", "deli"],
+                      "type": "string"
+                    },
+                    "query": {
+                      "description": "Item name as on a shopping list (e.g., 'chicken breast 1kg', 'fresh rosemary', 'sea salt')",
+                      "type": "string"
+                    }
+                  },
+                  "required": ["query"],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "retailers": {
+                "description": "Filter to these retailers only. If omitted, all 4 are searched.",
+                "items": {
+                  "enum": ["Woolworths", "Coles", "Aldi", "Harris Farm"],
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "required": ["items"],
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:52180e33037fc42952800c16618faac8a0738bb79e244e6936d748d29fef6fd8"
+        },
+        {
+          "name": "build_basket",
+          "description": "MANDATORY for shopping lists. When the user gives you 2 or more grocery items, call this tool ONCE with the full list. Do NOT call decompose_product, search_products, or batch_search per item: this tool searches every item in parallel with built-in query analysis (category routing, brand aliases, subcategory boost) and returns a basket with per-item cheapest pick, per-retailer options, basket total, retailer totals, and a shareable share_url. If the user named the stores they shop at, pass them in 'retailers'; otherwise omit it to search all four.\n\nVALIDATION (mandatory before rendering): The search engine uses keyword matching, so wrong products leak through. Items flagged with a 'review' field on their cheapest pick are LIKELY WRONG and need your attention first. Then scan ALL picks (flagged or not) and check: (1) Is the product actually what was asked for? (e.g. 'frozen chips' is NOT 'frozen blueberries', 'sweet potato' is NOT 'potato', 'chicken fingers crumbed' is NOT 'chicken breast') (2) Is the size/form correct? (e.g. 400g pack is not a valid match for '2kg') (3) Is the selected option the cheapest CORRECT product, not just the cheapest product? If a pick is wrong: pick the correct product from by_retailer options for that item, or mark as '(check in store)'. Recalculate basket_total from your corrected picks.\n\nOUTPUT FORMAT: Line 1: '**Cheapest basket: $X.XX**' (use corrected basket_total). Then ONE markdown table with columns: Item | Product | Store | Price | Size. Then one line: 'View and share this basket: <share_url>'. Use '(check in store)' in the Product cell for items in items_missing or where no correct product exists. No preamble, no per-item narration, no follow-up offers.",
+          "inputSchema": {
+            "properties": {
+              "items": {
+                "description": "Shopping list items exactly as the user wrote them, e.g. ['4 bananas', 'whole chicken', '12 free range eggs', 'full cream milk 2L', 'spaghetti', 'sliced white bread']. Include any size/quantity in the string ('2L', '1kg', '12 pack') so the cheapest CORRECT size is chosen.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "retailers": {
+                "description": "Only return results from these stores. Omit to search all four.",
+                "items": {
+                  "enum": ["Woolworths", "Coles", "Aldi", "Harris Farm"],
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "required": ["items"],
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:bfb0d919576de032e254739594f041fdc402c95cd3ff31848122403a0abd50df"
+        },
+        {
+          "name": "compare_prices",
+          "description": "Compare prices for the same product across retailers using its barcode. Returns all retailers stocking the product, sorted cheapest first. About 7,800 products have barcode matches.",
+          "inputSchema": {
+            "properties": {
+              "barcode": {
+                "description": "EAN-13 barcode (e.g., '9300675016902')",
+                "type": "string"
+              }
+            },
+            "required": ["barcode"],
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:f8a98739c55ee6e352ae0f755eb2432aa24f9c648bdbf81b9f176c08c3bc8a9a"
+        },
+        {
+          "name": "decompose_product",
+          "description": "ADVANCED / single item. Do NOT use this to build a shopping list: for any list of 2 or more items, call build_basket (one call, server-side). Use decompose_product only to break ONE item into structured search attributes when you intend to override build_basket's pick for that single item. This does not call any API; it is a structured reasoning step.\n\nOUTPUT: canonical_query, disqualifiers, and suggested_category for that single item.\n\nFill in every field based on what a typical Australian family would mean by this item. CORE RULE: Unless the user literally specifies a brand, brand_preference MUST be null and the strategy is cheapest-first (unit_price_asc, no retailer filter).",
+          "inputSchema": {
+            "properties": {
+              "barcode_eligible": {
+                "description": "true for branded packaged goods (Weet-Bix, Vegemite, cheese slices, chips). false for fresh produce, meat, and store-brand generics. When true AND a result has a barcode, call compare_prices to check if another retailer has it cheaper.",
+                "type": "boolean"
+              },
+              "brand_preference": {
+                "description": "ONLY set this if the user LITERALLY named a brand (e.g. 'Weet-Bix', 'Vegemite'). If the user wrote a generic item like 'milk', 'chicken breast', 'eggs', 'bread', this MUST be null. When null, Pinch finds the cheapest option regardless of brand.",
+                "type": "string"
+              },
+              "canonical_query": {
+                "description": "The cleaned search term to use with search_products. Strip sizes and brands (unless brand IS the product, like 'Vegemite'). 'chicken breast bulk pack' becomes 'chicken breast fillets'. 'Sanitarium Weet-Bix' becomes 'Weet-Bix'. 'full cream milk 2L' becomes 'full cream milk'.",
+                "type": "string"
+              },
+              "category_path": {
+                "description": "Ontological path from general to specific, e.g. ['meat', 'poultry', 'chicken', 'breast'] or ['pantry', 'cereal', 'wheat biscuits']",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "disqualifiers": {
+                "description": "Terms that indicate a WRONG product. Results containing these MUST be excluded. e.g. for 'chicken breast': ['thigh', 'drumstick', 'wing', 'nugget', 'schnitzel', 'crumbed', 'marinated']. For 'Vegemite': ['twist', 'scroll', 'shapes', 'cheesy bite']. For 'strawberries': ['yoghurt', 'jam', 'ice cream', 'flavoured']. For 'milk': ['flavoured', 'chocolate', 'coffee', 'almond', 'oat', 'soy', 'coconut'].",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "qualifiers": {
+                "description": "Soft preferences that improve a match but don't disqualify if absent. e.g. ['skinless', 'boneless'] for chicken breast, ['Australian'] for sultanas",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "quantity": {
+                "description": "Target size. Use to filter results after search. Family intent means prefer larger sizes for better unit price.",
+                "properties": {
+                  "intent": {
+                    "description": "Size intent: 'family' (2-3L/1-2kg), 'single serve', 'standard', 'bulk'",
+                    "type": "string"
+                  },
+                  "size": {
+                    "description": "Expected size, e.g. '1kg', '2L', '6-pack'",
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              },
+              "raw_input": {
+                "description": "The item exactly as the user wrote it",
+                "type": "string"
+              },
+              "suggested_category": {
+                "description": "The grocery store category to filter search results. Use this to prevent wrong-category contamination. e.g. 'Pantry' for rice crackers (prevents dairy lunch packs), 'Fruit & Vegetables' for fresh produce, 'Meat & Seafood' for meat, 'Dairy, Eggs & Fridge' for dairy, 'Frozen' for frozen items. Only set when the item clearly belongs to one category and cross-category results would be noise.",
+                "type": "string"
+              }
+            },
+            "required": ["barcode_eligible", "canonical_query", "category_path", "disqualifiers", "qualifiers", "quantity", "raw_input"],
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:43753769f72ee3242df1e27f1744fe40a9ed2817a249f3ca120f8848275cd179"
+        },
+        {
+          "name": "get_cheapest",
+          "description": "Find the cheapest option for a product across all Australian grocery retailers. Searches by name and returns results sorted by price ascending.",
+          "inputSchema": {
+            "properties": {
+              "limit": {
+                "description": "Number of results (1-50, default 10)",
+                "type": "number"
+              },
+              "product_name": {
+                "description": "Product to search for (e.g., 'full cream milk 2L')",
+                "type": "string"
+              }
+            },
+            "required": ["product_name"],
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:e32d525a4b5667161ccbf98984cd48453f7d871d979e51aaf7e2f8ba483f522f"
+        },
+        {
+          "name": "get_price_history",
+          "description": "Get historical price data for a product. Shows price changes over time with stats (lowest, highest, average). History depth depends on your tier (30-365 days).",
+          "inputSchema": {
+            "properties": {
+              "days": {
+                "description": "Number of days of history (default: max for your tier)",
+                "type": "number"
+              },
+              "product_id": {
+                "description": "Product ID from search results",
+                "type": "string"
+              }
+            },
+            "required": ["product_id"],
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:4ecadb0542a177ae53fc58c9d60c45f2bac562fc4eebb87045c1c85d2ab06707"
+        },
+        {
+          "name": "get_product",
+          "description": "Get detailed information about a specific grocery product by its ID. Product IDs are returned in search results.",
+          "inputSchema": {
+            "properties": {
+              "product_id": {
+                "description": "Product ID from search results",
+                "type": "string"
+              }
+            },
+            "required": ["product_id"],
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:d960bd5a1ff3381fd624651aa0200ea6baf10214f2e2a8a1399f30b780e7e2a1"
+        },
+        {
+          "name": "get_specials",
+          "description": "Get current grocery specials and promotions. Filter by retailer or category. Results include savings amounts. Updated weekly. Specials captured before the most recent Wednesday catalogue changeover (Coles/Woolworths) are excluded as unconfirmed; after a changeover the list can be near-empty until the next collection. Individual products still expose such prices via get_product with special_may_have_ended: true.",
+          "inputSchema": {
+            "properties": {
+              "category": {
+                "description": "Filter by category",
+                "type": "string"
+              },
+              "limit": {
+                "description": "Number of results (1-50, default 20)",
+                "type": "number"
+              },
+              "retailer": {
+                "enum": ["Woolworths", "Coles", "Aldi", "Harris Farm"],
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:e72db1e4220597510288a70e5c7abe26a6e55825c3c4297e7ca247e29c30ca19"
+        },
+        {
+          "name": "save_basket",
+          "description": "ADVANCED / manual commit. Do NOT use this to build a basket from a shopping list: for any list of 2 or more items, call build_basket (it searches, picks the cheapest, totals, and returns a share_url in one call). Use save_basket only to commit a basket from product_ids you have ALREADY chosen yourself (for example, after overriding build_basket's pick on an item). It computes totals and returns a shareable basket URL.\n\nFor each item, provide the query string and one product_id per retailer (the best match you found in batch_search results). You do NOT need a pick for every retailer; omit a retailer if no good match was found.\n\nIMPORTANT: Only call this after you have reviewed batch_search results and confirmed your picks. Do not pass product_ids blindly from search results.",
+          "inputSchema": {
+            "properties": {
+              "selections": {
+                "description": "List of confirmed product selections, one entry per shopping list item.",
+                "items": {
+                  "properties": {
+                    "picks": {
+                      "additionalProperties": {
+                        "type": "string"
+                      },
+                      "description": "Best product_id per retailer. Keys are retailer names (Woolworths, Coles, Aldi, Harris Farm). Values are product_id strings.",
+                      "type": "object"
+                    },
+                    "query": {
+                      "description": "Original search query (for display in basket)",
+                      "type": "string"
+                    }
+                  },
+                  "required": ["picks", "query"],
+                  "type": "object"
+                },
+                "type": "array"
+              }
+            },
+            "required": ["selections"],
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:dc7899a7f9adf8a09aa1064340d2f5569522b283b4e6c32a45f1e9a789e7e9a3"
+        },
+        {
+          "name": "search_products",
+          "description": "Search Australian grocery products across Woolworths, Coles, Aldi, and Harris Farm. Returns product name, price, brand, category, unit price, and whether it's on special.",
+          "inputSchema": {
+            "properties": {
+              "category": {
+                "description": "Filter by category",
+                "type": "string"
+              },
+              "limit": {
+                "description": "Number of results (1-50, default 20)",
+                "type": "number"
+              },
+              "on_special": {
+                "description": "If true, only return products on special",
+                "type": "boolean"
+              },
+              "query": {
+                "description": "Search query (e.g., 'full cream milk', 'chicken breast')",
+                "type": "string"
+              },
+              "retailer": {
+                "enum": ["Woolworths", "Coles", "Aldi", "Harris Farm"],
+                "type": "string"
+              },
+              "sort": {
+                "default": "relevance",
+                "enum": ["relevance", "price_asc", "price_desc", "unit_price_asc"],
+                "type": "string"
+              }
+            },
+            "required": ["query"],
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:54a8c5ad5de2b67e4c596814c6592b859706dd7b0eddb01ca5ef742beb30d19b"
+        }
+      ],
+      "digest": "sha256:db35ecb3750f220e4bfc6db7595252a8f2f971f16c7f3f6e6da8b5df68da9622"
+    }
+  }
+}

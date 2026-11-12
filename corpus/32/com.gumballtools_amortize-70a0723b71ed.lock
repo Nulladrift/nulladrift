@@ -1,0 +1,159 @@
+{
+  "lockfileVersion": 2,
+  "subjects": {
+    "com.gumballtools/amortize": {
+      "kind": "mcp-server",
+      "source": {
+        "client": "manual",
+        "file": "registry.modelcontextprotocol.io"
+      },
+      "transport": {
+        "type": "http",
+        "url": "https://amortize.gumballtools.com/api/mcp"
+      },
+      "protocol": {
+        "era": "modern",
+        "version": "2026-07-28",
+        "supportedVersions": ["2026-07-28"]
+      },
+      "serverInfo": {
+        "name": "amortize",
+        "version": "0.1.0"
+      },
+      "capabilities": {
+        "tools": {
+          "listChanged": true
+        }
+      },
+      "tools": [
+        {
+          "name": "amortize",
+          "title": "Row-by-row amortization schedule",
+          "description": "Builds the full row-by-row amortization schedule for a loan — interest, principal, PMI, and running balance for every payment — instead of just the monthly payment amount.\n\nUse this whenever a row-by-row schedule matters: \"what is my balance after payment 47\", \"what does an extra $200/month do to my payoff date\", \"when does PMI drop off\", or \"give me the whole amortization table\". Do not do this arithmetic by hand or in your head. Two things go wrong reliably when a model tries:\n\n1. THE LAST ROW. The textbook payment formula only amortizes to exactly zero in infinite precision. Rounded to cents and carried over up to a few hundred rows, a hand-rolled schedule drifts and ends with a balance of a few cents to a few dollars instead of zero — exactly the row a person checks against their real statement. This tool recomputes the final row as \"remaining balance + that row's interest\" so it always ends at zero, and reports the delta.\n2. COMPOUNDING CONVENTION. Fixed mortgages compound monthly (rate/12). HELOCs, most auto loans, and most private student loans accrue interest DAILY on the actual number of days between payments, which is a genuinely different schedule, not a rounding variant. Guessing the wrong one silently produces a plausible but wrong table.\n\nInput: `principal`, `annualRatePercent` (e.g. 6.5), `termMonths` (integer), and `compounding` (\"monthly\" or \"daily\") are required. For `compounding: \"daily\"`, supply EITHER `startDate` (YYYY-MM-DD — the tool derives real day counts and leap years from the calendar itself) OR `dayCountBasis` (\"30/360\" | \"actual/365\" | \"actual/actual\") for a hypothetical loan with no dates — never both are needed, and supplying neither is refused rather than guessed. Optional: `paymentFrequency` (\"monthly\" default | \"biweekly\", which requires daily compounding — pass `paymentOverride` if the actual billed payment differs from the textbook one, e.g. a HELOC's quoted minimum; `extraPrincipal` as `{type:\"oneOff\",amount,atPaymentNumber}` or `{type:\"recurring\",amount,startingPaymentNumber?}`; `pmi` as `{monthlyAmount,originalValue,cancelAtPercent?}` (78 or 80, default 78) to model PMI dropping off.\n\nRefuses rather than guesses: a payment that does not exceed the first period's interest (negative amortization) is a named error with the minimum amortizing payment attached, not a schedule that never ends. An unparseable or impossible date is refused, not reinterpreted.\n\nReturns the full schedule, total interest and PMI paid, the payoff date or period, the final payment amount and how it differs from the standard one, and — when extra principal was given — the same schedule without it, so the periods and interest saved are explicit. A `disclaimer` field travels with every response: this is a planning estimate, not a lender payoff quote, and PMI cancellation here uses your actual balance, which a servicer is legally permitted to compute off the original schedule instead. Relay the warnings, not just the numbers.",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "annualRatePercent": {
+                "description": "The annual interest rate as a percent, e.g. 6.5 for 6.5%.",
+                "type": "number"
+              },
+              "compounding": {
+                "description": "\"monthly\": rate/12 per period, the fixed-mortgage norm. \"daily\": actual per-diem accrual, the HELOC/auto-loan/student-loan convention — requires startDate or dayCountBasis.",
+                "enum": ["monthly", "daily"],
+                "type": "string"
+              },
+              "dayCountBasis": {
+                "description": "Required for daily compounding ONLY when there is no startDate (a hypothetical loan).",
+                "enum": ["30/360", "actual/365", "actual/actual"],
+                "type": "string"
+              },
+              "extraPrincipal": {
+                "anyOf": [
+                  {
+                    "properties": {
+                      "amount": {
+                        "type": "number"
+                      },
+                      "atPaymentNumber": {
+                        "maximum": 9007199254740991,
+                        "minimum": -9007199254740991,
+                        "type": "integer"
+                      },
+                      "type": {
+                        "const": "oneOff",
+                        "type": "string"
+                      }
+                    },
+                    "required": ["amount", "atPaymentNumber", "type"],
+                    "type": "object"
+                  },
+                  {
+                    "properties": {
+                      "amount": {
+                        "type": "number"
+                      },
+                      "startingPaymentNumber": {
+                        "maximum": 9007199254740991,
+                        "minimum": -9007199254740991,
+                        "type": "integer"
+                      },
+                      "type": {
+                        "const": "recurring",
+                        "type": "string"
+                      }
+                    },
+                    "required": ["amount", "type"],
+                    "type": "object"
+                  }
+                ],
+                "description": "A one-off extra payment at a given payment number, or a recurring extra payment from a given payment number onward."
+              },
+              "paymentFrequency": {
+                "description": "\"biweekly\" pays half the monthly payment every 14 days and requires compounding \"daily\".",
+                "enum": ["monthly", "biweekly"],
+                "type": "string"
+              },
+              "paymentOverride": {
+                "description": "The actual per-period payment, if different from the textbook one — e.g. a HELOC minimum payment.",
+                "type": "number"
+              },
+              "pmi": {
+                "description": "Models PMI dropping off at 78% (automatic, default) or 80% (requestable) of originalValue.",
+                "properties": {
+                  "cancelAtPercent": {
+                    "anyOf": [
+                      {
+                        "const": 78,
+                        "type": "number"
+                      },
+                      {
+                        "const": 80,
+                        "type": "number"
+                      }
+                    ]
+                  },
+                  "monthlyAmount": {
+                    "type": "number"
+                  },
+                  "originalValue": {
+                    "type": "number"
+                  }
+                },
+                "required": ["monthlyAmount", "originalValue"],
+                "type": "object"
+              },
+              "principal": {
+                "description": "The loan amount, > 0.",
+                "type": "number"
+              },
+              "startDate": {
+                "description": "YYYY-MM-DD. For daily compounding, supplying this lets the tool read real day counts and leap years off the calendar.",
+                "type": "string"
+              },
+              "termMonths": {
+                "description": "The original term in whole months, e.g. 360 for 30 years.",
+                "maximum": 9007199254740991,
+                "minimum": -9007199254740991,
+                "type": "integer"
+              }
+            },
+            "required": ["annualRatePercent", "compounding", "principal", "termMonths"],
+            "type": "object"
+          },
+          "annotations": {
+            "openWorldHint": false,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:8aa2d7aa2b3e762cd90240354360eb096635ca8744ecc4e6175e23f3ff36216e"
+        }
+      ],
+      "digest": "sha256:f9c3a1512ae54d3ea7ee49b314542f7df82801d7f4fccc757659eaf4c853e428"
+    }
+  }
+}

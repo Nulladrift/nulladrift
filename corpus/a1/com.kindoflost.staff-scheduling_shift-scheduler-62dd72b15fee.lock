@@ -1,0 +1,373 @@
+{
+  "lockfileVersion": 2,
+  "subjects": {
+    "com.kindoflost.staff-scheduling/shift-scheduler": {
+      "kind": "mcp-server",
+      "source": {
+        "client": "manual",
+        "file": "registry.modelcontextprotocol.io"
+      },
+      "transport": {
+        "type": "http",
+        "url": "https://staff-scheduling.kindoflost.com/mcp"
+      },
+      "protocol": {
+        "era": "modern",
+        "version": "2026-07-28",
+        "supportedVersions": ["2026-07-28", "2025-11-25", "2025-06-18", "2025-03-26"]
+      },
+      "serverInfo": {
+        "name": "kindoflost-shift-scheduler",
+        "title": "Kind of Lost — Staff Shift Scheduler",
+        "version": "1.0.1",
+        "websiteUrl": "https://staff-scheduling.kindoflost.com/mcp-server"
+      },
+      "capabilities": {
+        "prompts": {
+          "listChanged": false
+        },
+        "tools": {
+          "listChanged": false
+        }
+      },
+      "instructions": "Builds optimized 24/7 staff rosters (nurses, guards, firefighters, plant crews, help desks...) with a real mixed-integer solver, not a heuristic. Hard rules (availability, skills, minimum rest between shifts, max consecutive days/nights, no day shift right after a night, max hours) are never broken; unfilled posts are allowed but penalised and reported. Typical flow: list_shift_examples -> get_shift_example to see the input shape -> edit it to the user's situation -> build_shift_roster -> if it returns status 'running', call get_shift_roster_result with the job_id. Limits: 60 people, 42 days, 12 shifts, 12 demand types. If unsure the tool fits, call check_request first. Send ONE build_shift_roster call at a time, never several in parallel: the solver runs one roster at a time and parallel calls just queue or get 'busy'. Free, no sign-up; web version at https://staff-scheduling.kindoflost.com/shift-schedule",
+      "tools": [
+        {
+          "name": "build_shift_roster",
+          "title": "Build an optimized shift roster",
+          "description": "Solve a staff rostering problem to optimality with a MILP solver and return who works which shift each day, coverage, unfilled posts, hours per person and warnings. Solves take 5-60 s. Pass either `example` (to solve a built-in example as-is) or the roster input fields. If the result has status 'running', call get_shift_roster_result with its job_id. If it has status 'too_large', shorten the horizon or reduce people/shift types and retry. If it has status 'busy', wait the retry_after_seconds it gives and call again -- one call at a time, never in parallel. Safe defaults (e.g. the next 7 days when `days` is omitted) are listed in the result's `assumptions`; tell the user about them. Roster input. Minimal example: {\"days\": [\"2026-10-05\", \"2026-10-06\"], \"shifts\": [{\"shift\": \"Day\", \"start\": \"07:00\", \"end\": \"19:00\"}, {\"shift\": \"Night\", \"start\": \"19:00\", \"end\": \"07:00\", \"night\": \"yes\"}], \"demands\": [{\"name\": \"RN\", \"penalty\": 500}], \"people\": [{\"name\": \"Ana\", \"cost\": 40, \"max_hw\": 48}, ...], \"grids\": {\"RN\": {\"2026-10-05|Day\": 2, \"2026-10-05|Night\": 1}}, \"parameters\": {\"MinRestHours\": 11}}. Call get_shift_example for complete, realistic inputs.",
+          "inputSchema": {
+            "properties": {
+              "days": {
+                "description": "OPTIONAL. Day labels in order: ISO dates ('2026-10-05') or weekday names ('Mon'). Dates or weekdays enable weekend rules. Omit it to plan the next 7 days (ISO dates starting tomorrow); the default used is reported in the result's `assumptions`.",
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 42,
+                "minItems": 1,
+                "type": "array"
+              },
+              "demands": {
+                "description": "Posts to fill (roles). Headcount per day/shift goes in grids.",
+                "items": {
+                  "properties": {
+                    "concurrent": {
+                      "description": "true = the same person may cover this and another demand at once.",
+                      "type": "boolean"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "penalty": {
+                      "description": "Cost of leaving ONE post unfilled for one shift. Must be well above one person's pay for a shift or the solver will prefer gaps. Omitted = 10 x the highest hourly cost x the longest shift.",
+                      "type": "number"
+                    }
+                  },
+                  "required": ["name"],
+                  "type": "object"
+                },
+                "maxItems": 12,
+                "type": "array"
+              },
+              "example": {
+                "description": "Solve this built-in example instead of passing the fields below.",
+                "enum": ["hospital-ward", "three-shift-plant", "security-site", "fire-station", "support-desk"],
+                "type": "string"
+              },
+              "goal": {
+                "description": "One sentence, in the user's own words, of what they are trying to do (e.g. 'a 4-week nurse rota for 12 nurses on 12-hour shifts'). Optional; helps improve the tool.",
+                "maxLength": 300,
+                "type": "string"
+              },
+              "grids": {
+                "additionalProperties": {
+                  "type": "object"
+                },
+                "description": "Optional per-day/shift cells, keyed by a demand name or a person name, each an object keyed 'DAY|SHIFT'. Demand grid value = headcount required (demand with no grid = 1 on every shift). Person grid value: 'a' or 1 = available, 'f' = must work, 0 or missing = UNAVAILABLE (person with no grid = available everywhere).",
+                "type": "object"
+              },
+              "parameters": {
+                "description": "Optional rules. MinRestHours (11), MaxConsecutiveDays (6), MaxConsecutiveNights (4), ForbidDayAfterNight ('yes'), NightStartsAfter ('18:00'), MinBlockDays (1), WeekendFairnessPenalty (0), EquityPenalty (0) = even out total hours, NightEquityPenalty (0) = even out total nights (try 20), NightDifferential (1.0), WeekendDifferential (1.0), TimeLimitSeconds (max 60 here), GapPercent (2).",
+                "type": "object"
+              },
+              "people": {
+                "items": {
+                  "properties": {
+                    "cost": {
+                      "description": "Cost per hour (default 1).",
+                      "type": "number"
+                    },
+                    "max_dw": {
+                      "description": "Max days worked over the WHOLE roster.",
+                      "type": "number"
+                    },
+                    "max_hd": {
+                      "description": "Max hours per day (default 24).",
+                      "type": "number"
+                    },
+                    "max_hw": {
+                      "description": "Max hours over the WHOLE roster (hard). Not per week: for a 28-day roster at 40h/week use 160.",
+                      "type": "number"
+                    },
+                    "min_dw": {
+                      "description": "Min days worked over the WHOLE roster.",
+                      "type": "number"
+                    },
+                    "min_hd": {
+                      "description": "Min hours per worked day.",
+                      "type": "number"
+                    },
+                    "min_hw": {
+                      "description": "Min hours over the WHOLE roster (soft).",
+                      "type": "number"
+                    },
+                    "name": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["name"],
+                  "type": "object"
+                },
+                "maxItems": 60,
+                "minItems": 1,
+                "type": "array"
+              },
+              "shifts": {
+                "description": "Shift types. A shift may cross midnight (end < start).",
+                "items": {
+                  "properties": {
+                    "end": {
+                      "description": "HH:MM",
+                      "type": "string"
+                    },
+                    "night": {
+                      "description": "'yes' = counts as a night shift. Omitted = decided from NightStartsAfter.",
+                      "type": ["string", "boolean"]
+                    },
+                    "shift": {
+                      "description": "Shift name, e.g. 'Day'.",
+                      "type": "string"
+                    },
+                    "start": {
+                      "description": "HH:MM",
+                      "type": "string"
+                    }
+                  },
+                  "required": ["end", "shift", "start"],
+                  "type": "object"
+                },
+                "maxItems": 12,
+                "minItems": 1,
+                "type": "array"
+              },
+              "skills": {
+                "description": "Who can cover which demand. Omitted = everyone can cover every demand.",
+                "items": {
+                  "properties": {
+                    "demand": {
+                      "type": "string"
+                    },
+                    "person": {
+                      "type": "string"
+                    },
+                    "rate": {
+                      "description": "Posts covered per person (default 1).",
+                      "type": "number"
+                    }
+                  },
+                  "required": ["demand", "person"],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "wait_seconds": {
+                "description": "How long to wait for the solve inside this call (default 25).",
+                "maximum": 45,
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Build an optimized shift roster"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:48488993b718bf600de2b6dd19252e7e378e07bbfed30c57a38a1a299e291048"
+        },
+        {
+          "name": "check_request",
+          "title": "Check whether a request fits",
+          "description": "Describe what the user wants in plain words and get back whether this server can do it, which limits it would hit, and the closest thing it CAN do. Instant, no solve. Use it when unsure the tool fits (shift swaps, payroll, time clocks, very large teams or long horizons).",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "description": {
+                "description": "The user's request in their own words, e.g. 'rota for 80 nurses over 3 months with shift swaps'.",
+                "maxLength": 2000,
+                "type": "string"
+              }
+            },
+            "required": ["description"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Check whether a request fits"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:20b91116da095c3397e608cb636c7d45cc605c04d2852fbf9b67afb4e39ca0a2"
+        },
+        {
+          "name": "get_shift_example",
+          "title": "Get an example roster input",
+          "description": "Return the full input JSON of one example, in exactly the shape build_shift_roster accepts. Edit it (names, days, headcounts, rules) to match the user's situation.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "lang": {
+                "description": "es = Spanish shift and post names.",
+                "enum": ["en", "es"],
+                "type": "string"
+              },
+              "name": {
+                "enum": ["hospital-ward", "three-shift-plant", "security-site", "fire-station", "support-desk"],
+                "type": "string"
+              }
+            },
+            "required": ["name"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Get an example roster input"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:beaf23001808108a71f8cb41f3cf13d441bd99a76b30eddcb4744219186699f1"
+        },
+        {
+          "name": "get_shift_roster_result",
+          "title": "Get a roster result",
+          "description": "Fetch the result of a build_shift_roster job that returned status 'running'. Waits up to wait_seconds; call again while status is 'running'. Jobs expire 15 minutes after they finish.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "job_id": {
+                "type": "string"
+              },
+              "wait_seconds": {
+                "maximum": 45,
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": ["job_id"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Get a roster result"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:6fcc27a32e0e4ed77e4a9fab272264e782b9d393a26c3bbcbc9f9d3ed5526dae"
+        },
+        {
+          "name": "list_shift_examples",
+          "title": "List example rosters",
+          "description": "List the built-in example rostering problems (hospital ward, 3-shift plant, security post, fire station, 24/7 help desk). Use one as a starting point for the user's own roster.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {},
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "List example rosters"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:aef1d10d29568fc6bd45458fde063a729222fcbb478efca7e55205e1554503a3"
+        }
+      ],
+      "prompts": [
+        {
+          "name": "nurse_roster_4_weeks",
+          "title": "Build a 4-week nurse roster",
+          "description": "A 28-day hospital ward roster: nurses on day/night shifts, rest rules, fair nights.",
+          "arguments": [
+            {
+              "name": "details",
+              "description": "Team size, shift times, skills, days off...",
+              "required": false
+            }
+          ],
+          "digest": "sha256:8f932e546a8bf8b2cd803a7ba5e05647324e1be655ffb0ddd9a8bedba3c0309d"
+        },
+        {
+          "name": "security_guard_24_7",
+          "title": "24/7 security-guard schedule",
+          "description": "Round-the-clock guard coverage for one or more posts, with fair weekends and nights.",
+          "arguments": [
+            {
+              "name": "details",
+              "description": "Posts, guards, shift length, horizon...",
+              "required": false
+            }
+          ],
+          "digest": "sha256:0f9666e34877863b83ed3eecf9a5ec3b156875ed9c993bb8238f5decf75885d8"
+        },
+        {
+          "name": "turnos_rotativos_24_7",
+          "title": "Armar un cronograma de turnos rotativos 24/7",
+          "description": "Cronograma 24/7 con turnos rotativos (mañana, tarde, noche), descansos y noches parejas.",
+          "arguments": [
+            {
+              "name": "details",
+              "description": "Cantidad de personas, turnos, días, restricciones...",
+              "required": false
+            }
+          ],
+          "digest": "sha256:1b1b3ab03ff2d7f66934427d732a599472f4c5f76df3c3cad5e199ff72638a97"
+        }
+      ],
+      "digest": "sha256:950747f80b16fdcb3cb846a7379a199a2cf6ab87814b75b7b193e88a6bc2b822"
+    }
+  }
+}

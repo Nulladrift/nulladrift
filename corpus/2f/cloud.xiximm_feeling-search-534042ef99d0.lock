@@ -1,0 +1,199 @@
+{
+  "lockfileVersion": 2,
+  "subjects": {
+    "cloud.xiximm/feeling-search": {
+      "kind": "mcp-server",
+      "source": {
+        "client": "manual",
+        "file": "registry.modelcontextprotocol.io"
+      },
+      "transport": {
+        "type": "http",
+        "url": "https://xiximm.cloud/mcp"
+      },
+      "protocol": {
+        "era": "legacy",
+        "version": "2025-06-18"
+      },
+      "serverInfo": {
+        "name": "feeling-search",
+        "version": "0.3.0"
+      },
+      "capabilities": {
+        "tools": {
+          "listChanged": false
+        }
+      },
+      "instructions": "感觉检索：把一句口语描述换成准确的感受词，再落到具体的视觉风格。\n\n工具选择：\n- 要把一句话算成词与风格 → word_analyze（本地词典，免费、不联网）\n- 查一个词落在哪些风格、它的对立词是什么 → word_lookup\n- 要看全部词 / 风格的 id 与定义 → word_list\n- 要拿某个风格的详情与**它对应的图** → style_get（图带 thumb/full 绝对地址）\n- 想知道词表版本与规模 → word_status\n\n两个语义引擎（本地包与远端端点都有；返回里的 source / engine 字段说明这条走了哪一层）：\n- 中文引擎：整句中文 → 27 组粗锚点 + 598 个风格向量余弦。中文问句请整句用中文；\n  别写成「有点 lonely 的雨夜」这种混写 —— 只要含汉字就判成中文，英文半句会被中文分词切碎。\n- 英文引擎：整句英文 → 直接和风格向量比余弦。英文问句请整句用英文，别夹中文词。\n- 要强制指定就传 lang: \"zh\" 或 \"en\"；默认 \"auto\"（含汉字判中文，否则判英文）。\n- source 三个取值：local = 词表命中（最快，逐字匹配）；engine = 语义引擎（整句理解）；\n  cloud = 云端兜底（只在引擎不可用时）。两层给的词都是 762 词表里的真词，\n  差别只是怎么算出来的：local 靠逐字命中，engine 靠语义向量（同一句话的两侧互补）。\n\n重要：\n- score 是“命中权重 / 词集规模”归一后的相对值，不是概率，跨查询不可比。\n- words[].share 表示这个词被几个风格使用：≤6 是标识词（锋利、可用来区分风格），\n  数值大是泛词（如「留白」「几何」）。挑风格时优先看 matched 里的标识词。\n- styles[].matched 是命中的词，可以直接引用给用户看，比 score 更有说服力。\n- styles[].image.kind 说明图的性质：work=有出处的真作品（CC0）、synthetic=AI 生成示意、\n  placeholder=样张还没做完的占位图。**不要把 placeholder 当风格样本引用**。\n- 不要抓 xiximm.cloud 的交互页，那是给人用的单页应用。\n- **云端兜底要钱**：POST /v2/analyze 每次 $0.10（x402 / USDC 或 支付宝 AI 付）。\n  环境变量 FS_QUOTA 没配时不要 pretend 成功，如实说「本地没命中，云端需要付费额度」。\n- **怎么付**：allow_cloud 为 true 且本地零命中时，cloud_skipped.payment 里直接给机器可读的收款要求\n  （x402 的 accepts 数组：链、金额、资产、收款地址；以及支付宝档位）。把同一段文字 POST 到\n  payment.endpoint 完成支付，再把响应头里的 X-FS-Quota 作为 FS_QUOTA 配好后重试即可。\n- 想知道价格与收款方式 → word_status（会返回 discovery 地址 /.well-known/x402）。",
+      "tools": [
+        {
+          "name": "style_get",
+          "title": "取单个风格的定义与对应图片",
+          "description": "按风格 id（或中文名）取一个风格：定义、生成用提示词、感受词、年代地域，以及它对应的图片（thumb 320 / full 960 绝对地址，带 kind/credit/license）。kind=work 是有出处的真作品，synthetic 是 AI 示意，placeholder 是占位图。",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "description": "风格 id（如 synthwave）或中文名（如 合成器波）",
+                "maxLength": 64,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": ["id"],
+            "type": "object"
+          },
+          "annotations": {
+            "openWorldHint": false,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:274ddc60f8a97e8347af86a13fce7ca98180cfeb0b6b7478851028bd5f51b944"
+        },
+        {
+          "name": "word_analyze",
+          "title": "把一句描述解析成词与风格",
+          "description": "把一句中文/英文口语描述解析成感受词与视觉风格。默认纯本地词典（免费、不联网）；本地一个词都没命中且允许时，才上云。返回 score 是相对值不是概率，styles[].matched 是可以直接引用给用户看的命中词。",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "allow_cloud": {
+                "default": false,
+                "description": "本地零命中且本机没装引擎时，是否允许上云（远端默认关闭；显式传 true 才会消耗额度）",
+                "type": "boolean"
+              },
+              "lang": {
+                "default": "auto",
+                "description": "用哪个语义引擎：auto 按是否含汉字判定。中文问句请用中文整句，英文问句请用英文整句，中英混写会落到中文引擎",
+                "enum": ["auto", "zh", "en"],
+                "type": "string"
+              },
+              "quota": {
+                "description": "已购额度令牌（响应头 X-FS-Quota 的值）。本机也可用环境变量 FS_QUOTA；远端 MCP 客户端没法设环境变量，就用这个参数",
+                "maxLength": 256,
+                "type": "string"
+              },
+              "styles": {
+                "default": 5,
+                "description": "返回几个视觉风格",
+                "maximum": 20,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "text": {
+                "description": "要解析的描述，最长 500 字",
+                "maxLength": 500,
+                "minLength": 1,
+                "type": "string"
+              },
+              "words": {
+                "default": 6,
+                "description": "返回几个感受词",
+                "maximum": 12,
+                "minimum": 1,
+                "type": "integer"
+              }
+            },
+            "required": ["text"],
+            "type": "object"
+          },
+          "annotations": {
+            "openWorldHint": true,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:a1c1e2981ec63fbe0e4da90d4f62afc4707d7eab648633de4ca5c75dbfdd28cb"
+        },
+        {
+          "name": "word_list",
+          "title": "枚举感受词或视觉风格",
+          "description": "列出全部感受词（带共享度）或视觉风格（带定义与词集规模）。调 analyze 之前先拉一次可避免名字拼错。",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "kind": {
+                "default": "words",
+                "description": "枚举哪一类",
+                "enum": ["words", "styles"],
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "annotations": {
+            "openWorldHint": false,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:b1e649596304cd1209042045ccb309d11cc360ccbb67d1c58fca4aa6dc1a61f4"
+        },
+        {
+          "name": "word_lookup",
+          "title": "查一个词落在哪些风格",
+          "description": "查一个感受词：落在哪些风格、对立词是什么、常一起出现的词、是否标识词。纯本地查表。",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "word": {
+                "description": "要查的词，如「留白」「枯淡」",
+                "maxLength": 30,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": ["word"],
+            "type": "object"
+          },
+          "annotations": {
+            "openWorldHint": false,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:d985cfefe059e389ed7b7f788032ae27f2636c053aee663e3c240f7da2b67bd0"
+        },
+        {
+          "name": "word_status",
+          "title": "查看词表版本与云端额度状态",
+          "description": "返回词表版本、规模（词/风格/变种/挂靠率）以及是否配置了云端额度。",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {},
+            "type": "object"
+          },
+          "annotations": {
+            "openWorldHint": false,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:e1d6f77f2ac29ecb6bb6f70bc7476a793488885a645f17756f83b72c0ba4809f"
+        }
+      ],
+      "digest": "sha256:b129f1b36b4b9f3fe0c8a189a576fd52783ddcf0c9297ef8a7fef2383d934440"
+    }
+  }
+}

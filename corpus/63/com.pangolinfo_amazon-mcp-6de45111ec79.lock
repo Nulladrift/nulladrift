@@ -1,0 +1,1246 @@
+{
+  "lockfileVersion": 2,
+  "subjects": {
+    "com.pangolinfo/amazon-mcp": {
+      "kind": "mcp-server",
+      "source": {
+        "client": "manual",
+        "file": "registry.modelcontextprotocol.io"
+      },
+      "transport": {
+        "type": "http",
+        "url": "https://mcp.pangolinfo.com/mcp"
+      },
+      "protocol": {
+        "era": "legacy",
+        "version": "2025-11-25"
+      },
+      "serverInfo": {
+        "name": "pangolinfo-mcp",
+        "version": "0.9.6"
+      },
+      "capabilities": {
+        "tools": {}
+      },
+      "tools": [
+        {
+          "name": "ai_search",
+          "description": "[AI Search via Google SERP] Scrape publicly-available Google search results (data source: Google; use must comply with Google Terms of Service) with top AI Overview, organic results, and related searches. Two modes: overview (standard SERP) / ai_mode (immersive multi-turn conversational search).\nUse when: user says \"Google for me\" / \"external demand\" / \"what do people say about X\" / \"Reddit/Quora pain points\" / \"will my content be cited in AI search\" / \"find user complaints for keyword X\"; \"consumer voice\" step in scouting SOPs; verifying whether a new product concept has off-Amazon demand; **see which Google Shopping ads competitors run / their ad landing pages** (the sponsered block).\nDon't use: for on-Amazon search (use search_amazon); when only the trend curve matters (use keyword_trends — cheaper and tighter).\nReturns: data.{ results_num, ai_overview, json.items[ { type:'ai_overview', items:[{content:[...], references:[{title,url,domain}]}] }, { type:'organic', items:[{title,url,text}] }, { type:'related_searches', items:[...] }, { type:'sponsered', items:[{type:'result', url, position:'top'|'bottom', title_of_page, title_above_url}] } ], screenshot, taskId }. ⚠️ The ad block's upstream type is literally spelled 'sponsered' (missing an o — not a typo on our side; match it verbatim, do NOT look for 'sponsored') — it carries Google ad (shopping + text) landing-page url, title (title_of_page), and displayed brand domain (title_above_url). **position** marks whether the ad appears at the top ('top') or bottom ('bottom') of the page — top ads carry higher exposure weight.\nPair with: ↑ query inferred from user; in 'ai_mode' pass followups[1..5] for multi-turn; ↓ ai_overview.references[].url for authoritative external sources, organic items for content-competition analysis, sponsered[].url + title_above_url for competitors' paid landing pages and brands, split by position into top/bottom ad slots.\nCost: ~2 points/call, ~30s (**slow** — Google AI render time).\nTips: prefer overview for single queries (cheaper); use ai_mode only when you need decomposed multi-turn investigation. Followups > 5 visibly slow down responses.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "clientSource": {
+                "description": "调用来源标记。仅由 Pangolinfo Skill 传 skill；普通 MCP 调用省略即可。",
+                "enum": ["skill", "mcp"],
+                "type": "string"
+              },
+              "followups": {
+                "description": "Follow-up question list (only honored when mode='ai_mode'). Each item is a follow-up question on the previous answer. **More than 5 entries significantly degrades response time.**",
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 5,
+                "type": "array"
+              },
+              "mode": {
+                "default": "overview",
+                "description": "Search mode: 'overview' (default) = standard Google SERP with AI Overview at the top, best for one-shot queries; 'ai_mode' = Google AI Mode immersive search (udm=50), best for complex multi-step questions with follow-ups.",
+                "enum": ["overview", "ai_mode"],
+                "type": "string"
+              },
+              "query": {
+                "description": "Search keyword or question. Examples: 'wireless earbuds reviews' (single keyword) / 'how does noise cancellation work' (question) / 'what do people complain about Stanley Quencher' (user pain point).",
+                "minLength": 1,
+                "type": "string"
+              },
+              "screenshot": {
+                "default": false,
+                "description": "Whether to return a screenshot URL of the rendered search page. Defaults to false.",
+                "type": "boolean"
+              }
+            },
+            "required": ["query"],
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:a6d399797dd1071da4dd4c2c5d84d1149585408c5dc493c83ee00c5ac3733e77"
+        },
+        {
+          "name": "filter_categories",
+          "description": "[Amazon category commercial-metrics filter] Filter categories by dozens of metrics (sales, GMS, search volume, conversion, return rate, price tier, competitor density, …) — or use as a \"category detail\" endpoint by passing a single categoryId.\nUse when: user says \"find categories worth entering\" / \"high-sales categories\" / \"low return-rate categories\" / \"high search-volume but low competition categories\" / \"show me all metrics for category X\"; category-level blue-ocean hunt; getting the 30+ metric snapshot of one category.\nDon't use: for niche-level (use filter_niches — finer granularity); for actual products in a category (use list_category_products); for just the readable name (use get_category_paths).\nReturns: data.items.data[{ id, categoryId, marketplaceId, timeRange, sampleScope, snapshotDate, unitSoldSum, glanceViewsSum, searchVolumeSum, netShippedGmsSum, buyBoxPriceAvg, buyBoxPriceTier, searchToPurchaseRatio, returnRatio, asinCount, offersPerAsin, newAsinCount, newBrandCount, avgAdSpendPerClick, unitSoldTrendDirection, unitSoldChangeRateBucket, ... trend + quantile-bucket fields }] + data.items.pagination.{ total, page, size, hasNext }. **Pagination**: use the 'page' param (default 1, 1-based, size capped at 10); 'pagination.hasNext=true' means more pages exist, 'hasNext=false' means last page.\nPair with: ↑ required timeRange ('l7d' common) + sampleScope ('all_asin') + marketplaceId (defaults US); categoryId from search_categories / get_category_children; ↓ feed high-potential categories into list_category_products / list_bestsellers for real listings.\nCost: ~1 point/page, ~5s.\nTips: size capped at 10 (backend hard limit); only paginate when the user explicitly asks for more candidate categories — single-detail or quick-filter calls are fine on page 1; long-tail filter fields (unitSoldTrendDirections / metricChangeRateBuckets / dozens more) pass through via extraFilters.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "buyBoxPriceAvgMax": {
+                "description": "Max average buy-box price.",
+                "minimum": 0,
+                "type": "number"
+              },
+              "buyBoxPriceAvgMin": {
+                "description": "Min average buy-box price (marketplace currency).",
+                "minimum": 0,
+                "type": "number"
+              },
+              "buyBoxPriceTiers": {
+                "description": "Price-tier filter. Allowed: budget, mainstream, premium, luxury.",
+                "items": {
+                  "enum": ["budget", "mainstream", "premium", "luxury"],
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "categoryId": {
+                "description": "When set, returns the full metric row for that single category (this endpoint doubles as the 'detail' endpoint). Omit to list multiple categories matching the filters. Example: '979832011'.",
+                "type": "string"
+              },
+              "clientSource": {
+                "description": "调用来源标记。仅由 Pangolinfo Skill 传 skill；普通 MCP 调用省略即可。",
+                "enum": ["skill", "mcp"],
+                "type": "string"
+              },
+              "extraFilters": {
+                "additionalProperties": {},
+                "description": "Pass-through for any other upstream filter (e.g. unitSoldTrendDirections, newAsinCountLevels, metricChangeRateBuckets). Keys must match the upstream doc verbatim.",
+                "type": "object"
+              },
+              "marketplaceId": {
+                "default": "US",
+                "description": "Amazon marketplace id. ⚠️ Backend currently supports US only; other marketplaces will fail or fall back. Use US (the default).",
+                "minLength": 1,
+                "type": "string"
+              },
+              "netShippedGmsSumMax": {
+                "description": "Max total GMS.",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "netShippedGmsSumMin": {
+                "description": "Min total GMS (gross merchandise sales).",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "page": {
+                "default": 1,
+                "description": "Page number, 1-based.",
+                "minimum": 1,
+                "type": "integer"
+              },
+              "returnRatioLevels": {
+                "description": "Return-rate quality buckets. Allowed: excellent, average, risk.",
+                "items": {
+                  "enum": ["excellent", "average", "risk"],
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "sampleScope": {
+                "description": "Sample scope (required). Examples: 'all_asin' (all ASINs — verified working).",
+                "minLength": 1,
+                "type": "string"
+              },
+              "searchToPurchaseRatioLevels": {
+                "description": "Search-to-purchase conversion buckets. Allowed: to_improve, average, excellent.",
+                "items": {
+                  "enum": ["to_improve", "average", "excellent"],
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "searchVolumeSumMax": {
+                "description": "Max total search volume.",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "searchVolumeSumMin": {
+                "description": "Min total search volume.",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "size": {
+                "default": 10,
+                "description": "Page size, max 10 (backend hard limit).",
+                "maximum": 10,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "sortField": {
+                "description": "Sort field; any response field name is accepted (e.g. 'unitSoldSum', 'netShippedGmsSum').",
+                "type": "string"
+              },
+              "sortOrder": {
+                "description": "Sort order: 'asc' or 'desc'.",
+                "enum": ["asc", "desc"],
+                "type": "string"
+              },
+              "timeRange": {
+                "description": "Aggregation time range (required). Examples: 'l7d' (last 7 days — verified working). The exact enum is backend-defined; 'l7d' is the safest known value.",
+                "minLength": 1,
+                "type": "string"
+              },
+              "unitSoldSumMax": {
+                "description": "Max total units sold.",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "unitSoldSumMin": {
+                "description": "Min total units sold.",
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": ["sampleScope", "timeRange"],
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:36570496e58fe40b7f42ade1616eac4dc489ee148fec414f21e06e24256fdd45"
+        },
+        {
+          "name": "filter_niches",
+          "description": "[Amazon niche filter] Filter Amazon Niches (a finer-grained \"demand cluster\" than categories) by 50+ commercial metrics, or use as a \"niche detail\" endpoint for one niche.\nUse when: user says \"find blue ocean\" / \"high search volume + low competition niches\" / \"fast-growing small markets\" / \"niche scouting\" / \"give me the deep report on this niche\" / \"low return-rate niches\" / \"niches with return rate under 10%\"; the core filter step of GTM scouting SOPs; getting fee structure / brand age / new-launch trends for one niche.\nDon't use: for full categories (use filter_categories); for actual products in a niche (the niche record only carries 1 referenceAsin; combine with categoryId + list_category_products); for plain keyword search (use search_amazon).\nReturns: data.items.data[{ nicheId, nicheTitle, referenceAsinImageUrl, currency, searchVolumeT90, searchVolumeT360, searchVolumeGrowthT90, minimumPrice, maximumPrice, avgPrice, productCount, sponsoredProductsPercentage, primeProductsPercentage, top5ProductsClickShare, top20BrandsClickShare, brandCount, sellingPartnerCount, avgBrandAge, avgBestSellerRank, avgProductPrice, avgReviewCount, avgReviewRating, avgDetailPageQuality, newProductsLaunchedT180/T360, successfulLaunchesT90/T180/T360, returnRateT360, fee fields T365 … 100+ fields }] + data.items.pagination.{ total, page, size, hasNext }. **Pagination**: use the 'page' param (default 1, 1-based, size capped at 10 (default 3)); 'pagination.hasNext=true' means more pages exist, 'hasNext=false' means last page.\nPair with: ↑ marketplaceId required (defaults US); nicheTitle for keyword filter, nicheId for single-niche detail; ↓ feed referenceAsin into get_amazon_product to see the representative product; niche doesn't carry a categoryId directly — derive separately if needed.\nCost: ~1 point/call, ~5s.\nTips: size capped at 10 (default 3); pass long-tail filters (50+ fields) via extraFilters; classic blue-ocean combo = high searchVolumeT90Min + low top5ProductsClickShareT360Max + moderate productCountMax + positive searchVolumeGrowthT90Min + returnRateT360Max ≤ 0.10 (low-return). For return-rate filtering use returnRateT360Max (upper bound, 0-1 decimal); the response includes returnRateT360 with the actual return rate.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "avgReviewCountMax": {
+                "description": "Max average review count — lower means less competition.",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "avgReviewCountMin": {
+                "description": "Min average review count.",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "avgReviewRatingMin": {
+                "description": "Min average review rating (0-5).",
+                "maximum": 5,
+                "minimum": 0,
+                "type": "number"
+              },
+              "clientSource": {
+                "description": "调用来源标记。仅由 Pangolinfo Skill 传 skill；普通 MCP 调用省略即可。",
+                "enum": ["skill", "mcp"],
+                "type": "string"
+              },
+              "extraFilters": {
+                "additionalProperties": {},
+                "description": "Pass-through for any other upstream filter (e.g. sponsoredProductsPercentageT360Min, successfulLaunchesT360Max, avgBestSellerRankMax). Keys must match the upstream doc verbatim.",
+                "type": "object"
+              },
+              "marketplaceId": {
+                "default": "US",
+                "description": "Amazon marketplace id (required). ⚠️ Backend currently supports US only; other marketplaces will fail or fall back. Use US (the default).",
+                "minLength": 1,
+                "type": "string"
+              },
+              "maximumPriceMax": {
+                "description": "Upper bound on the niche's maximum product price.",
+                "minimum": 0,
+                "type": "number"
+              },
+              "minimumPriceMin": {
+                "description": "Lower bound on the niche's minimum product price.",
+                "minimum": 0,
+                "type": "number"
+              },
+              "nicheId": {
+                "description": "When set, returns the full deep report for that single niche (this endpoint doubles as the niche-detail endpoint). Omit to list multiple niches matching the filters. Example: '8140a265-768d-4679-8bc2-994cb1c96f0b' (UUID).",
+                "type": "string"
+              },
+              "nicheTitle": {
+                "description": "Keyword match against niche titles. Examples: 'iphone 16 wallet case' / 'wireless earbuds for sports'.",
+                "type": "string"
+              },
+              "page": {
+                "default": 1,
+                "description": "Page number, 1-based.",
+                "minimum": 1,
+                "type": "integer"
+              },
+              "productCountMax": {
+                "description": "Max product count in the niche.",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "productCountMin": {
+                "description": "Min product count in the niche.",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "returnRateT360Max": {
+                "description": "Max return rate over 360 days (0-1).",
+                "maximum": 1,
+                "minimum": 0,
+                "type": "number"
+              },
+              "searchVolumeGrowthT90Max": {
+                "description": "Max 90-day search-volume growth rate.",
+                "type": "number"
+              },
+              "searchVolumeGrowthT90Min": {
+                "description": "Min 90-day search-volume growth rate (decimal, 0.1 = +10%).",
+                "type": "number"
+              },
+              "searchVolumeT360Max": {
+                "description": "Max search volume over last 360 days.",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "searchVolumeT360Min": {
+                "description": "Min search volume over last 360 days.",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "searchVolumeT90Max": {
+                "description": "Max search volume over last 90 days.",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "searchVolumeT90Min": {
+                "description": "Min search volume over last 90 days.",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "size": {
+                "default": 3,
+                "description": "Page size, max 10 (backend hard limit), default 3 (small default to keep responses under AI context limits — pass size=10 explicitly when you need a wider sweep).",
+                "maximum": 10,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "sortField": {
+                "description": "Sort field; any response field name is accepted (e.g. 'searchVolumeT90', 'avgProductPrice').",
+                "type": "string"
+              },
+              "sortOrder": {
+                "description": "Sort order: 'asc' or 'desc'.",
+                "enum": ["asc", "desc"],
+                "type": "string"
+              },
+              "top5ProductsClickShareT360Max": {
+                "description": "Max top-5-products click share over 360 days (0-1). Lower = more fragmented niche, more opportunity.",
+                "maximum": 1,
+                "minimum": 0,
+                "type": "number"
+              }
+            },
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:e0207e1e5e29ef00ca50d22d9afd21d4dd9e37fb4500d29e01932ae63579a88a"
+        },
+        {
+          "name": "get_amazon_alexa_questions",
+          "description": "Alexa Listing API: extract both Alexa/Rufus preset-question regions from a logged-in Amazon PDP; if neither has questions, use the product panel's initial suggestions (regions.panel). Optionally answer in that ASIN context. Questions cost 5 points and each answered region adds 20 (0/5/25/45 total); panel answers count as one region. No-question and service failures cost 0; explicitly invalid ASINs cost 5.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "asin": {
+                "description": "10-character Amazon ASIN. Provide asin or url; if both are provided they must identify the same product.",
+                "pattern": "^[A-Za-z0-9]{10}$",
+                "type": "string"
+              },
+              "concurrency": {
+                "default": 5,
+                "description": "Maximum answer-generation concurrency, 1-10. Defaults to 5.",
+                "maximum": 10,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "includeAnswers": {
+                "default": false,
+                "description": "Whether to generate Rufus answers. Questions from both regions are always returned; when false, every answer is null.",
+                "type": "boolean"
+              },
+              "region": {
+                "default": "all",
+                "description": "Only selects answer regions: region1 below the main image, region2 below Product information, all includes the side-panel fallback when inline questions are absent. Questions are never filtered. Panel suggestions appear in regions.panel with source=panel.",
+                "enum": ["region1", "region2", "all"],
+                "type": "string"
+              },
+              "url": {
+                "description": "Amazon.com product-detail URL. Provide either asin or url.",
+                "format": "uri",
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:1d9f941e63f332a2de19764f8e9109d6ed9fda9dcd7586a6013b41b53ff4e690"
+        },
+        {
+          "name": "get_amazon_delivery_time",
+          "description": "[Amazon Delivery Time] Return the full listing detail for one ASIN plus address-dependent delivery estimates.\nUse when: the user explicitly needs estimated arrival, free vs paid delivery timing, the fastest option, handling lead time, or the listing's high-return warning.\nDon't use: for ordinary product detail only; use get_amazon_product at the lower 1-point cost.\nReturns: data.json[0].data.results[0] inherits every get_amazon_product field and adds frequentlyReturnedItem, leadTime, and delivery{deliveryTime,fastestDelivery,deliveryTimeFree,deliveryTimePay,deliveryFastest}. Unavailable extra fields are empty strings.\nCost: 2 points/call, ~5s. Delivery results depend on the zipcode address.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "asin": {
+                "description": "Amazon ASIN, 10 letters/digits (case-insensitive; auto-uppercased).",
+                "pattern": "^[A-Za-z0-9]{10}$",
+                "type": "string"
+              },
+              "clientSource": {
+                "description": "调用来源标记。仅由 Pangolinfo Skill 传 skill；普通 MCP 调用省略即可。",
+                "enum": ["skill", "mcp"],
+                "type": "string"
+              },
+              "site": {
+                "default": "amz_us",
+                "description": "Amazon marketplace. Defaults to amz_us.",
+                "enum": ["amz_us", "amz_uk", "amz_de", "amz_jp", "amz_fr", "amz_it", "amz_es", "amz_ca", "amz_au", "amz_sa", "amz_ae", "amz_br", "amz_mx"],
+                "type": "string"
+              },
+              "zipcode": {
+                "description": "ZIP code matching the marketplace country. Delivery estimates vary by address; the backend selects a country-matched ZIP when omitted.",
+                "type": "string"
+              }
+            },
+            "required": ["asin"],
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:ef309db19ad2809fbc91f371da3a7ade322fa0cc82332fb1615ddca6544eaace"
+        },
+        {
+          "name": "get_amazon_product",
+          "description": "[Amazon single-product detail] Scrape the full PDP for one ASIN.\nUse when: user supplies a specific ASIN (\"look at B0XXXXXXXX\" / \"check this product's price/rating/seller\" / \"analyse this competitor\"); or as a SOP step after candidate ASINs are picked.\nDon't use: for many products at once (use search_amazon or list_* series for lists); for reviews only (use get_amazon_reviews — cheaper and more focused).\nReturns (format='json', default): data.json[0].data.results[0] = { asin, title, itemName, itemHighlights, price, star, rating, brand, seller{name,id,link,hasLink}, parentAsin, videos[{type,section,mp4,m3u8,previewMp4,cover,title,duration,author}], shippingFee (buyer shipping fee as a number, e.g. \"750\"; \"0\" when free shipping or no info, varies by the zipcode address), delivery{deliveryTime,fastestDelivery}, ratingDistribution[], aiReviewsSummary, bestSellersRankItems, reviews[{date,star,content,helpful,...}], productOverview[], features[], productDescription[], images[], variantDetails[], attributes[], category_id, breadCrumbs, ... } — 30+ fields (variantDetails summary included). videos[].section: product=main media gallery, brand=brand module, related=related videos, customerReview=customer review videos. Use get_amazon_delivery_time when you need the high-return warning, free/paid/fastest delivery breakdown, or handling lead time.\nMissing ASIN: confirmed absence on the requested marketplace returns 9204 with the ASIN in message; normal format-specific billing applies. Do not auto-retry.\nTitle fields: title preserves the existing main title; itemName is the product name; itemHighlights is the stable subtitle/highlights field. Prefers the dedicated subtitle, then the main-title suffix, then an already parsed Item Highlight / Item Highlights attribute. Empty string when no recognized content is available; no character-limit truncation. Read data.json[0].data.results[0].itemHighlights in JSON; no Markdown conversion is needed.\nPair with: ↑ asin typically comes from search_amazon / list_bestsellers / filter_niches; ↓ feed the same asin into get_amazon_reviews for more reviews (the PDP carries only ~5-10).\nCost: ~1 point/call, ~5s.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "asin": {
+                "description": "Amazon ASIN, 10 letters/digits (case-insensitive — auto-uppercased). Example: 'B0B4NLGCH5'.",
+                "pattern": "^[A-Za-z0-9]{10}$",
+                "type": "string"
+              },
+              "clientSource": {
+                "description": "调用来源标记。仅由 Pangolinfo Skill 传 skill；普通 MCP 调用省略即可。",
+                "enum": ["skill", "mcp"],
+                "type": "string"
+              },
+              "format": {
+                "default": "json",
+                "description": "Response format. Defaults to 'json' — a structured payload (title, price, rating, reviews, seller, etc.) ready for programmatic use. Use 'markdown' if you want the rendered PDP text instead.",
+                "enum": ["json", "markdown"],
+                "type": "string"
+              },
+              "site": {
+                "default": "amz_us",
+                "description": "Amazon marketplace. Defaults to 'amz_us' (US).",
+                "enum": ["amz_us", "amz_uk", "amz_de", "amz_jp", "amz_fr", "amz_it", "amz_es", "amz_ca", "amz_au", "amz_sa", "amz_ae", "amz_br", "amz_mx"],
+                "type": "string"
+              },
+              "zipcode": {
+                "description": "ZIP code that must match the site country (amz_us → US zip, amz_jp → JP zip, ...). Optional; backend picks a random one from the per-country pool when omitted. Cross-country zips (e.g. amz_us + JP zip) are rejected by the backend. Examples: 10001 (NY) / 90001 (LA) / 100-0001 (Tokyo).",
+                "type": "string"
+              }
+            },
+            "required": ["asin"],
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:85cd9ef65c7b096d9781e00b8a03b387d5c8d32b0d96b755a9db670f4ca40127"
+        },
+        {
+          "name": "get_amazon_reviews",
+          "description": "[Amazon review batch scrape] Page-fetch real buyer reviews for an ASIN. Filterable by star / sort / media type.\nUse when: user says \"look at X's negative reviews\" / \"mine pain points\" / \"analyse competitor reviews\" / \"do VOC\" / \"find user complaints for Listing copy\"; or pre-launch critical-review scan; or finding improvement points for listing optimization.\nDon't use: when the few reviews already in the PDP would suffice (get_amazon_product carries 5-10 reviews + aiReviewsSummary — enough for a quick read); for keyword search (use search_amazon).\nReturns: data.json[0].data = { totalReviews (total review count; empty when unavailable), results[{ asin, reviewId, date, country, star, title, content, author, authorId, authorLink, imgs[], videos, purchased, vineVoice, helpful, attributes }] } — ~10 reviews per page.\nASIN: Uses the review variant ASIN when available; otherwise falls back to the page product ASIN (not necessarily the purchased variant). Empty if neither can be identified.\nPair with: ↑ asin typically from search_amazon / get_amazon_product / list_bestsellers; ↓ review text can be fed directly to an LLM for pain-point clustering and keyword extraction.\nCost: **10 points per page** (expensive). Start with pageCount=1 to confirm data, scale to 3-5 only when needed. Prefer filterByStar='critical' — highest signal density.\nTips: filterByStar = all_stars / five_star ... one_star / positive / critical; sortBy = recent (default) | helpful; mediaType = all_contents (default) | media_reviews_only (with photos/videos, higher credibility).",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "asin": {
+                "description": "Amazon ASIN (10 letters/digits, case-insensitive — auto-uppercased). Example: 'B0B4NLGCH5'.",
+                "pattern": "^[A-Za-z0-9]{10}$",
+                "type": "string"
+              },
+              "clientSource": {
+                "description": "调用来源标记。仅由 Pangolinfo Skill 传 skill；普通 MCP 调用省略即可。",
+                "enum": ["skill", "mcp"],
+                "type": "string"
+              },
+              "filterByStar": {
+                "default": "all_stars",
+                "description": "Filter by star rating. For VOC pain-point mining, pass 'critical' (1-3 star reviews) to surface defects; for positive-aspect extraction, pass 'positive'.",
+                "enum": ["all_stars", "five_star", "four_star", "three_star", "two_star", "one_star", "positive", "critical"],
+                "type": "string"
+              },
+              "mediaType": {
+                "default": "all_contents",
+                "description": "Review type: 'all_contents' for all, 'media_reviews_only' for reviews with photos/videos only (higher credibility).",
+                "enum": ["all_contents", "media_reviews_only"],
+                "type": "string"
+              },
+              "pageCount": {
+                "default": 1,
+                "description": "Number of review pages to fetch (~10 reviews per page). **Costs 10 points per page** — control accordingly. Defaults to 1.",
+                "maximum": 10,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "site": {
+                "default": "amz_us",
+                "description": "Amazon review marketplace: 14 supported sites including France (amz_fr), Italy (amz_it), Spain (amz_es), Brazil (amz_br) and Japan (amz_jp). Defaults to amz_us.",
+                "enum": ["amz_us", "amz_de", "amz_uk", "amz_jp", "amz_fr", "amz_it", "amz_es", "amz_br", "amz_au", "amz_mx", "amz_in", "amz_eg", "amz_ae", "amz_ca"],
+                "type": "string"
+              },
+              "sortBy": {
+                "default": "recent",
+                "description": "Sort order: 'recent' (newest first — track current sentiment) or 'helpful' (most-upvoted first — highest impact reviews).",
+                "enum": ["recent", "helpful"],
+                "type": "string"
+              },
+              "zipcode": {
+                "description": "ZIP code that must match the site country (amz_us → US zip, amz_jp → JP zip, ...). Optional; backend picks a random one from the per-country pool when omitted. Cross-country zips (e.g. amz_us + JP zip) are rejected by the backend. Examples: 10001 (NY) / 90001 (LA) / 100-0001 (Tokyo).",
+                "type": "string"
+              }
+            },
+            "required": ["asin"],
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:84240b6e94afb36dba76e9e6b51203e3eded265664233c342641c9c87f0ea510"
+        },
+        {
+          "name": "get_category_children",
+          "description": "[Amazon category tree drilldown] List direct children from any node (or omit parent to start at the roots).\nUse when: user says \"show me Amazon's category tree\" / \"subcategories under X\" / \"list top-level departments\" / \"drill to level 3\"; building a category map; deciding which level is right after search_categories returned candidates.\nDon't use: when a keyword jump is faster (use search_categories); when you want products in the category, not its subcategories (use list_category_products).\nReturns: data.items.data[{ browseNodeId, browseNodeIdPath, browseNodeName, browseNodeNameCn, parentBrowseNodeIdPath, productType, sellable, hasChild }] + data.items.pagination.{ total, page, size, hasNext }; omit parentBrowseNodeIdPath to fetch top-level roots; hasChild=1 means the node has further children. **Pagination**: use the 'page' param (default 1, size default 10 / max 50); 'pagination.hasNext=true' means the node has more children not yet listed.\nPair with: ↑ parentBrowseNodeIdPath either omitted (roots) or from search_categories; ↓ feed each result's browseNodeIdPath back in to drill another level, or into list_category_products / filter_categories.\nCost: ~1 point/page, ~3s. **Only paginate when a node has unusually many children (>size) and the user explicitly wants all subcategories.**",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "clientSource": {
+                "description": "调用来源标记。仅由 Pangolinfo Skill 传 skill；普通 MCP 调用省略即可。",
+                "enum": ["skill", "mcp"],
+                "type": "string"
+              },
+              "page": {
+                "default": 1,
+                "description": "Page number, 1-based.",
+                "minimum": 1,
+                "type": "integer"
+              },
+              "parentBrowseNodeIdPath": {
+                "description": "Parent node path. Either a single browseNodeId or a slash-joined path. Examples: '2619526011' (Appliances, drill from top) / '2619526011/18116197011' (Appliances > Ranges/Ovens/Cooktops, level-3 drill). Omit to fetch top-level roots.",
+                "type": "string"
+              },
+              "size": {
+                "default": 10,
+                "description": "Page size.",
+                "maximum": 50,
+                "minimum": 1,
+                "type": "integer"
+              }
+            },
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:d5a560198abc43674f392dc6daa371a619f2d0f35d23413bdca09c8945415b45"
+        },
+        {
+          "name": "get_category_paths",
+          "description": "[Amazon category breadcrumb resolver] Batch-resolve categoryId list to full paths (e.g. 'Electronics > Headphones > Over-Ear Headphones').\nUse when: a report needs readable category context (not bare IDs); user has a list of numeric IDs and wants the names; multiple categories need labels for comparison.\nDon't use: for a single ID — most other tools already return browseNodeNamePath in their responses; for tree structure (use get_category_children).\nReturns: data.items[{ categoryId, categoryName, categoryNameCn, browseNodeNamePaths[], browseNodeNamePathCns[] }] — one row per input ID.\nPair with: ↑ categoryIds from any prior step (filter_niches/filter_categories output, user-pasted ID list); ↓ usually presentation-only, downstream rarely depends on it.\nCost: ~1 point/call, ~2s (cheaper than N single resolutions).",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "categoryIds": {
+                "description": "Category IDs to resolve full path for. Examples: ['2619526011'] (Appliances) / ['172282', '11965861'] (Electronics + Musical Instruments).",
+                "items": {
+                  "type": "string"
+                },
+                "minItems": 1,
+                "type": "array"
+              },
+              "clientSource": {
+                "description": "调用来源标记。仅由 Pangolinfo Skill 传 skill；普通 MCP 调用省略即可。",
+                "enum": ["skill", "mcp"],
+                "type": "string"
+              },
+              "site": {
+                "default": "amz_us",
+                "description": "Amazon marketplace. Defaults to 'amz_us' (US).",
+                "enum": ["amz_us", "amz_uk", "amz_de", "amz_jp", "amz_fr", "amz_it", "amz_es", "amz_ca", "amz_au", "amz_sa", "amz_ae", "amz_br", "amz_mx"],
+                "type": "string"
+              }
+            },
+            "required": ["categoryIds"],
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:b6a6be1652e38c16af7e3089d19d9975acd9698f30d424bd9b2bdb7798cdea2f"
+        },
+        {
+          "name": "keyword_trends",
+          "description": "[Keyword Trends via Google Trends] Keyword popularity (data source: Google Trends; use must comply with Google Terms of Service). Time series + per-region heatmap + rising related queries (with 'Breakout' tags). Compare up to 5 keywords on one chart.\nUse when: user says \"how hot is keyword X\" / \"A vs B popularity\" / \"any seasonality\" / \"which states love X\" / \"find breakout terms\" / \"new-product direction\" / \"trend comparison\" / \"is X past its peak yet\".\nDon't use: for absolute search volume (Trends is 0-100 relative); for products/links (use search_amazon / ai_search); for a single keyword's snapshot (need ≥ 2 for meaningful comparison).\nReturns: data.json.{ keywordsGeoData[{ keyword, geoMapData[{ geoCode, geoName, value[], formattedValue[], hasData[] }] }], keywordsRankData[{ keyword, rankList[{ rankedKeyword[{ query, value, formattedValue, link, hasData }] }] }], timelineData[{ time, formattedTime, value[], formattedValue[] }], geoMapData[] }, taskId, url.\nPair with: ↑ keywords from user or core terms found via search_amazon; ↓ feed Breakout/rising terms back into search_amazon to explore new opportunities, or filter_niches to see if they've crystallized into a niche.\nCost: ~1.5 points/call, ~5s.\nTips: timeRange = today 12-m (default) | today 3-m | today 5-y | all ; region = ISO country code or 'WORLD'; language affects related-query language.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "clientSource": {
+                "description": "调用来源标记。仅由 Pangolinfo Skill 传 skill；普通 MCP 调用省略即可。",
+                "enum": ["skill", "mcp"],
+                "type": "string"
+              },
+              "keywords": {
+                "description": "Keywords to compare (1-5). Examples: ['wireless earbuds', 'bluetooth earbuds'] (synonyms) / ['stanley quencher', 'yeti rambler', 'hydro flask'] (competing brands) / ['halloween costume'] (single keyword for seasonality).",
+                "items": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "maxItems": 5,
+                "minItems": 1,
+                "type": "array"
+              },
+              "language": {
+                "default": "en-US",
+                "description": "Interface language (BCP-47), affects related-query language. Defaults to 'en-US'. Use 'zh-CN' for Chinese.",
+                "type": "string"
+              },
+              "region": {
+                "default": "US",
+                "description": "Region code (ISO country, or 'WORLD' for global). Common: 'US' / 'GB' / 'DE' / 'JP' / 'CN'.",
+                "type": "string"
+              },
+              "timeRange": {
+                "default": "today 12-m",
+                "description": "Time window. Common: 'today 12-m' (last 12 months, default), 'today 3-m' (last 90 days), 'today 5-y' (5-year long-term), 'all' (since 2004).",
+                "enum": ["now 1-H", "now 4-H", "now 1-d", "now 7-d", "today 1-m", "today 3-m", "today 12-m", "today 5-y", "all"],
+                "type": "string"
+              }
+            },
+            "required": ["keywords"],
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:f56f7ec7c1a238ce3226e3ebdd0918b6103b3d4fe9b335172a68b6dacb20e78d"
+        },
+        {
+          "name": "list_bestsellers",
+          "description": "[Amazon Best Sellers] Top-50 ranking for a category with 24h rank deltas.\nUse when: user says \"X category bestsellers\" / \"who's #1 in X\" / \"any new entrants climbing\" / \"benchmark top sellers\"; setting baseline products during niche scouting; tracking category leadership in competitor radars.\nDon't use: for new arrivals (use list_new_releases); for full category listings beyond top 50 (use list_category_products); when you only have a keyword (use search_categories first).\nReturns: data.json[0].data.{ reftag, recsList } — recsList is a JSON-string array (parse twice); each row { id, metadataMap.{ render.zg.rank, currentSalesRank, percentageChange, twentyFourHourOldSalesRank } }.\nPair with: ↑ categorySlug from user or scene inference (e.g. 'electronics' / 'home-garden' / 'beauty'); ↓ feed id (ASIN) into get_amazon_product for single-product deep-dive.\nCost: ~1 point/call, ~5s.\nTips: categorySlug is the hyphenated English slug in amazon.com/Best-Sellers URL paths.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "categorySlug": {
+                "description": "Amazon Best Sellers category slug (lowercase, hyphenated). Examples: 'electronics', 'home-garden', 'beauty', 'toys-and-games'. Find these in the URL path on amazon.com/Best-Sellers.",
+                "minLength": 1,
+                "type": "string"
+              },
+              "clientSource": {
+                "description": "调用来源标记。仅由 Pangolinfo Skill 传 skill；普通 MCP 调用省略即可。",
+                "enum": ["skill", "mcp"],
+                "type": "string"
+              },
+              "format": {
+                "default": "json",
+                "description": "Response format. Defaults to 'json' — structured Top-50 ranked ASIN list. Use 'markdown' for the rendered page text.",
+                "enum": ["json", "markdown"],
+                "type": "string"
+              },
+              "site": {
+                "default": "amz_us",
+                "description": "Amazon marketplace. Defaults to amz_us.",
+                "enum": ["amz_us", "amz_uk", "amz_de", "amz_jp", "amz_fr", "amz_it", "amz_es", "amz_ca", "amz_au", "amz_sa", "amz_ae", "amz_br", "amz_mx"],
+                "type": "string"
+              },
+              "zipcode": {
+                "description": "ZIP code that must match the site country (amz_us → US zip, amz_jp → JP zip, ...). Optional; backend picks a random one from the per-country pool when omitted. Cross-country zips (e.g. amz_us + JP zip) are rejected by the backend. Examples: 10001 (NY) / 90001 (LA) / 100-0001 (Tokyo).",
+                "type": "string"
+              }
+            },
+            "required": ["categorySlug"],
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:c986c3d591dabe0c66b324fb2ab22e06d91b96bac055237a1beecedc354c3870"
+        },
+        {
+          "name": "list_category_products",
+          "description": "[Amazon category listing] List concrete on-sale products under a Browse Node ID (paginated, 24 rows/page).\nUse when: user says \"what's selling in category X\" / \"list products in node 12345\" / \"show me what's in this category\"; after picking a categoryId during scouting, you want to see real listings; competitor-research on category density.\nDon't use: when only the top-50 winners matter (use list_bestsellers — cheaper and more signal); for category-level aggregate metrics (use filter_categories — sales/search volume/competitor density); for niche rather than full category (use filter_niches).\nReturns: data.json[0].data.{ pageIndex, maxPage, nextPage, categoryName, pagination, results[{ asin, title, price, star, rating, rank, img }] } — 24 rows/page. **Pagination**: use the 'page' param (default 1, 1-based); 'nextPage' holds the next page number, 'nextPage=null' or 'page>=maxPage' means last page reached.\nPair with: ↑ nodeId from search_categories (keyword→category) or get_category_children (tree drilldown); ↓ asin into get_amazon_product; same categoryId can also feed filter_categories for aggregate metrics.\nCost: ~1 point/page, ~5s. **Only paginate when the user explicitly asks for more / all results** — otherwise the first page is enough.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "clientSource": {
+                "description": "调用来源标记。仅由 Pangolinfo Skill 传 skill；普通 MCP 调用省略即可。",
+                "enum": ["skill", "mcp"],
+                "type": "string"
+              },
+              "format": {
+                "default": "json",
+                "description": "Response format. Defaults to 'json' — structured category listings. Use 'markdown' for the rendered page text.",
+                "enum": ["json", "markdown"],
+                "type": "string"
+              },
+              "nodeId": {
+                "description": "Amazon category Browse Node ID (numeric). Examples: '172282' (Electronics) / '2619526011' (Appliances) / '11965861' (Musical Instruments). Obtain via search_categories or get_category_children.",
+                "pattern": "^\\d+$",
+                "type": "string"
+              },
+              "page": {
+                "default": 1,
+                "description": "Page number, 1-based. 24 rows per page. Use response's pageIndex/maxPage/nextPage to decide whether to continue: nextPage holds the next page number; nextPage=null or page>=maxPage means last page reached. **Only paginate when the user explicitly asks for more / all results** — otherwise the first page is enough.",
+                "minimum": 1,
+                "type": "integer"
+              },
+              "site": {
+                "default": "amz_us",
+                "description": "Amazon marketplace. Defaults to amz_us.",
+                "enum": ["amz_us", "amz_uk", "amz_de", "amz_jp", "amz_fr", "amz_it", "amz_es", "amz_ca", "amz_au", "amz_sa", "amz_ae", "amz_br", "amz_mx"],
+                "type": "string"
+              },
+              "zipcode": {
+                "description": "ZIP code that must match the site country (amz_us → US zip, amz_jp → JP zip, ...). Optional; backend picks a random one from the per-country pool when omitted. Cross-country zips (e.g. amz_us + JP zip) are rejected by the backend. Examples: 10001 (NY) / 90001 (LA) / 100-0001 (Tokyo).",
+                "type": "string"
+              }
+            },
+            "required": ["nodeId"],
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:6a19b3fb92ebdd923586b9331004305fa898f0f6652d10d197ee992ff51528d4"
+        },
+        {
+          "name": "list_new_releases",
+          "description": "[Amazon New Releases] Best-selling Top-50 ASINs that hit the market within the last 30 days for a category (backend cap; not 100).\nUse when: user says \"new arrivals in X\" / \"any breakout new products\" / \"newly-launched that sell well\" / \"trending new directions\" / \"new entrants to monitor\"; GTM scouting for new angles; competitor radar catching new entrants.\nDon't use: for evergreen winners (use list_bestsellers); for full category listings (use list_category_products); when you only have a keyword (use search_categories first).\nReturns: data.json[0].data.{ reftag='zg_bsnr_g_<slug>', recsList } — recsList is a JSON-string array (parse twice); each row { id, metadataMap.{ render.zg.rank, ... } }.\nPair with: ↑ categorySlug as in list_bestsellers; ↓ feed id (ASIN) into get_amazon_product to see why it climbed (pitch, pricing, variant strategy).\nCost: ~1 point/call, ~5s.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "categorySlug": {
+                "description": "Amazon New Releases category slug (lowercase, hyphenated). Examples: 'electronics', 'home-garden'. Find these in the URL path on amazon.com/gp/new-releases.",
+                "minLength": 1,
+                "type": "string"
+              },
+              "clientSource": {
+                "description": "调用来源标记。仅由 Pangolinfo Skill 传 skill；普通 MCP 调用省略即可。",
+                "enum": ["skill", "mcp"],
+                "type": "string"
+              },
+              "format": {
+                "default": "json",
+                "description": "Response format. Defaults to 'json' — structured ranking list. Use 'markdown' for the rendered page text.",
+                "enum": ["json", "markdown"],
+                "type": "string"
+              },
+              "site": {
+                "default": "amz_us",
+                "description": "Amazon marketplace. Defaults to amz_us.",
+                "enum": ["amz_us", "amz_uk", "amz_de", "amz_jp", "amz_fr", "amz_it", "amz_es", "amz_ca", "amz_au", "amz_sa", "amz_ae", "amz_br", "amz_mx"],
+                "type": "string"
+              },
+              "zipcode": {
+                "description": "ZIP code that must match the site country (amz_us → US zip, amz_jp → JP zip, ...). Optional; backend picks a random one from the per-country pool when omitted. Cross-country zips (e.g. amz_us + JP zip) are rejected by the backend. Examples: 10001 (NY) / 90001 (LA) / 100-0001 (Tokyo).",
+                "type": "string"
+              }
+            },
+            "required": ["categorySlug"],
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:55889ab9a73fc0ff7ab634da046a078cf18a5a6a5d5c58c635e27fcd7178ccf5"
+        },
+        {
+          "name": "list_seller_products",
+          "description": "[Amazon seller storefront] List all listings under a merchant ID, paginated (24 rows/page).\nUse when: user says \"show me this seller's products\" / \"how many SKUs does store X carry\" / \"competitor storefront category breadth\" / \"what is this seller pushing\" / \"research a seller's catalog strategy\".\nDon't use: without a merchant ID (find 'sold by' link on any product PDP first); for a single product (use get_amazon_product).\nReturns: data.json[0].data.{ pageIndex, maxPage, nextPage, results[{ asin, title, price, star, rating, rank, img }] } — 24 rows/page. **Every row carries rank** (its display order in the storefront, ≈ that seller's in-store popularity ranking) plus star/rating, so **this single call is enough to rank and tabulate the seller's listings — no need to re-fetch each PDP**. **Two pagination modes**: ① page locates a specific page (default 1); ② pageCount accumulates the first N pages in one call (N≤3, flat-merged into the same results). When pageCount>1, pageIndex/nextPage are blanked (pages already merged). **Category filter**: categoryId filters the seller's products by category.\nPair with: ↑ sellerId usually from get_amazon_product's seller.id field, or from amazon.com/sp?seller=... URL; categoryId extractable from the storefront URL's rh=n:<id>; ↓ feed asin into get_amazon_product to deep-dive hero products.\n**Chaining pitfall — \"what does this seller carry + sort by sales/rank\"**: ❌ Do NOT \"run get_amazon_product on every ASIN to pull each small-category BSR, then sort\" — a storefront often has dozens-to-hundreds of SKUs; fanning out one PDP per ASIN hits the 2-QPS rate wall, bills N times, and blows the Fast-tier budget. ✅ Correct: **the results[] from one call (or pageCount≤3) already carry rank; sort by rank ascending for the in-store order and tabulate with star/rating**. Only when the user explicitly wants exact global small-category BSR should you run get_amazon_product on a **small head set (e.g. the top 5-10 pre-filtered by list rank)** to read bestSellersRankItems[], batched at ≤2 concurrent — never fan out across the whole store.\nCost: ~1 point/page, ~5s; pageCount=N billed by pages actually crawled (failed pages refunded).\nTips: use pageCount to grab the full multi-page SKU set in one shot (max 3 pages); use page to view one specific page; the first page is enough to glance at what the store sells. For sorting, prefer results[].rank (free, already in this response) — don't fan out PDP fetches just to sort. Amazon first-party sellerId = 'ATVPDKIKX0DER'.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "categoryId": {
+                "description": "Category filter ID — filters the seller's products by category. A single leaf category ID (e.g. '7161074011'), or comma-separated multi-level categories (e.g. '172282,502394,7161073011'). Omit = all products of the seller. Extractable from the rh=n:<categoryId> part of an Amazon storefront URL.",
+                "type": "string"
+              },
+              "clientSource": {
+                "description": "调用来源标记。仅由 Pangolinfo Skill 传 skill；普通 MCP 调用省略即可。",
+                "enum": ["skill", "mcp"],
+                "type": "string"
+              },
+              "format": {
+                "default": "json",
+                "description": "Response format. Defaults to 'json' — structured seller listings. Use 'markdown' for the rendered page text.",
+                "enum": ["json", "markdown"],
+                "type": "string"
+              },
+              "page": {
+                "default": 1,
+                "description": "Page number, 1-based. 24 rows per page. Use response's pageIndex/maxPage/nextPage to decide whether to continue: nextPage holds the next page number; nextPage=null or page>=maxPage means last page reached. **Only paginate when the user explicitly asks for more / all SKUs** — otherwise the first page is enough. NOTE: when pageCount>1 (multi-page accumulate) is set, page is ignored (the backend always accumulates from page 1).",
+                "minimum": 1,
+                "type": "integer"
+              },
+              "pageCount": {
+                "default": 1,
+                "description": "Multi-page accumulate: passing N crawls the first N pages in one call and returns them flat-merged (e.g. 3 = all products from pages 1+2+3). Default 1 (single page, uses the `page` flow); cap 3, larger values treated as 3. Difference vs `page`: `page` locates one specific page, `pageCount` pulls the first N pages merged. **Use only when you need the full multi-page SKU set in one shot.** Billed by pages actually crawled (a failed page is refunded).",
+                "maximum": 3,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "sellerId": {
+                "description": "Amazon merchant ID (14-char alphanumeric). Examples: 'ATVPDKIKX0DER' (Amazon.com first-party) / 'A2L77EE7U53NWQ' (Amazon Warehouse). Find it in a product page's 'sold by' link or amazon.com/sp?seller=... URL.",
+                "minLength": 1,
+                "type": "string"
+              },
+              "site": {
+                "default": "amz_us",
+                "description": "Amazon marketplace. Defaults to amz_us.",
+                "enum": ["amz_us", "amz_uk", "amz_de", "amz_jp", "amz_fr", "amz_it", "amz_es", "amz_ca", "amz_au", "amz_sa", "amz_ae", "amz_br", "amz_mx"],
+                "type": "string"
+              },
+              "zipcode": {
+                "description": "ZIP code that must match the site country (amz_us → US zip, amz_jp → JP zip, ...). Optional; backend picks a random one from the per-country pool when omitted. Cross-country zips (e.g. amz_us + JP zip) are rejected by the backend. Examples: 10001 (NY) / 90001 (LA) / 100-0001 (Tokyo).",
+                "type": "string"
+              }
+            },
+            "required": ["sellerId"],
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:579e0b3f5f049cd42804cfc6e9c50cff1a91c53dbe9c89cbba2c932abf69db82"
+        },
+        {
+          "name": "pangolinfo_capabilities",
+          "description": "[Pangolinfo MCP self-introspection] One call to get the full capability catalog, canonical workflows, and usage tips — no backend call, free.\nUse when: an AI client first connects to pangolinfo-mcp and needs to quickly grasp \"what tools exist\" / \"how do they chain\" / \"which workflow for which scene\"; user asks \"what can you do\" / \"what capabilities are there\"; capability audit before SOP planning.\nDon't use: for the full description of one specific tool (use tools/list — the 'summary' mode here gives one-liners only); for account balance or remaining credits (CONTRACT §9 forbids exposing account endpoints via MCP).\nReturns: { version, locale, liveTools[{name, domain, oneLiner, cost}], workflows[{title, steps[], note}], tips[] }.\nPair with: ↓ AI decides which concrete tool to call next; does not consume downstream tools.\nCost: 0 points (local data, no backend round-trip).",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "clientSource": {
+                "description": "调用来源标记。仅由 Pangolinfo Skill 传 skill；普通 MCP 调用省略即可。",
+                "enum": ["skill", "mcp"],
+                "type": "string"
+              },
+              "detail": {
+                "default": "summary",
+                "description": "'summary' returns tool catalog + canonical workflows (default, token-light); 'full' also expands all 20 tool descriptions (use on first integration or when context budget allows).",
+                "enum": ["summary", "full"],
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:f2bb1d317b9801f5bfbac1a8f6facad145672dc5929d5cbe7a34caefec19ac00"
+        },
+        {
+          "name": "scrape_url",
+          "description": "[Amazon Scraper API — generic page access] Scrape pages the 5 purpose-built tools don't cover. Two input modes (pick one):\n① content=bare fragment (keyword / nodeId / sellerId / ASIN) + site — backend builds a basic URL per parserName. **content mode carries NO filter/sort/pagination** — it's just the bare fragment. Best for simple pages when you only have the fragment.\n② url=full Amazon link — **put ANY filter/sort/pagination into this url** (the only way, since content mode can't). Filter syntax examples: price $25-50 → '/s?k=earbuds&low-price=25&high-price=50'; sort by reviews → '&s=review-rank'; paginate → '&page=2'; category+price → '/s?i=aps&rh=n%3A172282&fs=true&low-price=25'.\nUse when: a standard tool can't build the target URL — \"search X but only $25-50\" / \"results sorted by reviews\" / \"category filtered by price\"; or the user already has a specific Amazon link. For any filtering, use url mode.\nDon't use: when a purpose-built tool fits — plain keyword search → search_amazon, single ASIN → get_amazon_product, seller → list_seller_products, category ranks → list_bestsellers/list_new_releases.\nReturns (format='json'): data.json[0].data.{ ... results[] ... }, shape depends on parserName. amzFollowSeller returns items[{options,price,delivery,shipsFrom,soldBy,hasSoldByLink,isFeatured?}], where hasSoldByLink explicitly tells whether the seller name was a hyperlink. Code 9204 means the ASIN is missing on this marketplace; it is billed and must not be automatically retried. Code 9206 is a confirmed, billed ASIN redirect; message identifies the destination. Do not automatically retry or query the destination ASIN. ⚠️ If content/url doesn't match parserName, the backend returns data.{ status_code, rawHtml, url } (unparsed).\nPair with: ↓ feed asin into get_amazon_product / get_amazon_reviews.\nCost: ~1 point/call, ~5s.\n⚠️ Pass exactly one of content / url (both or neither errors); filtering/pagination requires url mode; parserName must match the page type.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "clientSource": {
+                "description": "调用来源标记。仅由 Pangolinfo Skill 传 skill；普通 MCP 调用省略即可。",
+                "enum": ["skill", "mcp"],
+                "type": "string"
+              },
+              "content": {
+                "description": "Bare fragment (backend builds the URL per parserName). Pass this OR url. Examples: 'wireless earbuds' (amzKeyword) / '172282' (nodeId for amzProductOfCategory) / 'ATVPDKIKX0DER' (sellerId for amzProductOfSeller) / 'B0B4NLGCH5' (ASIN for amzProductDetail, amzDeliveryTime, or amzFollowSeller). Users/AI usually only have the fragment — prefer this.",
+                "type": "string"
+              },
+              "format": {
+                "default": "json",
+                "description": "Response format. Defaults to 'json' (structured results). Use 'markdown' for the rendered page text.",
+                "enum": ["json", "markdown"],
+                "type": "string"
+              },
+              "parserName": {
+                "description": "Parser deciding how the backend extracts the page AND builds the URL from content. Must match the page type: amzKeyword=keyword search (content=keyword) / amzProductOfCategory=category (content=nodeId) / amzProductOfSeller=seller storefront (content=sellerId) / amzProductDetail=single product (content=ASIN) / amzBestSellers / amzNewReleases / amzReviewV2=reviews / amzFollowSeller=follow-seller / amzVariantAsin=variant.",
+                "enum": ["amzKeyword", "amzProductDetail", "amzProductOfCategory", "amzProductOfSeller", "amzBestSellers", "amzNewReleases", "amzReviewV2", "amzFollowSeller", "amzVariantAsin"],
+                "type": "string"
+              },
+              "site": {
+                "default": "amz_us",
+                "description": "Amazon site (in content mode the backend picks the domain from this). Defaults to amz_us. Optional in url mode (the URL already has the domain).",
+                "enum": ["amz_us", "amz_de", "amz_uk", "amz_jp", "amz_fr", "amz_it", "amz_es", "amz_ca", "amz_au", "amz_mx", "amz_sa", "amz_ae", "amz_br"],
+                "type": "string"
+              },
+              "url": {
+                "description": "Full Amazon URL (https://). Pass this OR content. Use when you already have a ready link (e.g. a filtered/sorted SERP copied from the browser). Example: 'https://www.amazon.com/s?k=earbuds&rh=p_36%3A2500-5000&s=review-rank'. Must match parserName.",
+                "format": "uri",
+                "type": "string"
+              },
+              "zipcode": {
+                "description": "ZIP/postal code matching the site or URL country. Optional; backend picks one when omitted. Supported: US 10041/90001/60601/84104; UK W1S 3AS/EH15 1LR/M13 9PL/M2 5BQ; CA M4C 4Y4/V6E 1N2/H3G 2K8/T2R 0G5; DE 80331/10115/20095/60306; FR 75000/69001/06000/13000; JP 100-0004/060-8588/163-8001/900-8570; IT 20019/50121/00042/30100; ES 41001/28001/08001/46001; AU 2000_SYDNEY/3000_MELBOURNE; MX 01000/55000; SA Riyadh_الرياض/Jeddah_جدة; AE Abu Dhabi_ADCO Compound/Ajman_Aamra; BR 03001-000/20031-000.",
+                "enum": ["10041", "90001", "60601", "84104", "W1S 3AS", "EH15 1LR", "M13 9PL", "M2 5BQ", "M4C 4Y4", "V6E 1N2", "H3G 2K8", "T2R 0G5", "80331", "10115", "20095", "60306", "75000", "69001", "06000", "13000", "100-0004", "060-8588", "163-8001", "900-8570", "20019", "50121", "00042", "30100", "41001", "28001", "08001", "46001", "2000_SYDNEY", "3000_MELBOURNE", "01000", "55000", "Riyadh_الرياض", "Jeddah_جدة", "Abu Dhabi_ADCO Compound", "Ajman_Aamra", "03001-000", "20031-000"],
+                "type": "string"
+              }
+            },
+            "required": ["parserName"],
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:478c150a303985c5cdc705e46248a43e887b82f17df5704660021e4855cd7f58"
+        },
+        {
+          "name": "search_amazon",
+          "description": "[Amazon SERP scrape] Run a real Amazon keyword search and return the first-page ASIN list.\nUse when: user says \"search Amazon for X\" / \"who sells X\" / \"top results for keyword X\" / \"competitors for X\"; or you need a list of ASINs for a keyword as upstream input to deeper analysis.\nDon't use: for a single ASIN detail (use get_amazon_product); for category bestseller ranks (use list_bestsellers); for Google/external demand on the term (use ai_search or keyword_trends).\nReturns (format='json', default): data.json[0].data.{ pageIndex, nextPage, keyword, results[{ asin, title, price, star, rating, sales, badge, rank, sponsored, image, delivery }] } — ~22 rows/page. **Pagination**: use the 'page' param (default 1, 1-based); response's 'nextPage' holds the next page number, 'nextPage=null' means last page reached.\nPair with: ↓ feed results[].asin into get_amazon_product / get_amazon_reviews for single-product deep-dive; ↓ feed the same keyword into keyword_trends to compare in-site vs external demand.\nCost: ~1 point/page, ~5s. **Only paginate when the user explicitly asks for more / Top-N (N>22) / all results** — otherwise the first page is enough.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "clientSource": {
+                "description": "调用来源标记。仅由 Pangolinfo Skill 传 skill；普通 MCP 调用省略即可。",
+                "enum": ["skill", "mcp"],
+                "type": "string"
+              },
+              "format": {
+                "default": "json",
+                "description": "Response format. Defaults to 'json' — structured search rows (asin, title, price, star, rating, sales, badge, rank, ...) ready for programmatic use. Use 'markdown' if you want the rendered SERP text instead.",
+                "enum": ["json", "markdown"],
+                "type": "string"
+              },
+              "keyword": {
+                "description": "Search keyword. Examples: 'wireless earbuds' / 'stanley quencher' / 'iphone 16 case' / 'kitchen knife set'.",
+                "minLength": 1,
+                "type": "string"
+              },
+              "page": {
+                "default": 1,
+                "description": "Page number, 1-based. ~22 ASINs per page. Use response's pageIndex/nextPage to decide whether to continue: nextPage holds the next page number; nextPage=null (or absent) means last page reached. **Only paginate when the user explicitly asks for more / Top-N where N exceeds one page / all results** — otherwise the first page is enough.",
+                "minimum": 1,
+                "type": "integer"
+              },
+              "site": {
+                "default": "amz_us",
+                "description": "Amazon marketplace. Defaults to 'amz_us' (US).",
+                "enum": ["amz_us", "amz_uk", "amz_de", "amz_jp", "amz_fr", "amz_it", "amz_es", "amz_ca", "amz_au", "amz_sa", "amz_ae", "amz_br", "amz_mx"],
+                "type": "string"
+              },
+              "zipcode": {
+                "description": "ZIP code that must match the site country (amz_us → US zip, amz_jp → JP zip, ...). Optional; backend picks a random one from the per-country pool when omitted. Cross-country zips (e.g. amz_us + JP zip) are rejected by the backend. Examples: 10001 (NY) / 90001 (LA) / 100-0001 (Tokyo).",
+                "type": "string"
+              }
+            },
+            "required": ["keyword"],
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:569778e09c7832e6321b148b14613cf1fed5361cdf9bdc2908e74862853ecb39"
+        },
+        {
+          "name": "search_amazon_alexa",
+          "description": "[Alexa Agent API] Ask Amazon Rufus and receive answers, grouped product recommendations and follow-up suggestions. Separate pools support the United States (default) and Japan.\nUse when: scenario-based discovery, gifts or open-ended shopping advice. Use search_amazon for explicit keywords and get_amazon_product for a single ASIN.\nReturns: data.json[{prompt,status,content,products[{title,items[{asin,url,title,cover,score,ratingsCount,price,originalPrice,describe}]}],follow_up_questions[],refusal_message?}]. status is answered, refused (Amazon declined: content is empty and refusal_message holds its wording) or failed (this turn was not obtained). Products and suggestions depend on Amazon's answer and may be empty.\nCost: 6 points per answered prompt; refused or failed turns are not billed. If every turn is declined the call fails with ALEXA_REFUSED (9207, not billed; the same prompt will be declined again, so rephrase instead of retrying). Turns within one call share context; separate calls do not.\nGeneral non-screenshot questions use native HTTP; product-targeted questions and screenshots use the browser path. US queries accept asin or url (including books); both must match when supplied together. Returned asin and context_source=product_page indicate verified PDP context. Latency varies with initialization, network and question, with no fixed-time guarantee. Allow at least 120 seconds in the client; do not issue concurrent duplicates while waiting.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "asin": {
+                "description": "Optional US product ASIN. Ask in that product's detail-page context, including books. Supply asin or url; if both are supplied they must match.",
+                "pattern": "^[A-Za-z0-9]{10}$",
+                "type": "string"
+              },
+              "clientSource": {
+                "description": "调用来源标记。仅由 Pangolinfo Skill 传 skill；普通 MCP 调用省略即可。",
+                "enum": ["skill", "mcp"],
+                "type": "string"
+              },
+              "prompts": {
+                "description": "1–5 natural-language prompts. Prompts within one call form a sequential conversation; separate calls do not retain context. Each prompt costs 6 points (N prompts=N×6); multiple turns increase latency.",
+                "items": {
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "maxItems": 5,
+                "minItems": 1,
+                "type": "array"
+              },
+              "screenshot": {
+                "default": false,
+                "description": "Return a page screenshot. General questions use native HTTP by default; product-targeted questions and screenshots use the browser path.",
+                "type": "boolean"
+              },
+              "site": {
+                "default": "us",
+                "description": "Amazon marketplace: us (United States, default) or jp (Japan). Pools are isolated; unavailable markets fail rather than falling back to the US.",
+                "enum": ["us", "jp"],
+                "type": "string"
+              },
+              "url": {
+                "description": "Optional amazon.com product detail URL. Uses the product-page panel and may take longer than a general query.",
+                "format": "uri",
+                "type": "string"
+              }
+            },
+            "required": ["prompts"],
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:2d8497565bbe8576c27ef029076c99112ebde8f62707118dd4b87cfdbb05e7ec"
+        },
+        {
+          "name": "search_categories",
+          "description": "[Amazon category search] Match Amazon's category tree by keyword (Chinese or English) and return candidate nodes.\nUse when: user gave a keyword/concept rather than a category id, and a downstream tool needs categoryId / browseNodeId (e.g. filter_niches / filter_categories / list_category_products / inferring list_bestsellers slug); when you need to know where a product concept lives in Amazon's taxonomy.\nDon't use: when you already have categoryId/nodeId (use get_category_paths for breadcrumbs or a downstream filter directly); when you want to drill the subtree (use get_category_children).\nReturns: data.items.data[{ browseNodeId, browseNodeIdPath, browseNodeName, browseNodeNameCn, browseNodeNamePath, browseNodeNamePathCn, parentBrowseNodeIdPath, productType, sellable, hasChild }] + pagination.\nPair with: ↓ feed browseNodeId into list_category_products / list_bestsellers (derive slug from path) / filter_niches / filter_categories; ↓ feed into get_category_children to drill further; ↓ feed into get_category_paths for breadcrumbs.\nCost: ~1 point/call, ~3s.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "clientSource": {
+                "description": "调用来源标记。仅由 Pangolinfo Skill 传 skill；普通 MCP 调用省略即可。",
+                "enum": ["skill", "mcp"],
+                "type": "string"
+              },
+              "keyword": {
+                "description": "Category name keyword (Chinese or English). Examples: 'headphones' / 'kitchen knives' / '无线耳机' / 'wireless earbuds'.",
+                "minLength": 1,
+                "type": "string"
+              },
+              "site": {
+                "default": "amz_us",
+                "description": "Marketplace to search categories in. Defaults to 'amz_us'.",
+                "enum": ["amz_us", "amz_uk", "amz_de", "amz_jp", "amz_fr", "amz_it", "amz_es", "amz_ca", "amz_au", "amz_sa", "amz_ae", "amz_br", "amz_mx"],
+                "type": "string"
+              }
+            },
+            "required": ["keyword"],
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:5e466ab9f6f2f2db8b5e582c59e2c4bf56f3864c0cc819d5fcc8cb81c1c714da"
+        },
+        {
+          "name": "search_local_maps",
+          "description": "[Local Maps via Google Maps] Local-business search (data source: Google Maps; use must comply with Google Terms of Service). Search local businesses at a given lat/lng — returns name, address, rating, review count, etc.\nUse when: user says \"Y businesses in city X\" / \"local retail research\" / \"offline channel distribution\" / \"coffee shops/supermarkets/wholesalers in area\" / \"physical-store coverage density\"; offline competitor/channel research; gauging physical-supply density of a category in a region.\nDon't use: for e-commerce listings (Amazon series); for global trends (use keyword_trends); for Google search results (use ai_search).\nReturns: data.organicResults[{ place_id, name, about, rating, number_of_reviews, borough, street_addr, city, postal_code, ... }].\nPair with: ↑ query (business keyword) + latitude/longitude/zoom (zoom 1=world, 13=city, 21=single building); ↓ presentation-focused, downstream rarely consumes.\nCost: ~1.5 points/call, ~5s.\nTips: zoom 13 (city, default) gives you a whole neighborhood; zoom 17+ narrows to one street.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "clientSource": {
+                "description": "调用来源标记。仅由 Pangolinfo Skill 传 skill；普通 MCP 调用省略即可。",
+                "enum": ["skill", "mcp"],
+                "type": "string"
+              },
+              "language": {
+                "default": "en",
+                "description": "BCP-47 language code, e.g. 'en', 'zh-CN'.",
+                "type": "string"
+              },
+              "latitude": {
+                "description": "Latitude of search center. Examples: 37.7822 (San Francisco) / 40.7128 (New York) / 34.0522 (Los Angeles).",
+                "maximum": 90,
+                "minimum": -90,
+                "type": "number"
+              },
+              "limit": {
+                "default": 50,
+                "description": "Max results to return (1-100).",
+                "maximum": 100,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "longitude": {
+                "description": "Longitude of search center. Examples: -122.4642 (San Francisco) / -74.0060 (New York) / -118.2437 (Los Angeles).",
+                "maximum": 180,
+                "minimum": -180,
+                "type": "number"
+              },
+              "query": {
+                "description": "Local search query. Examples: 'coffee shop' / 'wholesale electronics' / '电子产品批发' / 'pet store'.",
+                "minLength": 1,
+                "type": "string"
+              },
+              "zoom": {
+                "default": 13,
+                "description": "Map zoom level, 1=world, 13=city, 21=building. Default 13.",
+                "maximum": 21,
+                "minimum": 1,
+                "type": "integer"
+              }
+            },
+            "required": ["latitude", "longitude", "query"],
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:326e506751c33f736ef68d7d720d50929c9dd0ee18906e250e89621c97c9629c"
+        },
+        {
+          "name": "wipo_search",
+          "description": "[Design Patent TRO risk control · WIPO global design / IP search] Query the WIPO design database across 12 sources (USPTO US designs, CNID China, HAGUE international registrations, …), with one-click chaining to US design-patent TRO (temporary restraining order) / litigation risk control.\nUse when: user says \"check trademark\" / \"design patent search\" / \"any IP risk for new product\" / \"X company's patent portfolio\" / \"WIPO search\" / \"USPTO query\" / \"what is registration DM/XXX\"; pre-launch IP clearance during scouting/GTM SOPs; competitor IP-portfolio research.\nDon't use: for keyword ranks / product reviews / product detail (this is an IP database, not a commerce database); for US text-trademark search (this DB focuses on design patents — text trademark coverage is limited).\nReturns: data.data.{ total, hits[{ IRN, HOL[], DETAIL_DATA.structured.{indication_of_products, statement_of_novelty, ...}, IMG[], IMG_DATA[{filename,url}], DC, RD, STATUS, LCS[], DS[], PROD[], SOURCE, DETAIL_URL }] }. With enableLitigation=true each matched patent additionally carries litigationStatus(success/skipped/failed) + caseTotal + cases[{ caseId, docketNumber, caseName, court, status, dateFiled, parties[], patentNumbers[], entries[] }] (backed by US PACER litigation data — one call returns patents + lawsuits).\nPair with: ↑ source required; hol=holder name / prod=product name / irn=international registration / lcs=design classification; enableLitigation=true chains US litigation lookup (IP-risk loop, no separate tool needed); ↓ DETAIL_URL lets the user jump to WIPO's official page to verify.\nCost: ~2 points/call, ~5s; with enableLitigation=true add +12 points only when a patent is found (free if none).\n⚠️ Perf contract: CNID + hol/prod MUST be paired with id/idSearch/rd/status/lcs (otherwise the backend rejects to avoid a 17M-row full scan); JPID has no HOL/PROD; USID has no STATUS; ed (expiration date) is silently ignored on all sources — filter dates via rd instead. With enableLitigation on, each page re-triggers the litigation query and billing.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "clientSource": {
+                "description": "调用来源标记。仅由 Pangolinfo Skill 传 skill；普通 MCP 调用省略即可。",
+                "enum": ["skill", "mcp"],
+                "type": "string"
+              },
+              "ds": {
+                "description": "Designated country code (e.g. 'US', 'CN'). Optional — usually implied by `source`.",
+                "type": "string"
+              },
+              "enableLitigation": {
+                "default": false,
+                "description": "Enable Smart Risk Control Mode: after patents match, auto-query related US litigation (PACER backend) by patent number; cases are joined into each patent's `cases` field. Default false. When on, each matched patent gains litigationStatus / caseTotal / cases; +12 points charged only when a patent is found (free if none).",
+                "type": "boolean"
+              },
+              "from": {
+                "default": 0,
+                "description": "Pagination offset, 0-based.",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "hol": {
+                "description": "Holder name fuzzy match. Examples: 'Apple' / 'Samsung' / 'Nike'. NOTE: CNID + hol MUST be paired with id/idSearch/rd/status/lcs; JPID has no HOL column (will be ignored).",
+                "type": "string"
+              },
+              "id": {
+                "description": "Full ID exact match, e.g. 'CNID.2023.123456'. Routes CNID queries to a single partition (avoids full scan).",
+                "type": "string"
+              },
+              "idSearch": {
+                "description": "ID variant fuzzy match.",
+                "type": "string"
+              },
+              "irn": {
+                "description": "International Registration Number exact match. Examples: 'DM/000298' (HAGUE) / 'D1107730' (USID).",
+                "type": "string"
+              },
+              "lcs": {
+                "description": "Design classification (Locarno Classification code), e.g. '23-01' = fluid distribution equipment.",
+                "type": "string"
+              },
+              "num": {
+                "default": 10,
+                "description": "Page size (default 10, max 100).",
+                "maximum": 100,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "prod": {
+                "description": "Product name fuzzy match. CNID searches Chinese, other sources search English. Examples: '椅子' (CNID) / 'wireless headphones' (USID) / 'iphone case' (USID). CNID + prod MUST be paired with id/idSearch/rd/status/lcs; JPID has no PROD column.",
+                "type": "string"
+              },
+              "rd": {
+                "description": "Registration date (YYYY or YYYY-MM-DD). One of the recommended narrowing fields for CNID — routes to a year partition.",
+                "type": "string"
+              },
+              "source": {
+                "description": "Data source (required). WIPO data is partitioned by source — cross-source queries not supported. Common: USID (US design), CNID (China design, 17M+ rows), HAGUE (Hague international), DEID, JPID.",
+                "enum": ["USID", "CNID", "DEID", "JPID", "KRID", "EMID", "FRID", "INID", "ITID", "ESID", "CHID", "HAGUE"],
+                "type": "string"
+              },
+              "status": {
+                "description": "Legal status: 'ACT' (active), 'EXP' (expired), etc. USID has no STATUS column (will be ignored).",
+                "type": "string"
+              }
+            },
+            "required": ["source"],
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:83913d9bf6b0b14960de5c94d129069fc175c23370cc1bcf52c621cff184fd4d"
+        }
+      ],
+      "digest": "sha256:087d721675166c0ff21cb72442a5558af7be6608e10cd520c407627f5036b2a1"
+    }
+  }
+}

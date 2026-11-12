@@ -1,0 +1,2111 @@
+{
+  "lockfileVersion": 2,
+  "subjects": {
+    "com.invoicevista/invoicevista": {
+      "kind": "mcp-server",
+      "source": {
+        "client": "manual",
+        "file": "registry.modelcontextprotocol.io"
+      },
+      "transport": {
+        "type": "http",
+        "url": "https://mcp.invoicevista.com/mcp"
+      },
+      "protocol": {
+        "era": "modern",
+        "version": "2026-07-28",
+        "supportedVersions": ["2026-07-28"]
+      },
+      "serverInfo": {
+        "name": "invoicevista-mcp",
+        "title": "InvoiceVista Invoice Maker",
+        "version": "0.3.0"
+      },
+      "capabilities": {
+        "extensions": {
+          "io.modelcontextprotocol/skills": {}
+        },
+        "resources": {
+          "listChanged": false
+        },
+        "tools": {
+          "listChanged": false
+        }
+      },
+      "instructions": "# Billing operations with InvoiceVista\n\nUse the InvoiceVista MCP connector only after the user connects InvoiceVista\nand authorizes the intended organization. If OAuth fails, ask them to connect\nInvoiceVista. Never request, embed, repeat or infer an API key, password, OAuth\ntoken, payment credential, bank detail, processor id or webhook secret.\n\n## What the connector changes\n\nEvery tool is idempotent, tenant-scoped and closed-world. Three of them write:\n`create_customer` and `update_customer` add and change a customer of the\nuser's own business, and `set_inventory_quantity` sets one stock count. Before\nany of them, show the user exactly what will be saved and wait for their yes.\nEvery other tool is read-only. The writes need the `invoicevista:write`\npermission: a connection made before they existed holds read access only, so\nwhen a write tool is missing, ask the user to disconnect and reconnect\nInvoiceVista and allow changes.\n\nBeyond those three, the connector cannot create, edit, delete or send an\ninvoice, payment or quote, delete a customer, charge, retry, refund, settle,\ntransfer or otherwise move money. It cannot contact customers or give an\nindividualized financial decision. Direct the authorized operator to\nInvoiceVista's first-party controls for other changes and to a qualified\nprofessional for advice.\n\n## Identifier and tenant handling\n\nOwned business ids chain the reads: resolve one with `list_businesses`, then\nreuse that exact id for summaries, catalog, plan and stock. A customer id comes\nonly from `find_customer` and a stock item id only from\n`list_inventory_items`, each with the `lastEditTime` its change needs. Never\nguess an id or treat an opaque id as authority; the InvoiceVista API rechecks\nOAuth product, scope, live user membership and organization on every request.\nA cross-tenant id returns not found or an authorization error.\n\nProduct rows and subscription results deliberately have no persisted record\nids because none is needed for another connector tool.\n\n## Available tools\n\n| Tool                         | Use it when someone asks…                                                                |\n| ---------------------------- | ---------------------------------------------------------------------------------------- |\n| `list_businesses`            | which businesses they invoice from; also resolves the business ID every other tool needs |\n| `get_business`               | about one business's currency, country, language or timezone                             |\n| `get_revenue_summary`        | how much was invoiced or paid in a period (at most 366 UTC days, drafts skipped)         |\n| `get_receivables_summary`    | what customers owe, what is overdue and how old unpaid invoices are                      |\n| `get_quote_pipeline_summary` | how many quotes were sent, their value and how many were accepted (at most 366 days)     |\n| `list_products`              | what the business sells and at what price                                                |\n| `get_subscription`           | which InvoiceVista plan the business is on and its limits                                |\n| `show_business_overview`     | for a one-card overview of one business                                                  |\n| `find_customer`              | about a customer they name, when the next step needs that customer's id                  |\n| `create_customer`            | to add a new customer, with the details they give                                        |\n| `update_customer`            | to change a customer's name, email, phone, tax id, address or language                   |\n| `list_inventory_items`       | how much of something is in stock, or what is running low                                |\n| `set_inventory_quantity`     | to correct a stock count after a count or a delivery                                     |\n\n`list_businesses` and `list_products` accept at most 100 rows and return an\nopaque cursor. Do not claim completeness when `hasMore` is true.\n`show_business_overview` caps customer/invoice/payment/quote counts at 100 and\nthe product preview at 12; report each lower-bound flag. Aggregate summary\nsources cap at 500 _after_ tenant and requested-date filtering; report\n`*IsLowerBound` and `amountMissingCount` rather than treating a partial total as\ncomplete.\n\n## Customer and financial-data boundary\n\nSafe outputs can contain:\n\n- owned business id/name, currency, country, locale and timezone;\n- aggregate customer/invoice/payment/quote/product counts and status counts;\n- bounded UTC date range and as-of calendar day;\n- signed aggregate invoice, payment, quote, outstanding and overdue amounts;\n- aggregate age buckets, source/missing/lower-bound flags and optional rates;\n- product catalog name, price and tax;\n- subscription plan name/status/frequency and quota limits;\n- for a customer the user named, its id, name, business and last edit time,\n  at most five matches, and the last two digits of a phone only when two\n  customers share a name; and\n- stock item id, name, unit, quantity, minimum and low-stock flag.\n\nThe connector never exposes:\n\n- a list of customers, or any customer's email, phone, address,\n  tax/government identifiers, notes or profile;\n- individual invoice/payment/quote ids, numbers, status, exact date/time,\n  value, customer linkage or document body;\n- notes, line item names/descriptions, arbitrary search or metadata;\n- cardholder, bank account, processor/customer, settlement, credential,\n  webhook, error/debug or secret data; or\n- any money-transfer, charge, refund, retry, settlement, invoice, payment or\n  quote write, or financial-advice capability.\n\nDo not ask users to paste excluded data into chat or infer a customer from an\naggregate. Offer a safe aggregate/catalog/plan read or the first-party\nInvoiceVista dashboard.\n\n## Revenue workflow\n\n1. Use `list_businesses` unless the exact owned business id is already known.\n2. Call `get_business` for currency/timezone context.\n3. Call `get_revenue_summary` with explicit inclusive `YYYY-MM-DD` UTC dates\n   when the user names a period; the maximum is 366 days. With no range, it\n   defaults to the 90 days ending today.\n4. Distinguish non-draft invoice production from recorded payments. Do not\n   call either recognized revenue or independent bank settlement. Payment\n   totals include every payment recorded in the range, whatever its status.\n5. Collection rate is null when source rows are truncated, numeric values are\n   missing or invoice production is zero. Never calculate a definitive rate\n   from incomplete aggregates.\n6. Signed negative values may represent adjustments/refunds. Describe the\n   recorded aggregate; do not infer cause or provide advice.\n\nThe revenue summary MCP App renders the same aggregate output and invoice\nstatus mix; it receives no individual records.\n\n## Receivables workflow\n\n1. Call `get_receivables_summary` for open/overdue counts, signed amounts and\n   age buckets as of the returned UTC day.\n2. Report `sourceInvoiceCountIsLowerBound` before discussing completeness.\n3. Explain `partiallyPaidCountExcludedFromAmount`: InvoiceVista does not store\n   remaining balance, so including the full invoice would overstate debt.\n   The overdue count covers invoices whose status is `OVERDUE`; a pending\n   invoice past its due date shows up in the age buckets only.\n4. Use age buckets only as aggregate operational groupings. No customer or\n   individual invoice can be resolved.\n5. Do not recommend collection action against a person, extend/deny credit or\n   initiate a charge.\n\n## Quote, catalog and plan workflow\n\nUse `get_quote_pipeline_summary` with an explicit bounded period. Draft quotes\nare omitted. Acceptance rate uses approved versus rejected decisions and is\nnull when the source is truncated or no decision exists. Do not describe\npending value as guaranteed revenue.\n\nUse `list_products` only after resolving a business. Catalog names are\noperator-provided product labels, not line descriptions from a customer\ndocument. Prices/tax are configuration and need not equal a final charge;\n`tax` is the product's stored tax value and is null when none was set.\n\nUse `get_subscription` for InvoiceVista plan capacity. A business with no\nactive/past-due persisted plan receives documented Free defaults. It never\nreturns subscription, processor product/price or payment-method ids.\n\n## Customer workflow\n\n1. Find the customer the user named with `find_customer`, passing the name as\n   they gave it. Every word must appear in the stored name, so ask for more of\n   it when the tool reports `tooManyMatches`, and ask which one when two come\n   back; `phoneEnding` is there to tell namesakes apart.\n2. To add a customer, call `create_customer` with the name and only the details\n   the user gave, and a new `requestId`. Retrying with the same `requestId`\n   returns the first customer instead of adding a second. A new customer is a\n   company unless the user says otherwise.\n3. To change one, call `update_customer` with the customer's id, the\n   `lastEditTime` from `find_customer` and only the fields that change. An\n   address given in part changes only those lines. A customer changed since it\n   was read is refused: read it again, show the user and retry once they\n   confirm.\n4. It never returns a customer's email, phone number, address or tax id. When\n   someone asks for them, or to export customers, say the connector does not\n   share them and that the InvoiceVista app shows them.\n\n## Stock workflow\n\nCall `list_inventory_items` for a business's stock: up to 100 items with unit,\nquantity, minimum and `lowStock`, and `lowStockOnly` for what is running low.\n`set_inventory_quantity` replaces the stored quantity with the number given,\nso when the user reports a change (\"we used 3 reams\"), work out the new total\nfrom the quantity read, confirm it, and pass the item's `lastEditTime`. A\nretried call cannot apply a change twice. Stock items are added and removed in\nthe app.\n\n## Aggregate overview\n\n`show_business_overview` is the broad first safe check. It displays business\nconfiguration, aggregate counts/status counts and product preview. It does not\ndisplay individual financial dates, amounts or identifiers. Follow with the\nspecific aggregate summary rather than trying to reconstruct records from\ncounts.\n\n## Safe fallbacks\n\n- Individual invoice, payment or quote request: say the connector\n  intentionally has no such tool; offer aggregate status/value counts or the\n  first-party app.\n- Customer contact, tax id or address request, or a customer export: say the\n  connector does not share them and that the InvoiceVista app shows them.\n- Card/bank/processor/credential request: do not call a tool; explain those\n  fields never enter connector output.\n- Charge/refund/retry/settle/transfer request, or a change to an invoice,\n  payment or quote: explain the connector cannot make it; do not pretend a\n  read changed state.\n- Financial advice or customer targeting: do not use aggregates to recommend\n  an individualized decision; offer factual aggregate reporting only.\n- Unrelated task: do not invoke InvoiceVista.\n\n## Interactive workspace\n\nWhen the user wants to open InvoiceVista Invoice Maker or browse visually, call `open_invoicevista` with no arguments. It opens a read-only sidebar of up to 100 businesses with explicit truncation. Select a business for its aggregate overview, revenue, receivables and quote pipeline. Existing individual customer and document restrictions still apply.\n",
+      "tools": [
+        {
+          "name": "create_customer",
+          "title": "Add a customer",
+          "description": "Use this when someone asks to add a new customer to a business, such as a client they are about to invoice. Returns the customer's id, name, business and language; the email, phone, tax id and address given are saved but never returned. Not for changing an existing customer.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "address": {
+                "additionalProperties": false,
+                "description": "Billing address.",
+                "properties": {
+                  "city": {
+                    "maxLength": 100,
+                    "type": "string"
+                  },
+                  "countryCode": {
+                    "maxLength": 2,
+                    "type": "string"
+                  },
+                  "postalCode": {
+                    "maxLength": 30,
+                    "type": "string"
+                  },
+                  "state": {
+                    "maxLength": 100,
+                    "type": "string"
+                  },
+                  "street": {
+                    "maxLength": 200,
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              },
+              "businessId": {
+                "description": "Business id: 24 lowercase hexadecimal characters; may be absent when the account has one business.",
+                "maxLength": 24,
+                "minLength": 24,
+                "pattern": "^[0-9a-f]{24}$",
+                "type": "string"
+              },
+              "email": {
+                "description": "Email address their invoices go to.",
+                "maxLength": 254,
+                "type": "string"
+              },
+              "language": {
+                "description": "Language for their invoices and messages, as a code such as en, it or pt-BR; the business language when absent.",
+                "maxLength": 10,
+                "type": "string"
+              },
+              "legalEntity": {
+                "description": "What kind of customer this is; a new customer is stored as a company when absent.",
+                "enum": ["individual", "company", "partnership", "trust", "charity", "government"],
+                "type": "string"
+              },
+              "name": {
+                "description": "The customer's full or company name.",
+                "maxLength": 160,
+                "minLength": 1,
+                "type": "string"
+              },
+              "phone": {
+                "description": "Mobile number, with the country code when known.",
+                "maxLength": 40,
+                "type": "string"
+              },
+              "requestId": {
+                "description": "A unique id for this customer, such as a UUID. A repeated call with the same requestId returns the first customer and adds no second one.",
+                "maxLength": 64,
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9_-]{1,64}$",
+                "type": "string"
+              },
+              "taxId": {
+                "description": "Tax or VAT number printed on their invoices.",
+                "maxLength": 64,
+                "type": "string"
+              }
+            },
+            "required": ["name", "requestId"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "customer": {
+                "additionalProperties": false,
+                "properties": {
+                  "businessId": {
+                    "anyOf": [
+                      {
+                        "maxLength": 24,
+                        "minLength": 24,
+                        "pattern": "^[0-9a-f]{24}$",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "id": {
+                    "anyOf": [
+                      {
+                        "maxLength": 24,
+                        "minLength": 24,
+                        "pattern": "^[0-9a-f]{24}$",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "language": {
+                    "anyOf": [
+                      {
+                        "maxLength": 16,
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "lastEditTime": {
+                    "anyOf": [
+                      {
+                        "maxLength": 40,
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "name": {
+                    "maxLength": 200,
+                    "type": "string"
+                  }
+                },
+                "required": ["businessId", "id", "language", "lastEditTime", "name"],
+                "type": "object"
+              },
+              "status": {
+                "enum": ["created", "already_created"],
+                "type": "string"
+              }
+            },
+            "required": ["customer", "status"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": true,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": false,
+            "title": "Add a customer"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": false
+          },
+          "meta": {
+            "securitySchemes": [
+              {
+                "scopes": ["invoicevista:write"],
+                "type": "oauth2"
+              }
+            ]
+          },
+          "digest": "sha256:b26addc504048042c6258d8ae35352d38eda3c2fe2e0e58db2082fce135994c5"
+        },
+        {
+          "name": "find_customer",
+          "title": "Find a customer by name",
+          "description": "Use this when someone names a customer to update and you need that customer's id. Returns up to five customers whose name contains every word searched, each with its id, business and last edit time; never their contact details, tax id or address. Not for listing every customer.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "businessId": {
+                "description": "Only customers of this business; every business of the account when absent",
+                "pattern": "^[0-9a-f]{24}$",
+                "type": "string"
+              },
+              "search": {
+                "description": "The customer's name as the user gave it, or part of it. Every word must appear in the stored name, in any order, ignoring case and accents.",
+                "maxLength": 100,
+                "minLength": 3,
+                "type": "string"
+              }
+            },
+            "required": ["search"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "count": {
+                "maximum": 5,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "customers": {
+                "description": "The customers whose name matches, with the ids the other tools take. Contact details, dates of birth, notes and clinical records are never returned.",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "businessId": {
+                      "anyOf": [
+                        {
+                          "pattern": "^[0-9a-f]{24}$",
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "id": {
+                      "pattern": "^[0-9a-f]{24}$",
+                      "type": "string"
+                    },
+                    "lastEditTime": {
+                      "anyOf": [
+                        {
+                          "maxLength": 32,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "name": {
+                      "maxLength": 200,
+                      "type": "string"
+                    },
+                    "phoneEnding": {
+                      "anyOf": [
+                        {
+                          "pattern": "^\\d{2}$",
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "The last two digits of the customer's phone, given only when two customers share this name"
+                    }
+                  },
+                  "required": ["businessId", "id", "lastEditTime", "name", "phoneEnding"],
+                  "type": "object"
+                },
+                "maxItems": 5,
+                "type": "array"
+              },
+              "tooManyMatches": {
+                "description": "More than 5 customers match: none are returned; ask the user for more of the name",
+                "type": "boolean"
+              }
+            },
+            "required": ["count", "customers", "tooManyMatches"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Find a customer by name"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "securitySchemes": [
+              {
+                "scopes": ["invoicevista:read"],
+                "type": "oauth2"
+              }
+            ]
+          },
+          "digest": "sha256:e8ebe3b9d50c8275397d2e43b5f5a13d1d9b012503a54a9cb6f5a46510c428dc"
+        },
+        {
+          "name": "get_business",
+          "title": "Get business details",
+          "description": "Use this when someone asks about one business's invoicing setup, such as its currency, country, language or timezone. Returns the business's name, currency, country code, language and timezone, or not-found. Not for revenue or unpaid invoices.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "businessId": {
+                "description": "Business id: 24 lowercase hexadecimal characters",
+                "pattern": "^[0-9a-f]{24}$",
+                "type": "string"
+              }
+            },
+            "required": ["businessId"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "business": {
+                "anyOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "countryCode": {
+                        "anyOf": [
+                          {
+                            "pattern": "^[A-Z]{2}$",
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "currency": {
+                        "anyOf": [
+                          {
+                            "pattern": "^[A-Z]{3}$",
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ],
+                        "description": "ISO 4217 alpha-3 business currency, or null when unset"
+                      },
+                      "id": {
+                        "pattern": "^[0-9a-f]{24}$",
+                        "type": "string"
+                      },
+                      "locale": {
+                        "anyOf": [
+                          {
+                            "maxLength": 35,
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "name": {
+                        "maxLength": 200,
+                        "type": "string"
+                      },
+                      "timezone": {
+                        "anyOf": [
+                          {
+                            "maxLength": 64,
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      }
+                    },
+                    "required": ["countryCode", "currency", "id", "locale", "name", "timezone"],
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Null when not found. Contact, legal-entity, address, banking and integration fields are omitted."
+              },
+              "status": {
+                "enum": ["found", "not-found"],
+                "type": "string"
+              }
+            },
+            "required": ["business", "status"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Get business details"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "securitySchemes": [
+              {
+                "scopes": ["invoicevista:read"],
+                "type": "oauth2"
+              }
+            ]
+          },
+          "digest": "sha256:73fabdba16425ffffaf8e5a6b4e330003d4f7cbff809bfb55dd99a001c86d3e5"
+        },
+        {
+          "name": "get_quote_pipeline_summary",
+          "title": "Summarize quotes and acceptance",
+          "description": "Use this when someone asks how many quotes or estimates they sent, what they were worth, or how many were accepted or rejected. Returns quote count, total value, counts by status and an acceptance rate; defaults to the last 90 days, at most 366, skipping drafts and counting at most 500 quotes. Not for a single quote.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "businessId": {
+                "description": "Business id: 24 lowercase hexadecimal characters",
+                "pattern": "^[0-9a-f]{24}$",
+                "type": "string"
+              },
+              "endDate": {
+                "description": "Last UTC day to include, YYYY-MM-DD, at most 366 days after startDate; defaults to today",
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+                "type": "string"
+              },
+              "startDate": {
+                "description": "First UTC day to include, YYYY-MM-DD; defaults to 89 days before endDate (a 90-day window)",
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+                "type": "string"
+              }
+            },
+            "required": ["businessId"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "acceptanceRatePercent": {
+                "anyOf": [
+                  {
+                    "minimum": 0,
+                    "type": "number"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Approved quotes as a percentage of approved plus rejected; null when the count is a lower bound or none was decided"
+              },
+              "amountMissingCount": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "currency": {
+                "anyOf": [
+                  {
+                    "pattern": "^[A-Z]{3}$",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "ISO 4217 alpha-3 business currency, or null when unset"
+              },
+              "quoteCount": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "quoteCountIsLowerBound": {
+                "type": "boolean"
+              },
+              "quotedAmount": {
+                "type": "number"
+              },
+              "range": {
+                "additionalProperties": false,
+                "properties": {
+                  "endDate": {
+                    "$ref": "#/properties/range/properties/startDate"
+                  },
+                  "startDate": {
+                    "description": "UTC calendar date in YYYY-MM-DD format",
+                    "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+                    "type": "string"
+                  }
+                },
+                "required": ["endDate", "startDate"],
+                "type": "object"
+              },
+              "statusBreakdown": {
+                "description": "Non-draft quotes issued in the range, per status, with count and amount. Quote and customer identifiers, contacts, tax ids, addresses, notes, line descriptions and free text are never returned.",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "amount": {
+                      "type": "number"
+                    },
+                    "amountMissingCount": {
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "count": {
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "status": {
+                      "enum": ["DRAFT", "PENDING", "REJECTED", "APPROVED", "UNKNOWN", "OTHER"],
+                      "type": "string"
+                    }
+                  },
+                  "required": ["amount", "amountMissingCount", "count", "status"],
+                  "type": "object"
+                },
+                "maxItems": 6,
+                "type": "array"
+              }
+            },
+            "required": ["acceptanceRatePercent", "amountMissingCount", "currency", "quoteCount", "quoteCountIsLowerBound", "quotedAmount", "range", "statusBreakdown"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Summarize quotes and acceptance"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "securitySchemes": [
+              {
+                "scopes": ["invoicevista:read"],
+                "type": "oauth2"
+              }
+            ]
+          },
+          "digest": "sha256:145bbf1bcb2df86eb0a1f5942b74efbb5738a91e97c33179fb7cb87f22283d3c"
+        },
+        {
+          "name": "get_receivables_summary",
+          "title": "Check unpaid and overdue invoices",
+          "description": "Use this when someone asks how much customers owe, what is unpaid or overdue, or how old unpaid invoices are. Returns open invoice count and amount, the invoices marked overdue, and age buckets by days past due, from the newest 500 invoices; partially paid ones are counted but left out of amounts. Not for chasing or charging a customer.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "businessId": {
+                "description": "Business id: 24 lowercase hexadecimal characters",
+                "pattern": "^[0-9a-f]{24}$",
+                "type": "string"
+              }
+            },
+            "required": ["businessId"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "aging": {
+                "description": "Fully owed open invoices by days past their due date (issue date when none) as of asOfDate. Invoice and customer identifiers, exact dates, contacts, tax ids, addresses, notes, line text, bank or card data, processor data and payment actions are never returned.",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "amount": {
+                      "type": "number"
+                    },
+                    "amountMissingCount": {
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "bucket": {
+                      "enum": ["not-due", "0-30", "31-60", "61-90", "90+"],
+                      "type": "string"
+                    },
+                    "count": {
+                      "minimum": 0,
+                      "type": "integer"
+                    }
+                  },
+                  "required": ["amount", "amountMissingCount", "bucket", "count"],
+                  "type": "object"
+                },
+                "maxItems": 5,
+                "type": "array"
+              },
+              "amountMissingCount": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "asOfDate": {
+                "description": "UTC calendar date in YYYY-MM-DD format",
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+                "type": "string"
+              },
+              "currency": {
+                "anyOf": [
+                  {
+                    "pattern": "^[A-Z]{3}$",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "ISO 4217 alpha-3 business currency, or null when unset"
+              },
+              "openInvoiceCount": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "outstandingAmount": {
+                "type": "number"
+              },
+              "overdueAmount": {
+                "type": "number"
+              },
+              "overdueInvoiceCount": {
+                "description": "Fully owed invoices whose status is OVERDUE; a PENDING invoice past its due date is counted only in aging",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "partiallyPaidCountExcludedFromAmount": {
+                "description": "Open partially paid invoices left out of every amount because their remaining balance is not stored",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "sourceInvoiceCount": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "sourceInvoiceCountIsLowerBound": {
+                "type": "boolean"
+              }
+            },
+            "required": ["aging", "amountMissingCount", "asOfDate", "currency", "openInvoiceCount", "outstandingAmount", "overdueAmount", "overdueInvoiceCount", "partiallyPaidCountExcludedFromAmount", "sourceInvoiceCount", "sourceInvoiceCountIsLowerBound"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Check unpaid and overdue invoices"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "securitySchemes": [
+              {
+                "scopes": ["invoicevista:read"],
+                "type": "oauth2"
+              }
+            ]
+          },
+          "digest": "sha256:aed7905b51db764e8f2be2f291800fec34d7232bba2b8564b05702f591b6df04"
+        },
+        {
+          "name": "get_revenue_summary",
+          "title": "Summarize invoiced and paid amounts",
+          "description": "Use this when someone asks how much they invoiced or were paid in a period, like last month. Returns invoice and payment counts and totals in the business currency, invoices by status and a collection rate; defaults to the last 90 days, at most 366, skipping drafts and counting at most 500 documents. Not for a single invoice or customer.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "businessId": {
+                "description": "Business id: 24 lowercase hexadecimal characters",
+                "pattern": "^[0-9a-f]{24}$",
+                "type": "string"
+              },
+              "endDate": {
+                "description": "Last UTC day to include, YYYY-MM-DD, at most 366 days after startDate; defaults to today",
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+                "type": "string"
+              },
+              "startDate": {
+                "description": "First UTC day to include, YYYY-MM-DD; defaults to 89 days before endDate (a 90-day window)",
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+                "type": "string"
+              }
+            },
+            "required": ["businessId"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "collectedAmount": {
+                "description": "Sum of the payments recorded in the range, whatever their status; not proof of bank settlement",
+                "type": "number"
+              },
+              "collectionRatePercent": {
+                "description": "collectedAmount as a percentage of invoicedAmount; null when a total is incomplete or nothing was invoiced",
+                "type": ["number", "null"]
+              },
+              "currency": {
+                "anyOf": [
+                  {
+                    "pattern": "^[A-Z]{3}$",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "ISO 4217 alpha-3 business currency, or null when unset"
+              },
+              "invoiceAmountMissingCount": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "invoiceCount": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "invoiceCountIsLowerBound": {
+                "type": "boolean"
+              },
+              "invoiceStatusBreakdown": {
+                "description": "Non-draft invoices issued in the range, per status, with count and amount. Aggregates only: invoice, payment, customer, line-item, processor, card, bank, note and identifier data are never returned.",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "amount": {
+                      "type": "number"
+                    },
+                    "amountMissingCount": {
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "count": {
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "status": {
+                      "enum": ["DRAFT", "PENDING", "PARTIALLY_PAID", "PAID", "OVERDUE", "REFUNDED", "UNCOLLECTIBLE", "UNKNOWN", "OTHER"],
+                      "type": "string"
+                    }
+                  },
+                  "required": ["amount", "amountMissingCount", "count", "status"],
+                  "type": "object"
+                },
+                "maxItems": 9,
+                "type": "array"
+              },
+              "invoicedAmount": {
+                "type": "number"
+              },
+              "paymentAmountMissingCount": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "paymentCount": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "paymentCountIsLowerBound": {
+                "type": "boolean"
+              },
+              "range": {
+                "additionalProperties": false,
+                "properties": {
+                  "endDate": {
+                    "$ref": "#/properties/range/properties/startDate"
+                  },
+                  "startDate": {
+                    "description": "UTC calendar date in YYYY-MM-DD format",
+                    "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+                    "type": "string"
+                  }
+                },
+                "required": ["endDate", "startDate"],
+                "type": "object"
+              }
+            },
+            "required": ["collectedAmount", "collectionRatePercent", "currency", "invoiceAmountMissingCount", "invoiceCount", "invoiceCountIsLowerBound", "invoiceStatusBreakdown", "invoicedAmount", "paymentAmountMissingCount", "paymentCount", "paymentCountIsLowerBound", "range"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Summarize invoiced and paid amounts"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "openai/outputTemplate": "ui://invoicevista/revenue-summary-v1.html",
+            "openai/toolInvocation/invoked": "InvoiceVista revenue summary ready.",
+            "openai/toolInvocation/invoking": "Summarizing InvoiceVista revenue…",
+            "securitySchemes": [
+              {
+                "scopes": ["invoicevista:read"],
+                "type": "oauth2"
+              }
+            ],
+            "ui": {
+              "resourceUri": "ui://invoicevista/revenue-summary-v1.html"
+            },
+            "ui/resourceUri": "ui://invoicevista/revenue-summary-v1.html"
+          },
+          "digest": "sha256:2cb572216553c02059942a70f3b94b05ac149c7c859f9cc946d12f6da0636353"
+        },
+        {
+          "name": "get_subscription",
+          "title": "Check InvoiceVista plan and limits",
+          "description": "Use this when someone asks which InvoiceVista plan a business is on, or how many customers, invoices or users it allows. Returns the active or past-due plan's name, status, billing frequency and limits, or the Free plan's defaults when there is none. Not for customer invoices or payments.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "businessId": {
+                "description": "Business id: 24 lowercase hexadecimal characters",
+                "pattern": "^[0-9a-f]{24}$",
+                "type": "string"
+              }
+            },
+            "required": ["businessId"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "status": {
+                "enum": ["found", "not-found"],
+                "type": "string"
+              },
+              "subscription": {
+                "anyOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "billingFrequency": {
+                        "anyOf": [
+                          {
+                            "enum": ["MONTHLY", "YEARLY"],
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "maxNumberOfCustomers": {
+                        "type": ["number", "null"]
+                      },
+                      "maxNumberOfInvoices": {
+                        "type": ["number", "null"]
+                      },
+                      "maxNumberOfUsers": {
+                        "type": ["number", "null"]
+                      },
+                      "productName": {
+                        "anyOf": [
+                          {
+                            "maxLength": 200,
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "status": {
+                        "anyOf": [
+                          {
+                            "enum": ["ACTIVE", "PAST_DUE", "CANCELED"],
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      }
+                    },
+                    "required": ["billingFrequency", "maxNumberOfCustomers", "maxNumberOfInvoices", "maxNumberOfUsers", "productName", "status"],
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Plan entitlements; limits are caps, not usage. Payment-processor identifiers and credentials are never returned."
+              }
+            },
+            "required": ["status", "subscription"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Check InvoiceVista plan and limits"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "securitySchemes": [
+              {
+                "scopes": ["invoicevista:read"],
+                "type": "oauth2"
+              }
+            ]
+          },
+          "digest": "sha256:cd3288b7ac57d577ae763b89d06a69e71a285925073c6a1329bc4e4bb9907704"
+        },
+        {
+          "name": "list_businesses",
+          "title": "List your businesses",
+          "description": "Use this when someone asks which businesses they invoice from in InvoiceVista, or a business's id is needed. Returns each business's id, name, currency, country, language and timezone, 25 per page by default (no addresses or bank details). Not for listing customers.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "cursor": {
+                "description": "The nextCursor of the previous page of this listing; absent for the first page",
+                "maxLength": 4096,
+                "type": "string"
+              },
+              "limit": {
+                "description": "Businesses per page, from 1 to 100; defaults to 25",
+                "exclusiveMinimum": 0,
+                "maximum": 100,
+                "type": "integer"
+              }
+            },
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "hasMore": {
+                "type": "boolean"
+              },
+              "items": {
+                "description": "Businesses in the signed-in organization. Addresses, contact details, payment settings and secrets are omitted.",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "countryCode": {
+                      "anyOf": [
+                        {
+                          "pattern": "^[A-Z]{2}$",
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "currency": {
+                      "anyOf": [
+                        {
+                          "pattern": "^[A-Z]{3}$",
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "ISO 4217 alpha-3 business currency, or null when unset"
+                    },
+                    "id": {
+                      "pattern": "^[0-9a-f]{24}$",
+                      "type": "string"
+                    },
+                    "locale": {
+                      "anyOf": [
+                        {
+                          "maxLength": 35,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "name": {
+                      "maxLength": 200,
+                      "type": "string"
+                    },
+                    "timezone": {
+                      "anyOf": [
+                        {
+                          "maxLength": 64,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": ["countryCode", "currency", "id", "locale", "name", "timezone"],
+                  "type": "object"
+                },
+                "maxItems": 100,
+                "type": "array"
+              },
+              "nextCursor": {
+                "description": "Cursor for the next page; absent on the last page",
+                "maxLength": 4096,
+                "type": "string"
+              }
+            },
+            "required": ["hasMore", "items"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "List your businesses"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "securitySchemes": [
+              {
+                "scopes": ["invoicevista:read"],
+                "type": "oauth2"
+              }
+            ]
+          },
+          "digest": "sha256:0e08300c55f54498836e5b731efb1c5484873267a88d1449e32d5e7ee070ae6e"
+        },
+        {
+          "name": "list_inventory_items",
+          "title": "Check stock",
+          "description": "Use this when someone asks how much of a material, product or supply a business has left in stock, or what is running low. Returns up to 100 stock items with unit, quantity, minimum and a low-stock flag. Not for the prices a business charges.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "businessId": {
+                "description": "Business id: 24 lowercase hexadecimal characters; may be absent when the account has one business.",
+                "maxLength": 24,
+                "minLength": 24,
+                "pattern": "^[0-9a-f]{24}$",
+                "type": "string"
+              },
+              "limit": {
+                "description": "Maximum number of items (default 50, maximum 100).",
+                "maximum": 100,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "lowStockOnly": {
+                "description": "Only items at or below their minimum quantity.",
+                "type": "boolean"
+              },
+              "search": {
+                "description": "Only items whose name contains these words.",
+                "maxLength": 100,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "businessId": {
+                "maxLength": 24,
+                "minLength": 24,
+                "pattern": "^[0-9a-f]{24}$",
+                "type": "string"
+              },
+              "count": {
+                "maximum": 100000,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "hasMore": {
+                "type": "boolean"
+              },
+              "items": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "businessId": {
+                      "anyOf": [
+                        {
+                          "maxLength": 24,
+                          "minLength": 24,
+                          "pattern": "^[0-9a-f]{24}$",
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "id": {
+                      "anyOf": [
+                        {
+                          "maxLength": 24,
+                          "minLength": 24,
+                          "pattern": "^[0-9a-f]{24}$",
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "lastEditTime": {
+                      "anyOf": [
+                        {
+                          "maxLength": 40,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "lowStock": {
+                      "type": "boolean"
+                    },
+                    "minimumQuantity": {
+                      "anyOf": [
+                        {
+                          "maximum": 1000000000,
+                          "minimum": 0,
+                          "type": "number"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "name": {
+                      "maxLength": 200,
+                      "type": "string"
+                    },
+                    "quantity": {
+                      "anyOf": [
+                        {
+                          "maximum": 1000000000,
+                          "minimum": 0,
+                          "type": "number"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "unit": {
+                      "anyOf": [
+                        {
+                          "maxLength": 40,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": ["businessId", "id", "lastEditTime", "lowStock", "minimumQuantity", "name", "quantity", "unit"],
+                  "type": "object"
+                },
+                "maxItems": 100,
+                "type": "array"
+              }
+            },
+            "required": ["businessId", "count", "hasMore", "items"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Check stock"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "securitySchemes": [
+              {
+                "scopes": ["invoicevista:read"],
+                "type": "oauth2"
+              }
+            ]
+          },
+          "digest": "sha256:07fb41502d0468b096f9171aca5c93e6cba862534281d83908e8b836c6d2c858"
+        },
+        {
+          "name": "list_products",
+          "title": "List products and prices",
+          "description": "Use this when someone asks what products or services a business sells or what it charges for them. Returns each catalog item's name, price and stored tax value, most recently edited first, 25 per page by default. Not for what a customer was invoiced.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "businessId": {
+                "description": "Business id: 24 lowercase hexadecimal characters",
+                "pattern": "^[0-9a-f]{24}$",
+                "type": "string"
+              },
+              "cursor": {
+                "description": "The nextCursor of the previous page of this listing; absent for the first page",
+                "maxLength": 4096,
+                "type": "string"
+              },
+              "limit": {
+                "description": "Products per page, from 1 to 100; defaults to 25",
+                "exclusiveMinimum": 0,
+                "maximum": 100,
+                "type": "integer"
+              }
+            },
+            "required": ["businessId"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "hasMore": {
+                "type": "boolean"
+              },
+              "items": {
+                "description": "Catalog items, most recently edited first. price is in the business currency; tax is the product's stored tax value, null when unset. Record identifiers, line-item text and customer data are excluded.",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "name": {
+                      "maxLength": 200,
+                      "type": "string"
+                    },
+                    "price": {
+                      "type": ["number", "null"]
+                    },
+                    "tax": {
+                      "type": ["number", "null"]
+                    }
+                  },
+                  "required": ["name", "price", "tax"],
+                  "type": "object"
+                },
+                "maxItems": 100,
+                "type": "array"
+              },
+              "nextCursor": {
+                "description": "Cursor for the next page; absent on the last page",
+                "maxLength": 4096,
+                "type": "string"
+              }
+            },
+            "required": ["hasMore", "items"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "List products and prices"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "securitySchemes": [
+              {
+                "scopes": ["invoicevista:read"],
+                "type": "oauth2"
+              }
+            ]
+          },
+          "digest": "sha256:1c906f31570c08828e93b6d29df69c1627f84338620e614c8af6095e4240a006"
+        },
+        {
+          "name": "open_invoicevista",
+          "title": "InvoiceVista Invoice Maker",
+          "description": "Use this when someone wants to open InvoiceVista and browse their businesses, billing overview, revenue, receivables and quote pipeline in an interactive sidebar. Returns up to 100 businesses to start from (no customer or individual financial records). Not for creating invoices or recording payments.",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {},
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "additionalProperties": false,
+            "properties": {
+              "items": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "defaultLocale": {
+                      "anyOf": [
+                        {
+                          "maxLength": 32,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "id": {
+                      "anyOf": [
+                        {
+                          "maxLength": 200,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "locales": {
+                      "items": {
+                        "maxLength": 32,
+                        "type": "string"
+                      },
+                      "maxItems": 100,
+                      "type": "array"
+                    },
+                    "logoUrl": {
+                      "anyOf": [
+                        {
+                          "maxLength": 2048,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "name": {
+                      "maxLength": 200,
+                      "type": "string"
+                    },
+                    "subtitle": {
+                      "maxLength": 300,
+                      "type": "string"
+                    }
+                  },
+                  "required": ["defaultLocale", "id", "locales", "logoUrl", "name", "subtitle"],
+                  "type": "object"
+                },
+                "maxItems": 100,
+                "type": "array"
+              },
+              "truncated": {
+                "type": "boolean"
+              }
+            },
+            "required": ["items", "truncated"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "icons": [
+            {
+              "src": "data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%2220%22%20height%3D%2220%22%20viewBox%3D%220%200%2020%2020%22%3E%3Cg%20transform%3D%22translate(1%206)%20scale(0.03965)%22%3E%3Cg%20transform%3D%22translate(-286%2C-330.5)%22%3E%3Cpath%20fill%3D%22currentColor%22%20d%3D%22M%20329.75%2C529.23949%20C%20305.6875%2C529.09621%20286%2C528.72041%20286%2C528.40438%20c%200%2C-0.31603%202.64121%2C-3.5738%205.86936%2C-7.23949%208.13709%2C-9.24%2055.99565%2C-67.29943%2077.03527%2C-93.45505%209.57254%2C-11.90021%2017.76991%2C-21.41099%2018.21636%2C-21.13506%200.91732%2C0.56693%2034.77537%2C45.78082%2045.41813%2C60.65114%204.79623%2C6.70142%207.47623%2C9.61459%208.61809%2C9.36789%20C%20443.67095%2C476.05072%20467%2C461.9972%20467%2C461.026%20c%200%2C-0.46663%20-9.45%2C-10.0371%20-21%2C-21.26772%20-11.55%2C-11.23061%20-21%2C-20.65316%20-21%2C-20.93901%200%2C-0.28584%205.5125%2C-7.92771%2012.25%2C-16.98193%206.7375%2C-9.05422%2014.95%2C-20.3484%2018.25%2C-25.09819%203.3%2C-4.74979%206.30323%2C-8.6592%206.67384%2C-8.68757%200.37061%2C-0.0284%204.31571%2C4.66606%208.7669%2C10.43206%204.45119%2C5.766%2013.82296%2C17.13294%2020.82616%2C25.25987%2023.5741%2C27.35675%2045.44126%2C53.71434%2074.87988%2C90.25649%205.53855%2C6.875%2014.18379%2C17.4097%2019.21165%2C23.41044%205.02787%2C6.00074%209.14157%2C11.32178%209.14157%2C11.82454%200%2C0.81563%20-128.66372%2C0.81782%20-265.25%2C0.005%20z%20m%20314.60901%2C-0.006%20c%20-2.65026%2C-0.28992%20-6.24252%2C-3.733%20-22.99318%2C-22.03837%20C%20610.44712%2C495.26265%20598.11765%2C481.9%20593.96702%2C477.5%20581.86669%2C464.6727%20563.95384%2C445.19204%20541.55441%2C420.5%20530.07894%2C407.85%20519.1506%2C395.87112%20517.26922%2C393.88027%20l%20-3.4207%2C-3.61972%2020.16197%2C-24.38028%20C%20545.09958%2C352.47112%20556.37899%2C339.025%20559.07585%2C336%20l%204.90339%2C-5.5%207.11813%2C7.5%20c%203.91497%2C4.125%2018.11676%2C19.97673%2031.55954%2C35.22606%2013.44277%2C15.24933%2032.86089%2C37.07433%2043.15136%2C48.5%2010.29048%2C11.42567%2023.42776%2C26.17394%2029.19396%2C32.77394%205.7662%2C6.6%2019.94051%2C22.575%2031.49847%2C35.5%2030.10437%2C33.66501%2033.85855%2C37.97903%2033.40481%2C38.38625%20-0.53773%2C0.4826%20-91.50576%2C1.2889%20-95.5465%2C0.84689%20z%22%2F%3E%3C%2Fg%3E%3C%2Fg%3E%3C%2Fsvg%3E",
+              "mimeType": "image/svg+xml"
+            }
+          ],
+          "meta": {
+            "openai/outputTemplate": "ui://invoicevista/workspace-v2.html",
+            "openai/ui": {
+              "entrypoints": [
+                {
+                  "type": "global"
+                }
+              ]
+            },
+            "openai/widgetAccessible": true,
+            "securitySchemes": [
+              {
+                "scopes": ["invoicevista:read"],
+                "type": "oauth2"
+              }
+            ],
+            "ui": {
+              "resourceUri": "ui://invoicevista/workspace-v2.html"
+            }
+          },
+          "digest": "sha256:c32877b0ac8cb4f4227bc1c14412302ffb7b6cb845c12e8589c27f6981f5395c"
+        },
+        {
+          "name": "set_inventory_quantity",
+          "title": "Update a stock quantity",
+          "description": "Use this when someone asks to correct or update how much of an item a business has in stock, such as after a count or a delivery. Returns the item with its previous and new quantity; the number given replaces the stored one. Not for adding a new stock item.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "expectedLastEditTime": {
+                "description": "The item's lastEditTime as last read; an item changed since then is refused.",
+                "format": "date-time",
+                "maxLength": 40,
+                "type": "string"
+              },
+              "inventoryItemId": {
+                "description": "Stock item id: 24 lowercase hexadecimal characters.",
+                "maxLength": 24,
+                "minLength": 24,
+                "pattern": "^[0-9a-f]{24}$",
+                "type": "string"
+              },
+              "quantity": {
+                "description": "The quantity now in stock, in the item unit. It replaces the stored quantity rather than adding to it.",
+                "maximum": 1000000000,
+                "minimum": 0,
+                "type": "number"
+              }
+            },
+            "required": ["expectedLastEditTime", "inventoryItemId", "quantity"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "item": {
+                "additionalProperties": false,
+                "properties": {
+                  "businessId": {
+                    "anyOf": [
+                      {
+                        "maxLength": 24,
+                        "minLength": 24,
+                        "pattern": "^[0-9a-f]{24}$",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "id": {
+                    "anyOf": [
+                      {
+                        "maxLength": 24,
+                        "minLength": 24,
+                        "pattern": "^[0-9a-f]{24}$",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "lastEditTime": {
+                    "anyOf": [
+                      {
+                        "maxLength": 40,
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "lowStock": {
+                    "type": "boolean"
+                  },
+                  "minimumQuantity": {
+                    "anyOf": [
+                      {
+                        "maximum": 1000000000,
+                        "minimum": 0,
+                        "type": "number"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "name": {
+                    "maxLength": 200,
+                    "type": "string"
+                  },
+                  "quantity": {
+                    "anyOf": [
+                      {
+                        "maximum": 1000000000,
+                        "minimum": 0,
+                        "type": "number"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "unit": {
+                    "anyOf": [
+                      {
+                        "maxLength": 40,
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": ["businessId", "id", "lastEditTime", "lowStock", "minimumQuantity", "name", "quantity", "unit"],
+                "type": "object"
+              },
+              "previousQuantity": {
+                "anyOf": [
+                  {
+                    "maximum": 1000000000,
+                    "minimum": 0,
+                    "type": "number"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "status": {
+                "enum": ["updated"],
+                "type": "string"
+              }
+            },
+            "required": ["item", "previousQuantity", "status"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": true,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": false,
+            "title": "Update a stock quantity"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": false
+          },
+          "meta": {
+            "securitySchemes": [
+              {
+                "scopes": ["invoicevista:write"],
+                "type": "oauth2"
+              }
+            ]
+          },
+          "digest": "sha256:0406ace79a4023dd26bed53b20ce599f5d727b58f2ca492272717b43907af584"
+        },
+        {
+          "name": "show_business_overview",
+          "title": "Show business overview",
+          "description": "Use this when someone wants a quick overview or dashboard of one business in InvoiceVista. Returns an overview card with the business details, counts of customers, invoices, payments and quotes with status mixes (each capped at 100), and up to 12 catalog products (no customer or invoice details). Not for revenue over a period.",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "businessId": {
+                "description": "Business id: 24 lowercase hexadecimal characters",
+                "pattern": "^[0-9a-f]{24}$",
+                "type": "string"
+              }
+            },
+            "required": ["businessId"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "additionalProperties": false,
+            "properties": {
+              "business": {
+                "anyOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "countryCode": {
+                        "anyOf": [
+                          {
+                            "pattern": "^[A-Z]{2}$",
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "currency": {
+                        "anyOf": [
+                          {
+                            "pattern": "^[A-Z]{3}$",
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "defaultLocale": {
+                        "anyOf": [
+                          {
+                            "maxLength": 35,
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "id": {
+                        "pattern": "^[0-9a-f]{24}$",
+                        "type": "string"
+                      },
+                      "name": {
+                        "maxLength": 200,
+                        "type": "string"
+                      },
+                      "timezone": {
+                        "anyOf": [
+                          {
+                            "maxLength": 64,
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      }
+                    },
+                    "required": ["countryCode", "currency", "defaultLocale", "id", "name", "timezone"],
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Null when not found. Individual customer or financial records, identifiers, numbers, exact dates or amounts, contacts, tax ids, addresses, notes, line descriptions, PCI or bank data, processor data, credentials and payment actions are never returned."
+              },
+              "customerCount": {
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "customerCountIsLowerBound": {
+                "type": "boolean"
+              },
+              "invoiceCount": {
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "invoiceCountIsLowerBound": {
+                "type": "boolean"
+              },
+              "invoiceStatusBreakdown": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "count": {
+                      "maximum": 9007199254740991,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "status": {
+                      "enum": ["DRAFT", "PENDING", "PARTIALLY_PAID", "PAID", "OVERDUE", "REFUNDED", "UNCOLLECTIBLE", "OTHER"],
+                      "type": "string"
+                    }
+                  },
+                  "required": ["count", "status"],
+                  "type": "object"
+                },
+                "maxItems": 8,
+                "type": "array"
+              },
+              "paymentCount": {
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "paymentCountIsLowerBound": {
+                "type": "boolean"
+              },
+              "productCount": {
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "productCountIsLowerBound": {
+                "type": "boolean"
+              },
+              "products": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "name": {
+                      "maxLength": 200,
+                      "type": "string"
+                    },
+                    "price": {
+                      "anyOf": [
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "tax": {
+                      "anyOf": [
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": ["name", "price", "tax"],
+                  "type": "object"
+                },
+                "maxItems": 12,
+                "type": "array"
+              },
+              "quoteCount": {
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "quoteCountIsLowerBound": {
+                "type": "boolean"
+              },
+              "quoteStatusBreakdown": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "count": {
+                      "maximum": 9007199254740991,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "status": {
+                      "enum": ["DRAFT", "PENDING", "REJECTED", "APPROVED", "OTHER"],
+                      "type": "string"
+                    }
+                  },
+                  "required": ["count", "status"],
+                  "type": "object"
+                },
+                "maxItems": 5,
+                "type": "array"
+              }
+            },
+            "required": ["business", "customerCount", "customerCountIsLowerBound", "invoiceCount", "invoiceCountIsLowerBound", "invoiceStatusBreakdown", "paymentCount", "paymentCountIsLowerBound", "productCount", "productCountIsLowerBound", "products", "quoteCount", "quoteCountIsLowerBound", "quoteStatusBreakdown"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Show business overview"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "openai/outputTemplate": "ui://invoicevista/business-overview-v1.html",
+            "openai/toolInvocation/invoked": "InvoiceVista business overview ready.",
+            "openai/toolInvocation/invoking": "Loading InvoiceVista business…",
+            "securitySchemes": [
+              {
+                "scopes": ["invoicevista:read"],
+                "type": "oauth2"
+              }
+            ],
+            "ui": {
+              "resourceUri": "ui://invoicevista/business-overview-v1.html"
+            },
+            "ui/resourceUri": "ui://invoicevista/business-overview-v1.html"
+          },
+          "digest": "sha256:53180c9783c1508fb5a8bdf3e28179df46f3c3283fe224bf4d838e7a2b536dc3"
+        },
+        {
+          "name": "update_customer",
+          "title": "Update a customer's details",
+          "description": "Use this when someone asks to change a customer's name, email, phone, tax id, address or language. Returns the customer's id, name, business and which fields changed; contact details, tax ids and addresses are never returned. Not for adding a new customer.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "address": {
+                "additionalProperties": false,
+                "description": "Billing address lines to change. Lines left out keep their stored value.",
+                "properties": {
+                  "city": {
+                    "maxLength": 100,
+                    "type": "string"
+                  },
+                  "countryCode": {
+                    "maxLength": 2,
+                    "type": "string"
+                  },
+                  "postalCode": {
+                    "maxLength": 30,
+                    "type": "string"
+                  },
+                  "state": {
+                    "maxLength": 100,
+                    "type": "string"
+                  },
+                  "street": {
+                    "maxLength": 200,
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              },
+              "customerId": {
+                "description": "Customer id: 24 lowercase hexadecimal characters.",
+                "maxLength": 24,
+                "minLength": 24,
+                "pattern": "^[0-9a-f]{24}$",
+                "type": "string"
+              },
+              "email": {
+                "description": "New email address for their invoices.",
+                "maxLength": 254,
+                "type": "string"
+              },
+              "expectedLastEditTime": {
+                "description": "The customer's lastEditTime as last read; a customer changed since then is refused.",
+                "format": "date-time",
+                "maxLength": 40,
+                "type": "string"
+              },
+              "language": {
+                "description": "New language for their invoices and messages, as a code such as en or it.",
+                "maxLength": 10,
+                "type": "string"
+              },
+              "legalEntity": {
+                "description": "What kind of customer this is.",
+                "enum": ["individual", "company", "partnership", "trust", "charity", "government"],
+                "type": "string"
+              },
+              "name": {
+                "description": "New full or company name.",
+                "maxLength": 160,
+                "minLength": 1,
+                "type": "string"
+              },
+              "phone": {
+                "description": "New mobile number, with the country code when known.",
+                "maxLength": 40,
+                "type": "string"
+              },
+              "taxId": {
+                "description": "New tax or VAT number.",
+                "maxLength": 64,
+                "type": "string"
+              }
+            },
+            "required": ["customerId", "expectedLastEditTime"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "changedFields": {
+                "items": {
+                  "enum": ["name", "phone", "email", "taxId", "legalEntity", "language", "dateOfBirth", "address", "color"],
+                  "type": "string"
+                },
+                "maxItems": 9,
+                "type": "array"
+              },
+              "customer": {
+                "additionalProperties": false,
+                "properties": {
+                  "businessId": {
+                    "anyOf": [
+                      {
+                        "maxLength": 24,
+                        "minLength": 24,
+                        "pattern": "^[0-9a-f]{24}$",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "id": {
+                    "anyOf": [
+                      {
+                        "maxLength": 24,
+                        "minLength": 24,
+                        "pattern": "^[0-9a-f]{24}$",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "language": {
+                    "anyOf": [
+                      {
+                        "maxLength": 16,
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "lastEditTime": {
+                    "anyOf": [
+                      {
+                        "maxLength": 40,
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "name": {
+                    "maxLength": 200,
+                    "type": "string"
+                  }
+                },
+                "required": ["businessId", "id", "language", "lastEditTime", "name"],
+                "type": "object"
+              },
+              "status": {
+                "enum": ["updated"],
+                "type": "string"
+              }
+            },
+            "required": ["changedFields", "customer", "status"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": true,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": false,
+            "title": "Update a customer's details"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": false
+          },
+          "meta": {
+            "securitySchemes": [
+              {
+                "scopes": ["invoicevista:write"],
+                "type": "oauth2"
+              }
+            ]
+          },
+          "digest": "sha256:abebe73e7bd4568763087cb857a4a2a4a379bcf2f6875912021362af875d2caf"
+        }
+      ],
+      "resources": [
+        {
+          "uri": "skill://invoicevista/billing-operations/SKILL.md",
+          "name": "billing-operations",
+          "title": "billing-operations skill",
+          "description": "Review InvoiceVista businesses, product catalogs, plan quotas, and aggregate revenue, receivables, quote-pipeline and business-overview summaries, find a customer by name, add or update a customer, and check or correct stock through a tenant-scoped MCP connector. Use when asked how much was invoiced or paid in a period, what customers owe, unpaid or overdue invoices, how many quotes were accepted, product prices, InvoiceVista plan limits, to add or change a customer, or what is running low in stock — never for individual invoices, payments or quotes, customer contact exports, transaction execution or financial advice.",
+          "mimeType": "text/markdown",
+          "digest": "sha256:8025dd660404c810726774f3a948d5105dfd31b3d9d5fef786d279aecee1f05d"
+        },
+        {
+          "uri": "skill://invoicevista/invoicevista/SKILL.md",
+          "name": "invoicevista",
+          "title": "invoicevista skill",
+          "description": "Read and manage InvoiceVista billing data with the `invoicevista` CLI — list and create invoices, quotes, customers, products and recorded payments, filter them by business, customer or issue date, manage webhook subscriptions and API keys, and create an account from the terminal. Use when asked about invoices, quotes, estimates, receivables, a customer or product catalogue, recorded payments, invoicing webhooks, or anything involving the `invoicevista` command or app.invoicevista.com data.",
+          "mimeType": "text/markdown",
+          "digest": "sha256:e794ed5a1b6621fef57c230c45e3cacb5413c43f808b4814ea940c6fd654f834"
+        },
+        {
+          "uri": "ui://invoicevista/business-overview-v1.html",
+          "name": "invoicevista-business-overview",
+          "description": "An inline InvoiceVista view that presents a tenant-scoped aggregate business overview.",
+          "mimeType": "text/html;profile=mcp-app",
+          "digest": "sha256:13772999970e8c66a10e86cfd9d91b8e70e131551e1670c002815d8962f542f8"
+        },
+        {
+          "uri": "ui://invoicevista/revenue-summary-v1.html",
+          "name": "invoicevista-revenue-summary",
+          "description": "An inline InvoiceVista view that presents a tenant-scoped aggregate revenue summary.",
+          "mimeType": "text/html;profile=mcp-app",
+          "digest": "sha256:759159bd338513fe6ede6e342ccbb3c7c6fcf42074bc96d1295c46e3608239b3"
+        },
+        {
+          "uri": "ui://invoicevista/workspace-v2.html",
+          "name": "invoicevista-workspace",
+          "mimeType": "text/html;profile=mcp-app",
+          "digest": "sha256:0725943ccab4824c55c6bdcff3968db169c259b8a005099de3a9925181a8a5dd"
+        },
+        {
+          "uri": "ui://invoicevista/workspace-v1.html",
+          "name": "invoicevista-workspace-v1",
+          "mimeType": "text/html;profile=mcp-app",
+          "digest": "sha256:8b2b28e468b621318ac75fc5297d1b9617114dee4342fc76eb7d2657804f1c42"
+        }
+      ],
+      "digest": "sha256:efdfac9b2fe7b83bfa03da7d66f1985a7e55e450a7c0208f922e8a6502b5d726"
+    }
+  }
+}

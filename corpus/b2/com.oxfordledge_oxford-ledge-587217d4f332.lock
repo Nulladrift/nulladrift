@@ -1,0 +1,2103 @@
+{
+  "lockfileVersion": 2,
+  "subjects": {
+    "com.oxfordledge/oxford-ledge": {
+      "kind": "mcp-server",
+      "source": {
+        "client": "manual",
+        "file": "registry.modelcontextprotocol.io"
+      },
+      "transport": {
+        "type": "http",
+        "url": "https://www.oxfordledge.com/mcp"
+      },
+      "protocol": {
+        "era": "legacy",
+        "version": "2025-06-18"
+      },
+      "serverInfo": {
+        "name": "oxford-ledge",
+        "version": "3.8.4"
+      },
+      "capabilities": {
+        "tools": {
+          "listChanged": false
+        }
+      },
+      "instructions": "Oxford Ledge MCP provides public U.S. financial data -- SEC EDGAR filings and XBRL fundamentals, institutional and insider ownership, BDC private-credit holdings, and FRED/Treasury macro series. All figures are as-filed or as-published and may be lagged, revised, or incomplete; SEC ownership filings are periodic and can be up to 45 days behind. This data is informational only and is not investment, financial, legal, or tax advice. Each tool's caveats arrive with its answer, in the response's tool_notes field. Terms: https://www.oxfordledge.com/terms\n\nTools are grouped by the data they return: company fundamentals (front door: search_company, which resolves a company name or ticker to its SEC identity), filings and disclosure, insiders and institutions (front door: ol_13f_filer_search, which resolves a fund manager's name to its 13F CIK), BDC and private credit (front door: search_bdc_borrower, which resolves a borrower name to the borrower_norm that ol_bdc_borrower_dispersion and ol_borrower_profile take), bonds and rates (front door: get_yield_curve, which returns, by default, the Treasury curve plus the main US macro series, including CPI, unemployment, payrolls and GDP), macro and FRED, news and events, portfolio, and learn and reference. 48 of the 63 tools answer an anonymous caller. The other 15 need an Oxford Ledge API key, and 4 of those 15 also need the Researcher plan on that key; tools/list marks them with requires_key: true or min_tier. MCP access and API keys are free; a key is configured by the person who operates the MCP client, in the client's own settings, and is never part of the conversation. Anonymous calls share an hourly limit per network address; a key has its own hourly allowance, and paid plans raise it. A refused tool call answers isError: true with an error code and whether a retry can help, in _meta.error and again in its last content item.",
+      "tools": [
+        {
+          "name": "get_13f_holdings",
+          "title": "13F Holdings of a Fund",
+          "description": "What one institutional filer owns: the largest positions in its latest SEC 13F-HR, plus QoQ changes (keyed calls only). Accepts a numeric CIK (preferred), a ticker (BRK-B or BRK.B for Berkshire), or a filer NAME (3-80 characters): ONE name-prefix match in the curated 13F filer universe resolves to its CIK (`resolved_from` says so); an ambiguous name is refused with candidates, never guessed. Returns {cik, fundName, filingDate, periodOfReport, totalHoldings, totalValue, holdings}; rows carry name, title_of_class, value (whole USD), shares, type, position_type, lots. There is NO ticker field and `cusip` is stripped on every channel (no plan carries a CUSIP Global Services licence today); `title_of_class` is the share-class discriminator. `position_type` is COM|PRN|PUT|CALL: do NOT sum across types. Source: SEC EDGAR 13F-HR, ~45-day quarterly delay. Heavy operation, max 2 concurrent.",
+          "inputSchema": {
+            "properties": {
+              "fund": {
+                "description": "Fund CIK number (e.g. 1067983 for Berkshire Hathaway) -- preferred. A ticker is resolved via SEC's company map: letters with at most one class suffix (e.g. BLK, or BRK-B / BRK.B -- SEC lists Berkshire as BRK-A / BRK-B, so bare 'BRK' does not resolve). A filer NAME (3-80 chars) resolves when exactly one curated filer name starts with it; otherwise the error names ol_13f_filer_search. Any other shape is rejected as INVALID_PARAMS.",
+                "type": "string"
+              },
+              "max_holdings": {
+                "description": "Maximum number of holdings to return (default 50)",
+                "maximum": 500,
+                "minimum": 1,
+                "type": "integer"
+              }
+            },
+            "required": ["fund"],
+            "type": "object"
+          },
+          "annotations": {
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:a834c89618e25842e3086e9f315914b5922090af9f6b9a558788cd448ccaf280"
+        },
+        {
+          "name": "get_activist_stakes",
+          "title": "Activist Stakes (13D/13G)",
+          "description": "Schedule 13D/13G >5% beneficial-owner filings for a ticker -- event-driven stake-building, unlike quarterly 13F. Returns {ticker, count, filings}, newest first, limit default 50 (hard cap 200); rows carry filer_name, filing_date, form_type, shares, percent_of_class, accession_number and is_activist (a FORM-TYPE label: true iff the form is a 13D, not a judgement). `reports_zero` is the filer's own statement that it no longer owns more than 5% -- an exit OR a reporting realignment, so cross-check get_institutional_holders before reading it as a sale. FRESHNESS: keyless callers are served STORED rows and never trigger the EDGAR refresh -- read `stale` and `stale_basis`. Complements get_institutional_consensus. Source: SEC EDGAR.",
+          "inputSchema": {
+            "properties": {
+              "limit": {
+                "description": "Max filings to return (default 50)",
+                "maximum": 200,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "ticker": {
+                "description": "Stock ticker symbol (e.g. AAPL)",
+                "type": "string"
+              }
+            },
+            "required": ["ticker"],
+            "type": "object"
+          },
+          "annotations": {
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:716781fbb88dbe92a9798551874ebc6f336c4d48eb6ec53a6acbc380547a2bb0"
+        },
+        {
+          "name": "get_anomaly_flags",
+          "title": "Red-Flag Screens",
+          "description": "Run 15 red-flag screens on a ticker (short interest >12%, Altman Z distress, net leverage >4x, negative FCF, P/E >50, dividend yield >6%, insider net selling, revenue decline, payout >90%, goodwill >50% of assets, SBC >10% of revenue, declining ROIC and others). Returns {ticker, available, flags, count}; each flag is {severity, label, detail, scrollTo}: SEVERITY IS ONLY 'red' OR 'amber', red first. A flag is a question to investigate, NOT a sell signal. available: false (+ reason, no flags) = not checked. Empty flags is no all-clear either: a screen missing its input is skipped. Pair with get_fundamentals and ol_intrinsic_value. Source: vendor quote/fundamentals snapshot plus computed heuristics. Needs a free Oxford Ledge API key that the client's operator configures.",
+          "inputSchema": {
+            "properties": {
+              "ticker": {
+                "description": "Stock ticker symbol (e.g. AAPL)",
+                "type": "string"
+              }
+            },
+            "required": ["ticker"],
+            "type": "object"
+          },
+          "annotations": {
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:c9b6acaca3af3345babdd400e243e4bdc4a2135684db66603dc3d09b4c601f55"
+        },
+        {
+          "name": "get_bdc_list",
+          "title": "BDC List",
+          "description": "Roster of the ACTIVE BDCs tracked by Oxford Ledge, sorted by portfolio size -- our coverage, not the whole BDC universe; wound-down issuers are excluded by design. No arguments. Returns {bdcs, count}; per BDC: ticker, name, listed (false for a non-traded BDC carried under a pseudo-ticker such as AGTC), holdingCount, totalFairValue (whole USD, latest filing), filingDate, lastParsed and a reconciliation block (reportedTotalFairValue, fairValueBasis, parsedRowSumFairValue, fairValueRefused, fairValueGap, fairValueGapNote). READ fairValueBasis BEFORE using totalFairValue, and fairValueGap with it: an under-counting parse keeps the parsed-row sum, which UNDERSTATES the book. holdingCount, totalFairValue and the arbitration are Oxford Ledge's parse, not filer-published figures. Borrower-keyed counterpart: search_bdc_borrower. Source: SEC EDGAR BDC filings (Oxford Ledge parse).",
+          "inputSchema": {
+            "properties": {},
+            "type": "object"
+          },
+          "annotations": {
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:f4f0a0cca140b99cd36355b0be9270cc1b40070d9abc7a7bf00204b217b7f221"
+        },
+        {
+          "name": "get_business_summary",
+          "title": "Business Summary",
+          "description": "First-party business summary for a ticker from its SEC annual report (10-K Item 1; 20-F Item 4 for a foreign private issuer): a curated, verifier-gated overview of what the company does. Returns `summary` (a one-line status line, NOT the content), `available`, `business_summary` (prose truncated at ~2400 chars), `short_summary`, and provenance (source_form, source_period, source_url, generated_at). available=false means the store answered with no verified row and the provenance keys are ABSENT; an unreachable store is REFUSED (DATA_UNAVAILABLE). Rows generated before 2026-09-13 carry '10-K' and an empty `source_period` regardless of filer until Oxford Ledge re-stamps their provenance. For semantic passage retrieval over the full filing corpus use ol_filing_search. Source: SEC EDGAR annual report (Oxford Ledge first-party summary); FREE.",
+          "inputSchema": {
+            "properties": {
+              "ticker": {
+                "description": "Stock ticker symbol (e.g. AAPL)",
+                "type": "string"
+              }
+            },
+            "required": ["ticker"],
+            "type": "object"
+          },
+          "annotations": {
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:285eecbd337c9a6caeea420fe3ee487f4fcf625b57dc39d53a2d68bd2d2054b6"
+        },
+        {
+          "name": "get_capital_allocation",
+          "title": "Capital Allocation",
+          "description": "Where a company sent its cash, up to 30 annual labels. Returns {ticker, capitalAllocation:{years, periods, dividends, netBuybacks, grossRepurchases, netDebtChange, acquisitions, sharesOut, isDilutive, basis, summary}} as PARALLEL ARRAYS aligned to `years` (newest first, fiscal labels). netBuybacks is a NET, DERIVED DILUTION PROXY, not a buyback figure (repurchases minus issuance, IPO proceeds and SBC); grossRepurchases is the filed line. Share-count cells on a pre-split basis are withheld, never shown as a phantom buyback. An IFRS reporter is REFUSED, never served zeros. Complements get_fundamentals and get_debt_maturities. Source: SEC EDGAR XBRL cash-flow tags, 24h cache. Requires Researcher tier.",
+          "inputSchema": {
+            "properties": {
+              "ticker": {
+                "description": "Stock ticker symbol (e.g. AAPL)",
+                "type": "string"
+              }
+            },
+            "required": ["ticker"],
+            "type": "object"
+          },
+          "annotations": {
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:c656f21c0ca1f179cc267122332a4d70b76693aec48e0f62f1d9dc9f333a6a8f"
+        },
+        {
+          "name": "get_corporate_events",
+          "title": "Corporate Events",
+          "description": "The 20 most recent 8-K item events for a ticker from Oxford Ledge's 8-K index of SEC EDGAR, NEWEST FIRST -- a hard cap with no caller-settable limit, so a recent-events feed, not a history. Returns {ticker, events, count, coverage, summary}; each event is {ticker, eventDate, eventType, headline, description, counterparty, counterpartyTicker, sourceUrl, source}. `eventType` is Oxford Ledge's 8-K item-to-category map. The event_type filter matches STORED CATEGORIES ONLY; for M&A use acquisition_disposition. Dual-class siblings (GOOG/GOOGL) are unioned. An unreachable store REFUSES (DATA_UNAVAILABLE) rather than serving events=[]. For Form 4 insider transactions use get_insider_activity. Source: SEC EDGAR 8-K index (Oxford Ledge parse), re-indexed about every 7 days.",
+          "inputSchema": {
+            "properties": {
+              "event_type": {
+                "description": "Optional filter, case-insensitive; one category, a comma-separated list, or ALL (the default). The STORED vocabulary is the 17 8-K item categories: material_agreement, material_agreement_termination, bankruptcy, acquisition_disposition, earnings, new_debt_obligation, debt_obligation_trigger, material_impairment, delisting, auditor_change, financial_restatement, change_of_control, executive_change, bylaw_amendment, shareholder_vote, reg_fd_disclosure, other_event. Anything else (acquisition, divestiture, restructuring, dividend, split, merger) matches no stored row and is refused (INVALID_PARAMS); for M&A use acquisition_disposition.",
+                "type": "string"
+              },
+              "ticker": {
+                "description": "Stock ticker symbol (e.g. AAPL)",
+                "type": "string"
+              }
+            },
+            "required": ["ticker"],
+            "type": "object"
+          },
+          "annotations": {
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:3026314eda801f8a39925565be452cc3def611d7631a69ed803677f777e6d72d"
+        },
+        {
+          "name": "get_debt_maturities",
+          "title": "Debt Maturities",
+          "description": "Forward debt maturity ladder parsed from the latest 10-K/20-F footnote. Returns {ticker, maturities:[{year, amount}], thereafter, confidence, confidence_score, source, validation}. AMOUNTS ARE IN MILLIONS OF USD, not raw dollars -- 400 means $400M. THE LADDER IS AS OF the filing date, not today: the current-year bucket may already be repaid or refinanced. Check `validation` (the balance-sheet cross-check) before quoting a total. Every empty answer carries `refusal_reason` and a readable `refusal_note`. For historical issuance/repayment use get_capital_allocation. Source: SEC EDGAR 10-K note extraction. Requires Researcher tier.",
+          "inputSchema": {
+            "properties": {
+              "ticker": {
+                "description": "Stock ticker symbol (e.g. AAPL)",
+                "type": "string"
+              }
+            },
+            "required": ["ticker"],
+            "type": "object"
+          },
+          "annotations": {
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:bb70d094d0564d4f2b505a54c4294dbdf32ece255c356f6d28c96a3dd2bca735"
+        },
+        {
+          "name": "get_economic_calendar",
+          "title": "Economic Calendar",
+          "description": "Upcoming US macro DATA-RELEASE DATES (a schedule, not estimates) for the 8 tracked releases (CPI, Employment Situation, GDP, Jobless Claims, PCE, PPI, Industrial Production, Retail Sales). Returns {days, events, count, withheld, source_status, error}; each event is {date, event, release_id, release_name, label_source}: release_name is FRED's OWN name; event is our label only when label_source is 'ol'. No values; no FOMC dates. `days` default 90; above 180 is REFUSED. ALWAYS CHECK source_status: every failure returns events=[], like a quiet calendar. Cached 6h. Source: FRED releases/dates. Needs a free Oxford Ledge API key that the client's operator configures.",
+          "inputSchema": {
+            "properties": {
+              "days": {
+                "description": "Number of days to look ahead (default 90)",
+                "maximum": 180,
+                "minimum": 1,
+                "type": "integer"
+              }
+            },
+            "type": "object"
+          },
+          "annotations": {
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:3bfb83f3e651c507a0af8d7180413d54505941614c0e57e0e184200ebd0d014c"
+        },
+        {
+          "name": "get_fails_to_deliver",
+          "title": "Fails to Deliver",
+          "description": "SEC fails-to-deliver history for one ticker -- the settlement-failure side of short pressure. Returns {ticker, days, history, count, window, coverage, as_of, summary}; each row is {date (settlement date), fails (SHARES, not dollars), price (USD), description}, OLDEST-FIRST. `days` (default 180, hard cap 730) is anchored to the latest LOADED settlement date, not to today; `end_date` ends it elsewhere. An empty or thin history describes the loaded SEC files, not an absence of fails: read `coverage` and `summary` before reading a gap. Prices are NOT split-adjusted. An unreachable store REFUSES (DATA_UNAVAILABLE). Pair with ol_short_interest_trend for the other half. Source: SEC Fails-to-Deliver dataset (published twice monthly, ~3-week lag).",
+          "inputSchema": {
+            "properties": {
+              "days": {
+                "description": "Trailing window in days (default 180, max 730), ending at `as_of` unless end_date is given",
+                "maximum": 730,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "end_date": {
+                "description": "ISO date (YYYY-MM-DD) the window ends on; default = the latest loaded settlement date. Pass today's date to measure against the calendar.",
+                "type": "string"
+              },
+              "ticker": {
+                "description": "Stock ticker symbol (e.g. GME)",
+                "type": "string"
+              }
+            },
+            "required": ["ticker"],
+            "type": "object"
+          },
+          "annotations": {
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:942efbbccd9fde42f09a073e380ff455964cb93fafc5a3517e62608acc32066e"
+        },
+        {
+          "name": "get_fred_data",
+          "title": "FRED Series",
+          "description": "One series from Oxford Ledge's macro SNAPSHOT (about 41 FRED / Treasury series, newest observation each) by FRED id. Returns {series, data: {series, name, value, date, ytdChange, _source}, observation: 'latest_only', note} -- ONE observation, never a history. A series outside the snapshot returns {series, error, available}. THIRD-PARTY LICENSED SERIES ARE REFUSED WITH THE REASON (2026-09-13): the ICE BofA OAS credit spreads (BAMLH0A0HYM2, BAMLC0A0CM, BAMLC0A1CAAA, BAMLH0A1HYBB, BAMLH0A2HYB, BAMLH0A3HYC), VIXCLS and UMCSENT are licensed content FRED redistributes under its own terms and Oxford Ledge does not; the answer is {series, data: null, refusal_reason: 'third_party_licence', licensor, error, note, directional, directional_unavailable_reason}. RESTRICTED posture: a keyed tool on the hosted channel. Needs a free Oxford Ledge API key that the client's operator configures.",
+          "inputSchema": {
+            "properties": {
+              "series": {
+                "description": "FRED series ID (e.g. GDP, UNRATE, CPIAUCSL, DFF)",
+                "type": "string"
+              }
+            },
+            "required": ["series"],
+            "type": "object"
+          },
+          "annotations": {
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:b0245b6bd9df04fcdc2a1a1f9e2d564efe2ecbdfa18e3e82e10832739aa02501"
+        },
+        {
+          "name": "get_fundamentals",
+          "title": "Company Fundamentals",
+          "description": "Full XBRL financial history for one ticker. Returns {ticker, fundamentals:{years, periods, metrics, balanceSheet, quarterly, basis, as_of}, source_period, as_of}: `years` is newest-first, UP TO 30 annual labels, and every entry under `metrics` / `balanceSheet` is a PARALLEL ARRAY aligned to it by index (revenue, netIncome, opCF, capex, epsDiluted, totalDebt, cash, derived fcf and margins ...). Dollar figures are whole USD; *Pct values are percentage numbers. A year the filer did not tag is null, never 0. Per-share cells on a pre-split basis are WITHHELD (null) rather than rescaled -- read `basis`. An IFRS reporter or a filer with no annual us-gaap fact returns {error, taxonomy, formsSeen, unitsSeen}. For cash deployment use get_capital_allocation; for per-share fair value ol_intrinsic_value; for industry operating metrics ol_operating_kpis. Source: SEC EDGAR company-facts XBRL (~45-day post-quarter lag), 24h cache.",
+          "inputSchema": {
+            "properties": {
+              "ticker": {
+                "description": "Stock ticker symbol (e.g. AAPL)",
+                "type": "string"
+              }
+            },
+            "required": ["ticker"],
+            "type": "object"
+          },
+          "annotations": {
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:32de6729338794104da2520e35155a3961c20d89dc0b81581da440cb7ffde3dd"
+        },
+        {
+          "name": "get_insider_activity",
+          "title": "Insider Activity",
+          "description": "Recent Form 4 insider transactions for one ticker. Returns {ticker, transactions}: THE 20 MOST RECENT TRANSACTION ROWS ONLY, newest by filing date; `days` filters within those 20 (it never reaches past the 20). Rows carry insiderName, position (the role, the load-bearing signal), transType (the raw SEC code: 'P' open-market buy, 'S' sale, 'A' grant, 'M' option exercise; filter on it yourself), shares, pricePerShare, totalValue (USD, computed by Oxford Ledge at ingest), isDerivative (read it before treating `shares` as common stock) and url. A 4/A that repeats its original line is served once. Leave issuerSelfFiled rows out of any total. Market-wide buys: ol_insider_recent_buys; clusters: ol_insider_cluster_scan; >5% stakes: get_activist_stakes. Source: SEC EDGAR Form 4 (~2-day filing deadline). Requires Researcher tier.",
+          "inputSchema": {
+            "properties": {
+              "days": {
+                "description": "Optional. Keeps only rows filed within this many days, applied to the 20 newest rows. Omitted: no date filter.",
+                "maximum": 1825,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "ticker": {
+                "description": "Stock ticker symbol (e.g. AAPL)",
+                "type": "string"
+              }
+            },
+            "required": ["ticker"],
+            "type": "object"
+          },
+          "annotations": {
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:60ef98a9f4f4802eef539b17c957cbea86d12d7a422da58b27fe3e26ea7df3f6"
+        },
+        {
+          "name": "get_institutional_consensus",
+          "title": "Most Widely Held (13F)",
+          "description": "Which tickers the tracked 13F filers most widely hold in common. Returns {as_of_quarter, tickers_found, min_funds, consensus}; each row is {ticker, issuer_name, fund_count, total_value_usd, total_shares, funds}, ranked by fund_count then value. `consensus` is truncated to top_n (default 50, cap 200) while `tickers_found` is the FULL count meeting min_funds (default 2, cap 20). COMMON STOCK ONLY: an ownership tally, not exposure. Each fund contributes its own latest quarter, which may differ across funds. Answers 'who is buying X?'; get_13f_holdings answers 'what does fund X own?'. Source: SEC EDGAR 13F-HR, ~45-day quarterly delay.",
+          "inputSchema": {
+            "properties": {
+              "min_funds": {
+                "description": "Minimum number of notable funds that must hold a ticker for it to appear (default 2, max 20).",
+                "maximum": 20,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "top_n": {
+                "description": "Maximum number of consensus tickers to return (default 50, max 200).",
+                "maximum": 200,
+                "minimum": 1,
+                "type": "integer"
+              }
+            },
+            "required": [],
+            "type": "object"
+          },
+          "annotations": {
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:1da3e2518d9dd1a53790464e2f660773ca6eb8a458f58ac0364cfab77ab218c2"
+        },
+        {
+          "name": "get_institutional_holders",
+          "title": "Institutional Holders",
+          "description": "Which institutions hold one ticker, and which way they moved. Returns {ticker, holders, total_holders, as_of_quarter, coverage}. `holders`: the first `limit` (default 25, max 100) of the top 100 by value; `total_holders` is the TRUE filer count. Each holder carries fund_name, fund_cik, shares, value_usd (whole USD), quarter, change_type and pct_change vs that fund's prior quarter. Check `coverage.basis` ('universe' vs 'top_display') before quoting an aggregate. Common stock only; quarters can differ per row. Rows are CUSIP-resolved: a resolution failure drops or mis-attributes a row. Direction-only view: ol_ownership_changes; fund-keyed inverse: get_13f_holdings. Source: SEC EDGAR 13F-HR, ~45-day quarterly delay.",
+          "inputSchema": {
+            "properties": {
+              "limit": {
+                "description": "Holders to return from the top-100-by-value page (default 25, max 100); total_holders and coverage are unchanged.",
+                "maximum": 100,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "ticker": {
+                "description": "Stock ticker symbol (e.g. AAPL)",
+                "type": "string"
+              }
+            },
+            "required": ["ticker"],
+            "type": "object"
+          },
+          "annotations": {
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:47fa81f80353ef56d72a2cffc8929c5ddc745683ba1c0c3d9b2ee179ebefbbb2"
+        },
+        {
+          "name": "get_news",
+          "title": "Company News",
+          "description": "Read the Oxford Ledge news archive by ticker and/or keyword, newest first. Default limit 25, hard cap 100; no pagination offset. THE RESPONSE SHAPE DEPENDS ON THE ARGUMENTS: ticker only returns {articles, total}; any free-text query returns {articles, count} with richer rows (publisher, snippet, sentimentScore, tickers, tags). Handle both. `sentiment` is a LABEL string, NOT a number. Query matching is prefix-word, not semantic. Source: Oxford Ledge news archive (multi-provider, cron-populated). Needs a free Oxford Ledge API key that the client's operator configures.",
+          "inputSchema": {
+            "properties": {
+              "limit": {
+                "description": "Max results to return (default 25, max 100)",
+                "maximum": 100,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "query": {
+                "description": "Search query (e.g. 'tariff', 'earnings beat')",
+                "type": "string"
+              },
+              "ticker": {
+                "description": "Filter to a specific ticker (e.g. AAPL)",
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "annotations": {
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:18aec394e08228c33caf9049b95df3c26fdac707be3b309d07662ce92c73396b"
+        },
+        {
+          "name": "get_portfolio_positions",
+          "title": "Portfolio Positions",
+          "description": "Stored positions of one saved portfolio. Returns {portfolio_id, positions, error} on EVERY path (error is null on success, a string on failure, and positions is [] either way). Each position is ONLY {ticker, shares, costBasis (whole USD, may be null)}, ticker-sorted. THERE IS NO PRICE LEG: no price, market value, gain/loss or weight -- value the positions yourself. An unknown portfolio_id yields positions=[] with error=null, so an empty list does not prove the portfolio exists. For the catalog-wide sector mix use get_sector_breakdown. Source: the portfolio's stored positions. Needs a free Oxford Ledge API key that the client's operator configures.",
+          "inputSchema": {
+            "properties": {
+              "portfolio_id": {
+                "description": "Portfolio identifier (default: 'default')",
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "annotations": {
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:445b3a4e9cc7153d7f24fc64c8bde92febbb46e237b3078d76e4089ac90b284b"
+        },
+        {
+          "name": "get_sector_breakdown",
+          "title": "Sector Breakdown",
+          "description": "How Oxford Ledge's covered universe splits across sectors and industries (the whole catalog, NOT a portfolio). No arguments. Returns a BARE LIST of {sector, industry, tickerCount, totalMarketCap}, one row per sector+industry PAIR -- aggregate rows to get a sector total. totalMarketCap IS ALWAYS NULL: a count-only breakdown. Rows with a blank sector are excluded; a blank industry is null. Each industry sits under the ONE sector holding most of its tickers. Returns {error} (a dict) when the read fails. For a named portfolio use get_portfolio_positions. Source: Oxford Ledge company profiles, ~5,200 tickers.",
+          "inputSchema": {
+            "properties": {},
+            "type": "object"
+          },
+          "annotations": {
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:29815c81f47e9ef06118fd8ff5b9050580d09a60d04a91b634138c22baf95b47"
+        },
+        {
+          "name": "get_value_investing_fact",
+          "title": "Value Investing Facts",
+          "description": "Curated value-investing principle, historical fact or attributed paraphrase from Oxford Ledge's corpus (~2,000 entries about Buffett, Graham, Munger, Klarman and others). THE WORDING IS NOT VERIFIED against the primary source: none is a verbatim quotation unless `verbatim` is true -- so never present the text as the author's exact words, and credit it with the `attribution` line. THE SHAPE DEPENDS ON THE ARGUMENTS: a `query` returns {facts, count, total_facts} (facts capped at 10); a bare `category` or no arguments returns {fact, total_facts} (one random pick). Pedagogical content only -- never a market signal. Cached 24h per argument set.",
+          "inputSchema": {
+            "properties": {
+              "category": {
+                "description": "Optional category filter, one of the listed values (case-insensitive); omit for a random pick. Any other value is refused (INVALID_PARAMS) naming the values.",
+                "enum": ["principle", "historical_fact", "psychology", "quote", "case_study", "contrarian", "mistake"],
+                "type": "string"
+              },
+              "query": {
+                "description": "Optional search query to find facts by keyword (e.g. 'moat', 'fear')",
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "annotations": {
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:da13697115100a9e820bf906a9ecd3e96cd6efb8db96298b607fa1ea3938a51c"
+        },
+        {
+          "name": "get_yield_curve",
+          "title": "Treasury Yield Curve",
+          "description": "US Treasury yield curve, plus (by default) the wider macro dashboard. TWO DIFFERENT SHAPES. include_history=true returns PARALLEL ARRAYS over 11 tenors (1M..30Y) -- today, ~91 days ago and ~1 year ago -- for steepening/inversion work. include_history false (the DEFAULT) returns {data: [...]}, a flat LIST of latest-value rows that mixes the Treasury tenors WITH CPI, unemployment, GDP, mortgage-rate and national-debt series. UNITS: yields are PERCENT numbers (4.25 means 4.25%). The credit-spread OAS series and UMCSENT were removed 2026-07-21 (licensed data) and are NOT in the list. Source: Treasury.gov daily par yields (FRED fallback) plus FRED series; cached 4h.",
+          "inputSchema": {
+            "properties": {
+              "include_history": {
+                "description": "Include yield curve from 1 year ago for comparison (default false)",
+                "type": "boolean"
+              }
+            },
+            "type": "object"
+          },
+          "annotations": {
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:bd4352086b3c8b19c9389368c7d2a1cbb00aae8c8315817fbdd009b379d098db"
+        },
+        {
+          "name": "ol_13f_filer_analytics",
+          "title": "13F Filer Analytics",
+          "description": "Institutional-filer behavior derived purely from 13F holdings: concentration (top-N %, normalized HHI), turnover, and persistence (long-term holder vs fast money) for one filer. Pass a NUMERIC CIK (a ticker will not resolve here; ol_13f_filer_search finds it). Returns {summary, fund, quarter, n_positions, reported_long_equity_value, analytics}. The denominator is the filer's REPORTED 13F long-equity value, explicitly NOT AUM. NO position list -- use get_13f_holdings. A filer with one stored quarter gets no fabricated turnover rate; an unreachable store is REFUSED (DATA_UNAVAILABLE). Source: SEC EDGAR 13F-HR (public domain; Oxford Ledge derived); FREE.",
+          "inputSchema": {
+            "properties": {
+              "fund": {
+                "description": "13F filer CIK (e.g. 1067983).",
+                "type": "string"
+              }
+            },
+            "required": ["fund"],
+            "type": "object"
+          },
+          "annotations": {
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:fff26ceef107c4d202cbf6c2904163e841989277eef3b15a782a1683f964e33c"
+        },
+        {
+          "name": "ol_13f_filer_search",
+          "title": "13F Filer Search",
+          "description": "Resolve a 13F FILER name to its CIK -- the front door to get_13f_holdings and ol_13f_filer_analytics when you know the manager ('Berkshire Hathaway', 'Baupost') and not its CIK (search_company resolves ISSUERS). Returns {summary, query, filers: [{cik, name, last_filing, page_url}], count}; name-PREFIX matches rank first. THE UNIVERSE IS CURATED -- the filers Oxford Ledge ingests plus featured filers, never a live EDGAR full-text search. filers=[] means the store answered and nothing matched; an unreachable store is REFUSED (DATA_UNAVAILABLE). `query` 3-80 characters; `limit` default 5, hard cap 10. Source: SEC EDGAR 13F-HR (public domain; Oxford Ledge derived); FREE.",
+          "inputSchema": {
+            "properties": {
+              "limit": {
+                "description": "Max filers to return (default 5, hard cap 10).",
+                "maximum": 10,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "query": {
+                "description": "Filer name or fragment, 3-80 characters (e.g. 'Berkshire', 'Baupost').",
+                "maxLength": 80,
+                "minLength": 3,
+                "type": "string"
+              }
+            },
+            "required": ["query"],
+            "type": "object"
+          },
+          "annotations": {
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:2490f3157bd3da8f7811bc498e177450709fc0dd7ebaed7d09ddc8d5c1ce33e0"
+        },
+        {
+          "name": "ol_bank_structure_events",
+          "title": "Bank Structure Events",
+          "description": "FDIC STRUCTURAL EVENTS for one bank -- failures, assisted resolutions, mergers, acquisitions, charter changes -- newest first, with is_failure flagged from the FDIC CHANGECODE taxonomy. Pass `cert` (FDIC certificate) or `name`; a name resolves against active institutions AND closed charters, so a FAILED or merged-away bank (Signature Bank, First Republic) IS found, and `resolved_from` says which charter matched. Ambiguous names return an `ambiguous` candidate list instead of guessing -- call again with the `cert`. An unreachable FDIC store is DATA_UNAVAILABLE, never an empty list. Complements ol_fdic_bank (active institutions only). Source: FDIC public data; FREE.",
+          "inputSchema": {
+            "properties": {
+              "cert": {
+                "description": "FDIC certificate number.",
+                "type": "integer"
+              },
+              "limit": {
+                "description": "Max events (default 25, cap 100).",
+                "maximum": 100,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "name": {
+                "description": "Bank name to resolve when cert is unknown.",
+                "type": "string"
+              }
+            },
+            "required": [],
+            "type": "object"
+          },
+          "annotations": {
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:a0186b0208553ec2060b5f8d21e9723bb895de0afc38a021ff31cd613d76cf83"
+        },
+        {
+          "name": "ol_bdc_borrower_dispersion",
+          "title": "BDC Loan Mark Dispersion",
+          "description": "MOAT: cross-lender loan-pricing DISPERSION for one private-credit borrower -- how N different BDCs each price the SAME loan (spread / mark / fair value); when one BDC marks a borrower S+550 @ 98 and another S+575 @ 99, the lenders disagree on the credit. Pass `borrower_norm` (a key from ol_bdc_top_borrowers or search_bdc_borrower, or a name). Returns {summary, borrower_norm, count, lender_count, tranche_count, lenders, ...}: ONE row per BDC lender, widest spread first, tranches nested. UNITS TRAP: `spread` is the raw as-filed number and mixes percent and bps across filers -- compare lenders on `spread_bps` only. Exited/inactive lenders are excluded by default (include_stale shows them). Default 25 lenders, cap 100. Source: SEC EDGAR BDC schedules of investments (Oxford Ledge parse; ol-derived); FREE.",
+          "inputSchema": {
+            "properties": {
+              "borrower_norm": {
+                "description": "Borrower key (from ol_bdc_top_borrowers or search_bdc_borrower) or a borrower name such as 'Coupa Holdings, LLC'; resolved to the stored key (see match_type).",
+                "type": "string"
+              },
+              "include_stale": {
+                "description": "Include NON-CURRENT lenders: those whose newest filing no longer names this borrower (stale marks) and inactive (wound-down) filers' frozen final filings, listed after the current lenders. Default false.",
+                "type": "boolean"
+              },
+              "limit": {
+                "description": "Max LENDERS to return (default 25, hard cap 100); each lender's tranches ride nested.",
+                "maximum": 100,
+                "minimum": 1,
+                "type": "integer"
+              }
+            },
+            "required": ["borrower_norm"],
+            "type": "object"
+          },
+          "annotations": {
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:0cfbdeea3411a949f5f193158eca5a91698bffad2333783c3296d8adb31636e5"
+        },
+        {
+          "name": "ol_bdc_borrower_news_today",
+          "title": "BDC Borrower News",
+          "description": "MOAT / daily pulse: recent VERIFIED news for the private-credit borrowers held across MULTIPLE BDCs -- 'what broke recently for the cross-BDC borrowers I should watch?'. Returns {summary, count, items}; each item is {borrower, headline, source, url, date}. Matcher-VERIFIED only (>=0.9 confidence) and headline + link only, NO provider summary, so a false attribution cannot surface. Caps: limit default 25 / hard 100; since_days default 7 / hard 90; min_holders default 2 (max 50). No recent headlines returns items=[] -- absence is not a signal; an unreachable store is REFUSED (DATA_UNAVAILABLE). Source: Google News, matched to SEC EDGAR BDC borrowers; FREE. Needs a free Oxford Ledge API key that the client's operator configures.",
+          "inputSchema": {
+            "properties": {
+              "limit": {
+                "description": "Max news items to return (default 25, hard cap 100).",
+                "maximum": 100,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "min_holders": {
+                "description": "Minimum number of BDC lenders a borrower must appear in (default 2).",
+                "maximum": 50,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "since_days": {
+                "description": "How many days back to look (default 7, hard cap 90).",
+                "maximum": 90,
+                "minimum": 1,
+                "type": "integer"
+              }
+            },
+            "type": "object"
+          },
+          "annotations": {
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:6127b8e461d13075c206b7a94b976fe7c105ef9daae04cf15985a8e0a14cd9c1"
+        },
+        {
+          "name": "ol_bdc_common_borrowers",
+          "title": "BDC Common Borrowers",
+          "description": "Borrowers common to a GIVEN SET of BDCs -- the cross-portfolio set question ('what do ARCC, OBDC and AGTC all lend to?') in ONE call. Returns per borrower: borrower, borrower_norm, holder_count, holder_tickers, holders ([{ticker, name}]), total_fair_value and total_par_amount in USD, and as_of_oldest/as_of_newest. Each BDC is read at ITS most recent filing, so rows MIX filing dates -- read as_of_range before treating the marks as contemporaneous. Debt positions only. Caps: bdc_tickers truncated at 25, limit 50/200, min_holders max 50. Feed a borrower_norm to ol_bdc_borrower_dispersion for cross-lender pricing. Source: SEC EDGAR BDC schedules of investments (Oxford Ledge parse -- ol-derived); FREE.",
+          "inputSchema": {
+            "properties": {
+              "bdc_tickers": {
+                "description": "BDC symbols to intersect, e.g. [\"ARCC\",\"OBDC\",\"AGTC\"] (max 25)",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "limit": {
+                "description": "Max borrowers to return (default 50, max 200)",
+                "maximum": 200,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "min_holders": {
+                "description": "Minimum number of the supplied BDCs that must hold the borrower (default 2, min 2 -- this answers what is SHARED; for one BDC's book use ol_bdc_top_borrowers)",
+                "maximum": 50,
+                "minimum": 2,
+                "type": "integer"
+              }
+            },
+            "required": ["bdc_tickers"],
+            "type": "object"
+          },
+          "annotations": {
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:dd60dc4538a2a2458e9916ede1aff788ff20e317c09d67b04f52c809cf5b9b73"
+        },
+        {
+          "name": "ol_bdc_credit_quality",
+          "title": "BDC Credit Quality",
+          "description": "BDC non-accrual credit-deterioration signal: the share of debt fair value on non-accrual (loans that stopped paying) in the latest filing, plus the trailing-quarter trend. Returns {summary, ticker, latest, trend}; `trend` is OLDEST-FIRST. flagged_pct is a percentage over the DETERMINATE-flag denominator, never total_debt_fv, and it is deliberately NULL (withheld, never zero) when determinate coverage is under 90% of debt fair value or the flag rate looks like a parse misread -- read `coverage_state` before reading flagged_pct. `quarters` default 12, hard cap 24. Pairs with ol_bdc_borrower_dispersion and ol_bdc_top_borrowers. Source: SEC EDGAR BDC schedule-of-investments non-accrual flags (Oxford Ledge parse); FREE.",
+          "inputSchema": {
+            "properties": {
+              "quarters": {
+                "description": "Trailing quarters of trend (default 12, hard cap 24).",
+                "maximum": 24,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "ticker": {
+                "description": "BDC ticker (e.g. ARCC, ORCC, FSK).",
+                "type": "string"
+              }
+            },
+            "required": ["ticker"],
+            "type": "object"
+          },
+          "annotations": {
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:015832d5ceca85a32aecc4b65bcb3b4b2866329d368fd2ed52da11bec9762a57"
+        },
+        {
+          "name": "ol_bdc_fee_load",
+          "title": "BDC Fee Load",
+          "description": "BDC fee load + NII-based dividend coverage for ONE fiscal year (not a series). Returns {summary, ticker, fiscal_year, fees, dividend_coverage}; `fees` holds base and incentive fees and net investment income in whole USD; `dividend_coverage` is NII divided by dividends paid, a ratio (0.92 means 0.92x) -- under 1.0 means the dividend is funded partly from capital. Fee RATE percentages and the dividend amount are not returned. A missing input is served as null and named, never as zero; an unreachable store is REFUSED (DATA_UNAVAILABLE). An internally-managed BDC carries no fee lines by construction. Source: SEC EDGAR 10-K/10-Q Statement-of-Operations XBRL, NOT a vendor fundamentals feed; FREE.",
+          "inputSchema": {
+            "properties": {
+              "ticker": {
+                "description": "BDC ticker (e.g. ARCC, MAIN, HTGC).",
+                "type": "string"
+              }
+            },
+            "required": ["ticker"],
+            "type": "object"
+          },
+          "annotations": {
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:559667e5f67d9d3941e972b3b9027ce8e9b6c99ce60d7d4ed8627afd48906200"
+        },
+        {
+          "name": "ol_bdc_loan_pricing_trend",
+          "title": "BDC Loan Pricing Trend",
+          "description": "Per-quarter loan-pricing trend for ONE BDC, from the parsed schedule of investments: fair-value-weighted average credit spread, average mark and position counts, OLDEST-FIRST. Returns {summary, ticker, count, spread_unit, trend}. `weighted_avg_spread` is in BASIS POINTS, normalized at the store (the as-filed column mixes percent and bps, so never average a raw spread yourself). Prefer `priced_borrowers` over `debt_positions` across quarters: position counts are parser-grain-dependent. `quarters` default 16, max 24. Honest-empty (trend=[]) for an unparsed BDC. Pairs with ol_bdc_borrower_dispersion. Source: SEC EDGAR BDC 10-Q/10-K schedules of investments (Oxford Ledge parse); FREE.",
+          "inputSchema": {
+            "properties": {
+              "quarters": {
+                "description": "Quarters to return (default 16, max 24).",
+                "maximum": 24,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "ticker": {
+                "description": "BDC ticker (e.g. ARCC).",
+                "type": "string"
+              }
+            },
+            "required": ["ticker"],
+            "type": "object"
+          },
+          "annotations": {
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:665985548ce68b8844013039cb58c5c0447aa5a36e0269f0857c21164e94b9ea"
+        },
+        {
+          "name": "ol_bdc_mark_changes",
+          "title": "BDC Mark Changes",
+          "description": "MOAT / private credit: the largest quarter-over-quarter MARK moves across a SET of BDC portfolios -- 'which borrowers got marked up or down the most last quarter, and by whom' in ONE deterministic call. Returns {increases, decreases}, each a global ranking; each row is {borrower, portfolio, prior_mark, latest_mark, mark_delta, prior_filing, latest_filing}. Marks are percent of par, fair-value-weighted across the BDC's tranches; mark_delta is in points. A borrower enters only when |mark_delta| >= 1.0 point and its fair value is >= $500k. Implausible moves are held in `suspect_moves` rather than ranked. `coverage` names every BDC that was NOT read and why. bdc_tickers capped at 25; limit default 10 / hard 50 per direction. Source: SEC 10-K/10-Q schedules of investments (Oxford Ledge parse); FREE.",
+          "inputSchema": {
+            "properties": {
+              "bdc_tickers": {
+                "description": "BDC symbols to compare, e.g. [\"ARCC\",\"FSK\",\"OBDC\"] (max 25; the excess is reported in `coverage.not_covered_detail` rather than dropped)",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "limit": {
+                "description": "Rows per direction (default 10, hard cap 50). Ranking is GLOBAL across the supplied portfolios, not per BDC.",
+                "maximum": 50,
+                "minimum": 1,
+                "type": "integer"
+              }
+            },
+            "required": ["bdc_tickers"],
+            "type": "object"
+          },
+          "annotations": {
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:cbb77893a581897166397e431471d0eea81440fe3b01953feb3491417b373000"
+        },
+        {
+          "name": "ol_bdc_top_borrowers",
+          "title": "BDC Top Borrowers",
+          "description": "MOAT / BDC discovery: the private-credit borrowers syndicated across the MOST BDCs, ranked by ACTIVE lender count (holder_count_active), then holder_count, then exposure -- the entrypoint for the BDC/private-credit category. Returns {summary, count, borrowers}; each row is {borrower, borrower_norm (the key other ol_bdc_* tools take), holder_count, total_fair_value (whole USD, latest filings), industry}. Feed a borrower_norm into ol_bdc_borrower_dispersion for cross-lender pricing. Caps: limit default 25 / hard 100; min_holders default 2 (max 50). Parser mis-ingests are filtered out when the filter is available (`borrower_filters` says whether it ran). Source: SEC EDGAR BDC schedules of investments (Oxford Ledge parse); FREE.",
+          "inputSchema": {
+            "properties": {
+              "limit": {
+                "description": "Max borrowers to return (default 25, hard cap 100).",
+                "maximum": 100,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "min_holders": {
+                "description": "Minimum number of BDC lenders a borrower must appear in (default 2).",
+                "maximum": 50,
+                "minimum": 1,
+                "type": "integer"
+              }
+            },
+            "type": "object"
+          },
+          "annotations": {
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:f5442d170a94d36fbf555e4d1bb96dc0eb780bb0d2351810bcb87b50d74faefb"
+        },
+        {
+          "name": "ol_bond_directory_screen",
+          "title": "Bond Directory Screen",
+          "description": "Screen the corporate-bond browse directory by issuer name, grade (IG or HY), and optional coupon and maturity bands. Returns {summary, count, total_matching, bonds}; each bond is {key, issuer_name, coupon (percent number), coupon_type, maturity_date, grade, source_etf}. REFERENCE DATA ONLY -- no price, yield, spread or trade activity, and no security identifier. `grade` is the coarse SOURCE BUCKET (IG=LQD, HY=HYG), NOT a credit rating. limit default 25, hard cap 100. NOTE ON PROVENANCE: the directory is sourced from the LQD (investment-grade) and HYG (high-yield) ETF holdings. Its ingest-source redistribution posture is unresolved (Oxford Ledge legal review, 2026-07-07), so this is a FIRST-PARTY-only tool and is off the third-party redistribution surface until cleared. FREE. Needs a free Oxford Ledge API key that the client's operator configures.",
+          "inputSchema": {
+            "properties": {
+              "coupon_max": {
+                "description": "Maximum coupon percent, applied in-tool over the fetched page (optional).",
+                "type": "number"
+              },
+              "coupon_min": {
+                "description": "Minimum coupon percent, applied in-tool over the fetched page (optional).",
+                "type": "number"
+              },
+              "grade": {
+                "description": "Source bucket: 'IG' (LQD universe) or 'HY' (HYG universe), case-insensitive. Not a rating.",
+                "enum": ["IG", "HY"],
+                "type": "string"
+              },
+              "issuer": {
+                "description": "Issuer-name substring to match (optional). Identifier lookups are not supported.",
+                "type": "string"
+              },
+              "limit": {
+                "description": "Max bonds to return (default 25, hard cap 100).",
+                "maximum": 100,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "maturity_after": {
+                "description": "Only bonds maturing on/after this ISO date (YYYY-MM-DD), optional.",
+                "type": "string"
+              },
+              "maturity_before": {
+                "description": "Only bonds maturing on/before this ISO date (YYYY-MM-DD), optional.",
+                "type": "string"
+              },
+              "offset": {
+                "description": "Pagination offset. Not accepted with a coupon/maturity band (a band reads the first 200 issuer/grade matches; there is no banded page to offset into).",
+                "maximum": 100000,
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "type": "object"
+          },
+          "annotations": {
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:4ba666ffe86fe2da1a11b2959619fe58e48412de361138caa8ac41e7248ea57a"
+        },
+        {
+          "name": "ol_borrower_profile",
+          "title": "Private Borrower Profile",
+          "description": "Profile + verified M&A/ownership history for one private-credit borrower. Pass `borrower_norm` (a key from ol_bdc_top_borrowers, or a name). Returns {summary, borrower_norm, borrower, profile, acquisitions, count, public_footprint}: the `profile` (description, industry, known_lenders, lien_position, estimated_size, notes, source), VERIFIED-only `acquisitions` (unaudited or refuted events never surface), and `public_footprint` (patents, federal contracts, corporate events) matched by exact normalized name, with `matched_entities` provenance -- a same-name match is never a guaranteed identity, and an empty footprint is normal for a private borrower. Honest-empty when the key is unknown. Source: SEC EDGAR BDC Schedule-of-Investments + attributed public M&A events (Oxford Ledge proprietary parse); FREE.",
+          "inputSchema": {
+            "properties": {
+              "borrower_norm": {
+                "description": "Borrower key (from ol_bdc_top_borrowers) or a borrower name such as 'Coupa Holdings, LLC'; resolved to the stored key (see match_type).",
+                "type": "string"
+              },
+              "limit": {
+                "description": "Max M&A/ownership events to return (default 20, hard cap 100).",
+                "maximum": 100,
+                "minimum": 1,
+                "type": "integer"
+              }
+            },
+            "required": ["borrower_norm"],
+            "type": "object"
+          },
+          "annotations": {
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:6f0f3583f21404c283fdee5736a415ceb02c4f36d02a33677c92248c9cfbe5ad"
+        },
+        {
+          "name": "ol_cftc_cot",
+          "title": "CFTC Commitments of Traders",
+          "description": "CFTC Commitments-of-Traders positioning for THREE curated markets (keys gold, crude_oil, sp500). Pass `market` for its weekly history, NEWEST FIRST (names are normalised: 'wti', 'GOLD', 'e-mini s&p' resolve), or omit it for the latest report across the three. Returns {summary, market, matched_market, rows}. mm_* and open_interest are CONTRACT counts, not dollars, and mm_* cover ONE speculative category per report family (Managed Money for gold and crude_oil, Leveraged Funds for sp500). `limit` (series only) default 52, hard cap 156. An unreachable store is REFUSED (DATA_UNAVAILABLE). Source: CFTC.gov (public domain); FREE. ATTRIBUTION: every field is CFTC verbatim EXCEPT market_key and market_label (Oxford Ledge's curated market catalog) and mm_net (mm_long minus mm_short, computed by Oxford Ledge).",
+          "inputSchema": {
+            "properties": {
+              "limit": {
+                "description": "Weekly reports for a market series (default 52, hard cap 156).",
+                "maximum": 156,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "market": {
+                "description": "Market key, CFTC report name or desk symbol -- gold / GC / XAU, crude_oil / CL / WTI, sp500 / ES / S&P (case-insensitive; omit for the latest all-market snapshot).",
+                "type": "string"
+              }
+            },
+            "required": [],
+            "type": "object"
+          },
+          "annotations": {
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:1c83f52106226f6ff5f856e2dd68bbd0c46cc304935936f162f96becb9a307f4"
+        },
+        {
+          "name": "ol_earnings_calendar",
+          "title": "Earnings Calendar",
+          "description": "Upcoming EARNINGS DATES for one issuer, provenance-labelled: published_events are dates the ISSUER posted on its own IR calendar; estimate is an Oxford Ledge projection from the issuer's SEC filing cadence, with its confidence. Returns {ticker, published_events, published_events_degraded, estimate, provenance_rule, note}. The two are NOT merged: prefer a published date yourself, and never present the estimate as a company announcement. SCOPE: US domestic 8-K filers only. Read published_events_degraded before reading the note as an issuer fact. Distinct from get_economic_calendar (macro releases). Source: issuer IR pages + SEC filing cadence (Oxford Ledge); FREE.",
+          "inputSchema": {
+            "properties": {
+              "ticker": {
+                "description": "Issuer symbol.",
+                "type": "string"
+              }
+            },
+            "required": ["ticker"],
+            "type": "object"
+          },
+          "annotations": {
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:eef3b8d435488f0411e1af8bcd1f8a4223630eda2822e8c3e9c7bfe357840e4d"
+        },
+        {
+          "name": "ol_etf_lookthrough",
+          "title": "ETF Look-Through",
+          "description": "ETF look-through: expand up to 25 ETF tickers into the underlying holdings the fund ITSELF filed on Form N-PORT. Returns {summary, count, etfs, units}; per ETF {etf, name, category, net_assets, in_catalog, series_id, opaque, reason, period_date, holdings_available, top_holdings}. `top_holdings` is value-ranked (default 10, hard cap 50), each with underlying_ticker, issuer_name, value_usd (whole USD), pct_of_nav (as filed) and weight_pct (Oxford Ledge derived; the shown rows will not sum to 100). HOLDINGS-ONLY: no yield, NAV or premium. An ETF with no filed holdings comes back opaque=true with `reason`; a store outage is DATA_UNAVAILABLE, never opaque. Source: SEC EDGAR N-PORT, latest filed period per series (~60-day lag); FREE.",
+          "inputSchema": {
+            "properties": {
+              "tickers": {
+                "description": "ETF ticker symbols to expand (e.g. ['VOO','QQQ']). Max 25.",
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 25,
+                "type": "array"
+              },
+              "top_holdings": {
+                "description": "Max underlying holdings per ETF (default 10, hard cap 50).",
+                "maximum": 50,
+                "minimum": 1,
+                "type": "integer"
+              }
+            },
+            "required": ["tickers"],
+            "type": "object"
+          },
+          "annotations": {
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:31ca6f6e66d20a3e425420d670965fe3d3196f692cbc2c468bc46eb990c16c59"
+        },
+        {
+          "name": "ol_fdic_bank",
+          "title": "FDIC Bank Lookup",
+          "description": "FDIC-insured banks and thrifts. Pass `query` for a name PREFIX search against ACTIVE institutions (largest-asset first), or omit it for the largest active institutions. Returns {summary, query?, found?, institutions}. UNITS: `asset` and `dep` are THOUSANDS of dollars. The store is loaded ACTIVE-ONLY, so a bank that merged away or failed is absent by construction; a name miss says whether a structure event explains it (`structure_event`). An unreachable store is REFUSED (DATA_UNAVAILABLE). `limit` default 25, hard cap 100. Source: FDIC.gov (public domain); FREE. ATTRIBUTION: every field is FDIC BankFind verbatim EXCEPT `ticker`, which is an Oxford Ledge-verified CERT-to-ticker mapping, not an FDIC-published field.",
+          "inputSchema": {
+            "properties": {
+              "limit": {
+                "description": "Max institutions (default 25, hard cap 100).",
+                "maximum": 100,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "query": {
+                "description": "Institution name prefix (omit for the top-by-assets list).",
+                "type": "string"
+              }
+            },
+            "required": [],
+            "type": "object"
+          },
+          "annotations": {
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:9254c1e34fc30e1b666832989fedb118267c0d3c5bf714da110b4ba54e0e0766"
+        },
+        {
+          "name": "ol_federal_contracts",
+          "title": "Federal Contracts",
+          "description": "Federal-contract obligation history for a ticker, OR the fiscal-year leaderboard -- for government-revenue-dependence diligence. TWO SHAPES: exactly one of `ticker` or `fiscal_year` is REQUIRED (both is refused). With `ticker`: per-fiscal-year obligations (USD, the ten largest recipients, dropped_unresolved), NEWEST FY FIRST; with fiscal_year only: a leaderboard of the public companies on Oxford Ledge's USAspending crosswalk, largest first -- not of all federal contractors. A fiscal year still in progress is PARTIAL (period_complete false) and year-to-date -- never compare it to a full year. Obligations are federal awards, not company-reported revenue. `limit` default 20, hard cap 100. An unreachable store is REFUSED (DATA_UNAVAILABLE). Source: USAspending.gov (public domain; OL ticker-crosswalked); FREE. Attributing awards to a ticker is an Oxford Ledge curated crosswalk.",
+          "inputSchema": {
+            "properties": {
+              "fiscal_year": {
+                "description": "Fiscal year for the top-contractors leaderboard (not with ticker).",
+                "type": "integer"
+              },
+              "limit": {
+                "description": "Max rows (default 20, hard cap 100).",
+                "maximum": 100,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "ticker": {
+                "description": "Stock ticker for its per-year history (omit for the FY leaderboard; not with fiscal_year).",
+                "type": "string"
+              }
+            },
+            "required": [],
+            "type": "object"
+          },
+          "annotations": {
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:1538dda0eeeb43dc010d1b5410898e5341252476fb2c59b77a68f72f6764ff9b"
+        },
+        {
+          "name": "ol_filing_search",
+          "title": "SEC Filing Search",
+          "description": "MOAT (PAID -- AI): semantic retrieval over EMBEDDED SEC filings for a ticker. Ask a natural-language question ('what did they say about supply-chain risk?') and get the most relevant filing CHUNKS back from an Oxford Ledge hybrid retrieval (lexical BM25 plus a dense pass, fused by reciprocal rank). This is the ONE metered tool: it draws on your daily AI quota (25 searches/day, UTC reset, plus a burst limiter) -- it needs a signed-in account or an API key, and an anonymous call fails AUTH_REQUIRED. Returns {summary, ticker, count, chunks, quota_remaining_today}; each chunk is {section, text (an excerpt), accession, url, score}. `score` is the FUSED RANK score (4dp), NOT a similarity: compare it only within one response. `k` default 5, hard cap 15. Source: SEC EDGAR filings (Oxford Ledge embedded corpus). Needs a free Oxford Ledge API key that the client's operator configures.",
+          "inputSchema": {
+            "properties": {
+              "k": {
+                "description": "Number of chunks to return (default 5, hard cap 15).",
+                "maximum": 15,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "query": {
+                "description": "Natural-language question to retrieve relevant filing passages for.",
+                "type": "string"
+              },
+              "ticker": {
+                "description": "Stock ticker symbol (e.g. AAPL)",
+                "type": "string"
+              }
+            },
+            "required": ["query", "ticker"],
+            "type": "object"
+          },
+          "annotations": {
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:b9c1ae106c75c27958bf1cfea9558e9ea2dd9d1246ad7b597f7d800af05c0417"
+        },
+        {
+          "name": "ol_form_d_raises",
+          "title": "Form D Private Raises",
+          "description": "Recent SEC Form D private-placement filings from the SEC's QUARTERLY Form D data set -- newest first, optionally scoped to an industry group and/or a trailing filing-date window. Returns {summary, count, days, industry, offerings}. Amounts are whole USD as disclosed; total_offering_amount is a ceiling, not money raised. The data set lands about one quarter after quarter-end, so a short `days` window is EMPTY BY CONSTRUCTION -- not evidence that nothing was filed. `limit` default 50, hard cap 200. Source: SEC EDGAR Form D data sets (public domain); FREE.",
+          "inputSchema": {
+            "properties": {
+              "days": {
+                "description": "Trailing filing-date window in days (optional). The data set is quarterly with ~1 quarter of posting lag: a window shorter than that is empty by construction.",
+                "maximum": 1825,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "industry": {
+                "description": "Industry group filter (optional).",
+                "type": "string"
+              },
+              "limit": {
+                "description": "Max offerings (default 50, hard cap 200).",
+                "maximum": 200,
+                "minimum": 1,
+                "type": "integer"
+              }
+            },
+            "required": [],
+            "type": "object"
+          },
+          "annotations": {
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:f9290a88fbdc9ad7886dab055cf862db80d73f927f2a4b7282ec052590d6385e"
+        },
+        {
+          "name": "ol_fundamentals_screen",
+          "title": "Fundamentals Screen",
+          "description": "Threshold screen over up to 10 caller-supplied tickers (extras named in `dropped`) on latest-year SEC EDGAR XBRL fundamentals. Optional criteria: min_revenue, min_free_cash_flow, min_ebit_margin_pct, min_gross_margin_pct, max_debt_to_assets_pct, min_current_ratio, min_net_income (whole USD; *_pct as percentage numbers). Each result carries verdict: pass, fail (a reported value misses a threshold, in failed_criteria) or unknown (a metric not filed for the latest year, in unevaluated_criteria; unknown is not a fail). Not a universe screen; a fundamentals filter, NOT a buy signal. Source: SEC EDGAR company-facts XBRL.",
+          "inputSchema": {
+            "properties": {
+              "max_debt_to_assets_pct": {
+                "description": "Max debt-to-assets (percent).",
+                "type": "number"
+              },
+              "min_current_ratio": {
+                "description": "Min current ratio.",
+                "type": "number"
+              },
+              "min_ebit_margin_pct": {
+                "description": "Min EBIT margin (percent).",
+                "type": "number"
+              },
+              "min_free_cash_flow": {
+                "description": "Min latest-year free cash flow (USD).",
+                "type": "number"
+              },
+              "min_gross_margin_pct": {
+                "description": "Min gross margin (percent).",
+                "type": "number"
+              },
+              "min_net_income": {
+                "description": "Min latest-year net income (USD).",
+                "type": "number"
+              },
+              "min_revenue": {
+                "description": "Min latest-year revenue (USD).",
+                "type": "number"
+              },
+              "tickers": {
+                "description": "2-10 candidate ticker symbols to screen (hard-capped at 10).",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "required": ["tickers"],
+            "type": "object"
+          },
+          "annotations": {
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:0f88a696620baef92145fb9d298132725d8b3b1262f09a59fe1e9fbedda8296f"
+        },
+        {
+          "name": "ol_glossary_term",
+          "title": "Glossary Term",
+          "description": "Oxford Ledge's editorial GLOSSARY: ~1,500 finance and investing terms written for lifelong students of the market -- definition, worked example, etymology, pronunciation, related terms (see-also), and the learning paths that teach the concept. Look up one term by name (case and punctuation tolerant: 'first lien', 'convexity', 'duration'). Use it to ground explanations in the SAME definitions the platform teaches from, instead of improvising one. Source: Oxford Ledge editorial (reviewed in-house); FREE.",
+          "inputSchema": {
+            "properties": {
+              "term": {
+                "description": "The term to look up, e.g. 'duration'.",
+                "type": "string"
+              }
+            },
+            "required": ["term"],
+            "type": "object"
+          },
+          "annotations": {
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:9c8570a0a245f66a37eb5210c0a4efc422fc1dffcd10bac4a94561ebf926614f"
+        },
+        {
+          "name": "ol_insider_cluster_scan",
+          "title": "Insider Cluster Scan",
+          "description": "FLAGSHIP MOAT: scan for ACTIVE multi-insider cluster-buy/sell signals (distinct-actor Form 4 clusters with statistical strength). THREE GRAINS: pass `tickers` for a watchlist, a single `ticker` for that name's recent fired clusters, or NEITHER for the MARKET-WIDE scan (top fired clusters across every ticker, one row per ticker and direction). Returns {summary, count, events, grain, since_days, limit}; each event is {ticker, direction, insider_count, z_score, sector_z_score, percentile, window_start, window_end}. No fired clusters returns events=[] -- absence is not a signal; an unreachable store is REFUSED. Source: SEC EDGAR Form 4, windowed on FILING date so it is look-ahead-safe; FREE.",
+          "inputSchema": {
+            "properties": {
+              "limit": {
+                "description": "Max events to return (default 25, hard cap 100; market-wide grain: default 10, max 25, more is refused).",
+                "maximum": 100,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "min_insider_count": {
+                "description": "Minimum distinct insiders for a fired cluster (default 3).",
+                "maximum": 50,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "since_days": {
+                "description": "Window in days: watchlist default 7 (max 365); market-wide default 30 (max 90; more is refused); not accepted with `ticker` (that grain has no window).",
+                "maximum": 365,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "ticker": {
+                "description": "Single ticker for its recent fired clusters (alternative to `tickers`). Omit BOTH for the market-wide scan.",
+                "type": "string"
+              },
+              "tickers": {
+                "description": "Watchlist of ticker symbols (e.g. ['AAPL','MSFT']). Max 100. Use this OR `ticker`, not both.",
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 100,
+                "type": "array"
+              }
+            },
+            "type": "object"
+          },
+          "annotations": {
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:d88f35bb70433cae1b89c70b4d602a396b7729fddcd62d1e68b9858105fb7ff0"
+        },
+        {
+          "name": "ol_insider_recent_buys",
+          "title": "Recent Insider Buys",
+          "description": "Recent OPEN-MARKET insider PURCHASES (SEC code 'P') across the Oxford Ledge issuer catalog (~5.3k tickers) -- a daily insider screen. Returns {summary, since_days, count, buys}, NEWEST FIRST; each buy carries ticker, filing and transaction dates, insiderName, position, shares, pricePerShare, totalValue (USD), url. since_days default 30 (hard cap 180), limit default 25 (hard cap 100). SAMPLING TRAP: when the window holds more purchases than `limit`, you get the NEWEST N filings, not the whole window -- never total these rows and call it the period's insider buying. totalValue and the fallback `position` label are the two derived fields. Source: SEC EDGAR Form 4 (public domain); FREE. Pairs with ol_insider_cluster_scan and get_insider_activity.",
+          "inputSchema": {
+            "properties": {
+              "common_only": {
+                "description": "Common stock only (default true): drops derivative rows and any security title naming preferred / pfd / warrant / debenture / note. Series-named common classes (\"Series A Common Stock\") are kept. false restores every 'P' row.",
+                "type": "boolean"
+              },
+              "limit": {
+                "description": "Max purchases (default 25, hard cap 100).",
+                "maximum": 100,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "min_value": {
+                "description": "Only purchases with totalValue >= this many USD (optional). Rows whose totalValue is null -- the filed price failed the plausibility gate -- are dropped when this is set.",
+                "minimum": 0,
+                "type": "number"
+              },
+              "since_days": {
+                "description": "Trailing window in days (default 30, hard cap 180).",
+                "maximum": 180,
+                "minimum": 1,
+                "type": "integer"
+              }
+            },
+            "required": [],
+            "type": "object"
+          },
+          "annotations": {
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:b604498e0a835387c98d84583363bbab557360ab0f88f32eb5d2fe442f6baefb"
+        },
+        {
+          "name": "ol_institutional_confluence",
+          "title": "Institutional Confluence",
+          "description": "Quarter-aligned institutional-confluence read for one ticker: 13F accumulation x insider Form 4 net buying x buy-cluster confirmation, fused on the ticker's reference 13F quarter. Returns a `verdict` (confluence_accumulation / confluence_distribution / partial_net_adding / partial_net_reducing / neutral, or insufficient_13f_coverage / insufficient_history, never coerced to neutral), plus `institutional`, `insider`, `cluster`, `coverage` and a one-line `summary`. A DERIVED verdict, not raw data: no per-fund rows. Pairs with get_institutional_holders and ol_insider_cluster_scan. Source: SEC EDGAR 13F-HR + Form 4 (Oxford Ledge derived fusion); FREE, no tier gate and no AI metering.",
+          "inputSchema": {
+            "properties": {
+              "ticker": {
+                "description": "Stock ticker symbol, e.g. AAPL.",
+                "type": "string"
+              }
+            },
+            "required": ["ticker"],
+            "type": "object"
+          },
+          "annotations": {
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:8936b1be80fc19c8f042e4ddf522d7b70c66155e1014bc6a7160ea611907735d"
+        },
+        {
+          "name": "ol_intrinsic_value",
+          "title": "Intrinsic Value Estimate",
+          "description": "Per-share intrinsic value from SEC EDGAR XBRL -- three textbook models: a levered-FCF DCF, a Greenwald Earnings-Power-Value, and the Graham number. Returns {summary, ticker, available, dcf_per_share, epv_per_share, graham_number, inputs, assumptions, as_of}; all three values are USD PER SHARE. `assumptions` are FIXED model constants, not per-name (10% discount, 2.5% terminal growth, 10y horizon, 21% tax). NO current price, market cap or margin of safety is returned -- fetch a price yourself and compare. A model is null when its inputs are negative or missing (null_reasons names the input), never computed as if debt-free. reason 'fetch_error' is transient: retry. The DCF is FCFE-style, not comparable to an enterprise-value DCF. Source: SEC EDGAR company-facts XBRL.",
+          "inputSchema": {
+            "properties": {
+              "ticker": {
+                "description": "Stock ticker symbol (e.g. AAPL).",
+                "type": "string"
+              }
+            },
+            "required": ["ticker"],
+            "type": "object"
+          },
+          "annotations": {
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:b26bfef510f958b54da52618ac8bbcd0af82acfdf676703b6c6e2bd2ec48fc90"
+        },
+        {
+          "name": "ol_issuer_kpi_panel",
+          "title": "Issuer KPI Panel",
+          "description": "Tier-3 KPI PANEL for ONE issuer -- curated per-issuer metric rows (ARR, RPO/cRPO, NRR, logo retention, DAU/MAU, capacity utilization, ...) extracted from SEC filing exhibits, WITH the issuer's own metric definitions and full provenance. ABSENCE IS FIRST-CLASS: a row with value=null and is_absence=true is an answer (metric_availability says why), not a gap to fill from memory. Values are confidence-gated; needs_review rows are EXCLUDED. Optional filters: metric, period, industry. Per-issuer by design. For broad operating KPIs across 26 configured industries use ol_operating_kpis. Source: SEC 10-K/10-Q/8-K/6-K exhibits (Oxford Ledge parse); FREE.",
+          "inputSchema": {
+            "properties": {
+              "industry": {
+                "description": "Optional panel tag filter, e.g. enterprise_saas.",
+                "type": "string"
+              },
+              "limit": {
+                "description": "Max rows (default 200, hard cap 800).",
+                "maximum": 800,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "metric": {
+                "description": "Optional metric key filter, e.g. arr, crpo, nrr.",
+                "type": "string"
+              },
+              "period": {
+                "description": "Optional fiscal-period label, e.g. 2026-Q2.",
+                "type": "string"
+              },
+              "ticker": {
+                "description": "Issuer symbol (single issuer, mandatory). There is deliberately NO cross-issuer panel read -- one metric across many issuers is not an answerable question on this surface.",
+                "type": "string"
+              }
+            },
+            "required": ["ticker"],
+            "type": "object"
+          },
+          "annotations": {
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:901559b1cc38f9a130e458b9e3afa31c83477e9d1bd535f380e5fb1a72ddbdb8"
+        },
+        {
+          "name": "ol_learn_check",
+          "title": "Lesson Check",
+          "description": "Grade the learner's answer to a LEARN check. item 'self_check' with section (the check's step index) and selected_option (0-based) is graded on the server for every caller, no key needed, and returns correct, correct_option and the lesson's own explanation, which you relay as written. The module quiz (item 'quiz') and the apply task (item 'apply') are not graded over MCP yet: they answer graded: false and the lesson continues. Submit ONLY the option the learner chose, never your own pick; pass hint_used: true if they asked for the hint. A step that is not a self-check, or an option out of range, is refused (INVALID_PARAMS). Stateless: nothing is stored. Source: Oxford Ledge LEARN (authored); FREE.",
+          "inputSchema": {
+            "properties": {
+              "hint_used": {
+                "default": false,
+                "description": "True if the learner asked for the hint first.",
+                "type": "boolean"
+              },
+              "item": {
+                "description": "self_check (graded now), quiz or apply (not graded over MCP yet).",
+                "enum": ["self_check", "quiz", "apply"],
+                "type": "string"
+              },
+              "module_id": {
+                "description": "Module id such as 'val-1', or its slug ('pe-ratio'), or '<path>/<slug>'.",
+                "maxLength": 120,
+                "minLength": 1,
+                "type": "string"
+              },
+              "options_digest": {
+                "description": "The check's options_digest from the step the learner answered. Optional; a stale one is refused, not graded.",
+                "maxLength": 64,
+                "minLength": 1,
+                "type": "string"
+              },
+              "section": {
+                "description": "For self_check only: the step index of the check.",
+                "maximum": 200,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "selected_option": {
+                "description": "0-based index of the option the LEARNER chose (A = 0).",
+                "maximum": 9,
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": ["item", "module_id", "selected_option"],
+            "type": "object"
+          },
+          "annotations": {
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:7ee9ca30d6540c2ae2f807a1340cc1748fbf5a352803dae9ca41286013b11487"
+        },
+        {
+          "name": "ol_learn_find",
+          "title": "Find a Lesson",
+          "description": "Find an Oxford Ledge LEARN lesson to teach: 40 learning paths and 433 modules written for lifelong students and investors. No arguments lists the paths plus a start_here module; `path` lists one path's modules in teaching order; `query` searches module titles, section headings and glossary terms ('P/E ratio', 'free cash flow'). Each module row carries module_id, title, level, est_minutes, prereqs, check counts and lesson_url. `completed` (module ids the learner has finished; advisory, never stored) picks start_here and next_up by path order and prerequisites. Teach the module with ol_learn_lesson. Educational content, never a recommendation to buy or sell a security. Source: Oxford Ledge LEARN (authored); FREE for every caller, no key needed.",
+          "inputSchema": {
+            "properties": {
+              "completed": {
+                "description": "Module ids the learner has finished. Advisory; never stored.",
+                "items": {
+                  "maxLength": 120,
+                  "type": "string"
+                },
+                "maxItems": 500,
+                "type": "array"
+              },
+              "level": {
+                "description": "Only paths at this level.",
+                "enum": ["beginner", "intermediate", "advanced"],
+                "type": "string"
+              },
+              "limit": {
+                "default": 10,
+                "description": "Most modules a `query` returns (1..50, default 10).",
+                "maximum": 50,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "path": {
+                "description": "A path id such as 'valuation-101': list its modules in order.",
+                "maxLength": 80,
+                "type": "string"
+              },
+              "query": {
+                "description": "Words to search for, e.g. 'P/E ratio'.",
+                "maxLength": 200,
+                "type": "string"
+              }
+            },
+            "required": [],
+            "type": "object"
+          },
+          "annotations": {
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:97fe309322650ed6c8d9458099f1aa8282b5ed6792e5f08ef089340b602e8ae2"
+        },
+        {
+          "name": "ol_learn_lesson",
+          "title": "Lesson Step",
+          "description": "Teach one Oxford Ledge LEARN module a step at a time. Call with module_id and no step for the outline, then step=0, 1, 2 and so on. A step is one lesson section as body_markdown, plus where the lesson has them: a formula, a table, live filing figures each with its as-of date (market prices are withheld and named in `withheld`), and suggested_calls naming Oxford Ledge tools the learner can try the idea on. A check step carries the question and options, NEVER the answer: ask it exactly as written, wait for the learner, then submit their choice with ol_learn_check. hint: true adds the hint to a check step. The last step is the module check. The teaching protocol rides tool_notes. Source: Oxford Ledge LEARN (authored); FREE for every caller, no key needed; nothing is stored.",
+          "inputSchema": {
+            "properties": {
+              "hint": {
+                "default": false,
+                "description": "On a check step, include the hint. Only when the learner asks.",
+                "type": "boolean"
+              },
+              "module_id": {
+                "description": "Module id such as 'val-1', or its slug ('pe-ratio'), or '<path>/<slug>'.",
+                "maxLength": 120,
+                "minLength": 1,
+                "type": "string"
+              },
+              "step": {
+                "description": "0-based step; omit it for the outline.",
+                "maximum": 200,
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": ["module_id"],
+            "type": "object"
+          },
+          "annotations": {
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:6e95f67f78cf6d43467243779431ee50e5c4fa91108c373ead3ba92f32c822d5"
+        },
+        {
+          "name": "ol_maturity_wall",
+          "title": "Debt Maturity Wall",
+          "description": "The corporate DEBT MATURITY WALL: scheduled bond/loan maturities aggregated by year -- total_by_year, by_rating, top_issuers_by_year, peak_year, concentration. Amounts are USD MILLIONS (see `units`). `by_rating` splits IG vs HY by an Oxford Ledge LEVERAGE HEURISTIC, NOT agency ratings. Market-wide when `tickers` is omitted, or scoped to up to 50 tickers. Coverage is companies with PARSED maturity schedules only; an issuer with debt and no parsed schedule is NAMED under `unscheduled`, never estimated. LATENCY: a scoped call can fetch each issuer's annual report LIVE from SEC EDGAR -- seconds per issuer, minutes for a cold list. Source: SEC filing debt schedules + balance sheets (Oxford Ledge parse); FREE.",
+          "inputSchema": {
+            "properties": {
+              "by_sector": {
+                "description": "Include the by-sector split (default false).",
+                "type": "boolean"
+              },
+              "tickers": {
+                "description": "Optional issuer symbols (max 50); omit for market-wide.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "required": [],
+            "type": "object"
+          },
+          "annotations": {
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:ab0454bfb7ab29040e76d15be34d75d9bcd3e2087d278fa21fbf1a315db373af"
+        },
+        {
+          "name": "ol_operating_kpis",
+          "title": "Operating KPIs",
+          "description": "Industry OPERATING KPIs for ONE issuer -- the operational numbers the income statement hides (same-store sales, RevPAR, load factor, medical-loss ratio, net interest margin, TEU, rig count ...) extracted from SEC filings across 26 configured industries, each switched on by a deployment flag, so live coverage is a subset. Returns the issuer's panel {ticker, industry, metrics, available, partial, total_metrics, period, as_of, provenance, caveat, ...}. Anonymous callers get at most 3 rows (partial, total_metrics says how many); keyed callers get the full panel. Values are AS-REPORTED and confidence-gated. available=false cannot tell an uncovered industry from a covered issuer with no rows or an outage: do not retry with variations. Per-issuer by design. Source: SEC 10-K/10-Q/8-K exhibits (Oxford Ledge parse); FREE.",
+          "inputSchema": {
+            "properties": {
+              "ticker": {
+                "description": "Issuer symbol, e.g. DAL, MAR, HCA, JPM, DAC (single issuer, mandatory). There is deliberately no cross-issuer KPI screen: panels are per-issuer by design.",
+                "type": "string"
+              }
+            },
+            "required": ["ticker"],
+            "type": "object"
+          },
+          "annotations": {
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:f586452bfc2ab68f6c231f2db8194c055ed3a8393b1457b9b975602d1b33582a"
+        },
+        {
+          "name": "ol_ownership_changes",
+          "title": "Ownership Changes",
+          "description": "Quarter-over-quarter institutional accumulation/distribution for one ticker: each fund's position classified new / increased / decreased / exited over the last ~4 quarters -- the 'who is moving on X?' flow read. Returns {summary, ticker, quarters_analyzed, counts, new_positions, increased, decreased, exited, split_suspect, ...}. `counts` is always the COMPLETE tally; `limit` bounds EACH row list (default 50, hard cap 250). Pairs whose delta looks like an unconfirmed corporate action are withheld into `split_suspect` with their as-filed counts. Share classes are never summed or netted. Rows are CUSIP-resolved, so treat share figures as close approximations. Complements get_institutional_holders (snapshot). Source: SEC EDGAR 13F-HR (public domain; OL derived); FREE.",
+          "inputSchema": {
+            "properties": {
+              "limit": {
+                "description": "Max rows per bucket (default 50, hard cap 250); counts are complete regardless.",
+                "maximum": 250,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "ticker": {
+                "description": "Stock ticker (e.g. AAPL).",
+                "type": "string"
+              }
+            },
+            "required": ["ticker"],
+            "type": "object"
+          },
+          "annotations": {
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:0835cadc9f93a95a723c4b66d8ba47ce8c147876e0c14d0a85dd8ab09bcc8741"
+        },
+        {
+          "name": "ol_paper_portfolio",
+          "title": "Paper Portfolio",
+          "description": "YOUR paper (practice) portfolio on Oxford Ledge -- the same snapshot the web sandbox at /practice/ renders: {portfolio, positions, totals, position_theses, summary, has_portfolio}. include_history: true adds recent_trades (history_limit 1..50, default 20). A user with NO portfolio gets {has_portfolio: false, how_to_start} -- an honest empty, not an error. Positions are marked to the platform's DELAYED quote at read time. Requires an authenticated Oxford Ledge caller (API key or linked OAuth token) and serves the caller's own portfolio only; the local stdio server gets AUTH_REQUIRED. Never cached. Practice money: _meta.disclaimer says so on every response. Source: Oxford Ledge paper sandbox; FREE. Needs a free Oxford Ledge API key that the client's operator configures.",
+          "inputSchema": {
+            "properties": {
+              "history_limit": {
+                "default": 20,
+                "description": "How many recent fills to include when include_history is true (1..50).",
+                "maximum": 50,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "include_history": {
+                "default": false,
+                "description": "Add recent_trades (the last history_limit fills).",
+                "type": "boolean"
+              }
+            },
+            "required": [],
+            "type": "object"
+          },
+          "annotations": {
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:ee2347b54885b00d3cbcb76800c5c5b3b1df9455ea947e926c0de5302f90b939"
+        },
+        {
+          "name": "ol_paper_trade",
+          "title": "Paper Trade",
+          "description": "WRITE (opt-in): place a market order in YOUR paper (practice) portfolio -- the same engine, quote, fills and rejections as the web sandbox; no real money, no real account. One of TWO mutating tools here (the other is reading_list_annotate). DEFAULTS TO A DRY RUN: with _dry_run omitted or true nothing is placed and you get {dry_run: true, tool, args, idempotency_key, preview, message}. Re-call with _dry_run: false AND that same _idempotency_key to execute; a rejection is a normal (non-error) response you must read and relay, and a repeat of the same key returns {replay: true, ...} without placing twice. shares is whole shares, 1..1,000,000; side is buy or sell; thesis (optional, max 250 chars) is the USER's own reason. Requires an API KEY or a linked OAuth token (a browser session cookie is refused). Capped at 20 executed fills per user per UTC day. Practice money: _meta.disclaimer says so on every response. Needs a free Oxford Ledge API key that the client's operator configures.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "_dry_run": {
+                "default": true,
+                "description": "Default true: preview the fill (quote, cost, cash after) without placing it. Re-call with false and the returned _idempotency_key to execute.",
+                "type": "boolean"
+              },
+              "_idempotency_key": {
+                "description": "Optional replay-safety key; auto-derived if omitted. A repeat of the same key returns the first result and places nothing.",
+                "maxLength": 128,
+                "type": "string"
+              },
+              "shares": {
+                "description": "Whole shares, 1..1,000,000 per order (the engine's per-order cap).",
+                "maximum": 1000000,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "side": {
+                "description": "buy or sell (market order at the platform's delayed quote).",
+                "enum": ["buy", "sell"],
+                "type": "string"
+              },
+              "thesis": {
+                "description": "Optional: why (max 250 chars). Stored on the fill and shown back to the user beside the position; write it as the USER's reason.",
+                "maxLength": 250,
+                "type": "string"
+              },
+              "ticker": {
+                "description": "Symbol to trade in YOUR paper portfolio (e.g. DAC).",
+                "maxLength": 20,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": ["shares", "side", "ticker"],
+            "type": "object"
+          },
+          "annotations": {
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:a76a5fe122fc5c87c86a440d4303eb971ae77f8adf7b0f0ef1b358bd6fb21d96"
+        },
+        {
+          "name": "ol_patents",
+          "title": "Patent Filings",
+          "description": "Recent USPTO patent filings for a ticker (innovation-intensity diligence). Returns {summary, ticker, count, filings}, NEWEST FIRST; `limit` default 50, hard cap 200, so this is a recent slice, never a full portfolio, and `count` is the number RETURNED. TRAP: a non-empty patent_number marks a continuation of an already-granted PARENT, NOT a grant of this application -- read the status field. Filings reflect Oxford Ledge's last on-demand USPTO ingest for the ticker, not a schedule; an unreachable store is REFUSED (DATA_UNAVAILABLE), never served as count 0. Source: USPTO (public domain); FREE. ATTRIBUTION: every filing field is USPTO ODP verbatim EXCEPT `ticker`, which is an Oxford Ledge applicant-name resolution, not a USPTO field.",
+          "inputSchema": {
+            "properties": {
+              "limit": {
+                "description": "Max filings (default 50, hard cap 200).",
+                "maximum": 200,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "ticker": {
+                "description": "Stock ticker (e.g. GOOGL).",
+                "type": "string"
+              }
+            },
+            "required": ["ticker"],
+            "type": "object"
+          },
+          "annotations": {
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:a04211e935b7fdd64c13cd9fd89a2e861193df136cde294b45b0ed532a065188"
+        },
+        {
+          "name": "ol_peer_fundamentals",
+          "title": "Peer Fundamentals",
+          "description": "Side-by-side latest-fiscal-year fundamentals for a peer set (the FIRST 6 unique tickers; the rest are named in `dropped`). Returns {summary, count, peers, dropped, as_of}; a peer is {ticker, available, fiscal_year, revenue, net_income, eps_diluted, free_cash_flow, gross_margin_pct, ebit_margin_pct, debt_to_assets_pct, current_ratio, stockholders_equity}. Dollar figures are whole USD; *_pct are percentage numbers. ONE YEAR ONLY -- no history (use get_fundamentals). Fiscal years are each filer's own, so peers are NOT calendar-aligned. A ticker without XBRL coverage returns {ticker, available: false} (no metric keys), never dropped. No price leg, so no P/E or EV multiples. Source: SEC EDGAR company-facts XBRL; one cold EDGAR fetch per ticker.",
+          "inputSchema": {
+            "properties": {
+              "tickers": {
+                "description": "2-6 ticker symbols to compare (hard-capped at 6).",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "required": ["tickers"],
+            "type": "object"
+          },
+          "annotations": {
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:6c22ccb864fbf8cc6b5cbc3550c3d97fd6be79eae2a1ffb3a8be903cd759acd5"
+        },
+        {
+          "name": "ol_short_interest_trend",
+          "title": "Short Interest Trend",
+          "description": "FINRA short-interest trend for one ticker: the biweekly settlement-date short-percent series, OLDEST-FIRST. Returns {summary, ticker, count, as_of, trend}; each point is EXACTLY {date (settlement date), shortPct (a PERCENTAGE number)} -- no share counts and no days-to-cover. `points` default 6, max 26 (about one year). A fortnightly SNAPSHOT with a reporting lag, not a live short-float figure; `as_of` is the settlement date, not today. Honest-empty for a ticker FINRA does not publish; an unreachable store is REFUSED (DATA_UNAVAILABLE). Source: FINRA (public); FREE.",
+          "inputSchema": {
+            "properties": {
+              "points": {
+                "description": "Readings to return (default 6, max 26).",
+                "maximum": 26,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "ticker": {
+                "description": "Stock ticker (e.g. GME).",
+                "type": "string"
+              }
+            },
+            "required": ["ticker"],
+            "type": "object"
+          },
+          "annotations": {
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:4e5bbfad836f439070ab3354403f0204a520c0b3a61c29833ef75de42e403b43"
+        },
+        {
+          "name": "ol_treasury_debt",
+          "title": "Treasury Debt Composition",
+          "description": "US Treasury debt composition from the Monthly Statement of the Public Debt. Omit BOTH args for the newest month's full class breakdown; pass security_type AND security_class together for that one class's monthly history (only one of them is refused). Returns {summary, rows}. AMOUNTS ARE IN MILLIONS OF USD -- a 28,000,000 value means $28 trillion. The breakdown holds component AND Total rows, so summing a column double-counts. `limit` (series only) default 120 months, hard cap 360. An unreachable store is REFUSED (DATA_UNAVAILABLE). Sibling of get_yield_curve. Source: Treasury.gov MSPD (public domain); FREE.",
+          "inputSchema": {
+            "properties": {
+              "limit": {
+                "description": "Monthly points for a series (default 120, hard cap 360).",
+                "maximum": 360,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "security_class": {
+                "description": "Class within the type; '_' for Total rows. Sent only together with security_type.",
+                "type": "string"
+              },
+              "security_type": {
+                "description": "e.g. 'Total Public Debt Outstanding'. Sent only together with security_class, for a series.",
+                "type": "string"
+              }
+            },
+            "required": [],
+            "type": "object"
+          },
+          "annotations": {
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:d478e502bc0f5df532cd0437f7a7efc33f4a95c6191ceb235dc0aab97df92fa7"
+        },
+        {
+          "name": "reading_list_annotate",
+          "title": "Reading List Note",
+          "description": "WRITE (opt-in): save or update YOUR private note on an Oxford Ledge reading-list entry. One of TWO mutating tools here (the other is ol_paper_trade). DEFAULTS TO A DRY RUN: with _dry_run omitted or true you get a proposal {dry_run: true, tool, args, idempotency_key, message}, not a save. Re-call with _dry_run: false AND that same _idempotency_key to execute; a repeat of the same key returns {replay: true, ...} without writing twice. Requires Researcher tier AND an authenticated Oxford Ledge caller -- the local stdio server has no account context and raises AUTH_REQUIRED. `slug` must already exist on /reading-list; `body` is capped at 500 chars. Notes stay PRIVATE; this tool can never publish one. Needs a free Oxford Ledge API key that the client's operator configures.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "_dry_run": {
+                "default": true,
+                "description": "Default true: propose without persisting. Re-call with false to execute.",
+                "type": "boolean"
+              },
+              "_idempotency_key": {
+                "description": "Optional replay-safety key; auto-derived if omitted.",
+                "maxLength": 128,
+                "type": "string"
+              },
+              "body": {
+                "description": "The note text (max 500 chars). Notes are PRIVATE; publishing requires the dashboard flow (age attestation).",
+                "maxLength": 500,
+                "minLength": 1,
+                "type": "string"
+              },
+              "slug": {
+                "description": "Reading-list entry slug (as on /reading-list).",
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": ["body", "slug"],
+            "type": "object"
+          },
+          "annotations": {
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:05622d6f0ce937bc26f51ab5966f11f33979c192373b3d96b078b06293e110a3"
+        },
+        {
+          "name": "search_bdc_borrower",
+          "title": "BDC Borrower Search",
+          "description": "Which BDCs lend to one private-credit borrower, matched fuzzily on name -- Oxford Ledge's parse of SEC EDGAR BDC schedules of investments (ol-derived), not filer-published data. Returns borrowerName, borrowerNorm (the key the ol_bdc_* tools take), description, descriptionSource, industry, aggregates over CURRENT holders (totalHolders, totalParAmount, totalFairValue, avgMarkedPrice) and `holders`, one row per TRANCHE. ABOVE-PAR TRAP: a mark above 100 is not a credit premium until fairValue is checked against cost. `description` is a compiled company profile from public sources, NOT filing text. A miss is {found: false} -- a search miss, not a finding of no BDC exposure. `query` needs 3+ characters; `limit` / `offset` page `holders` only. Source: SEC EDGAR BDC schedules of investments (~45-60 day lag).",
+          "inputSchema": {
+            "properties": {
+              "limit": {
+                "description": "Max `holders` rows to return (default 5000 = every row; hard cap 5000, refused above). Pages the tranche rows only.",
+                "maximum": 5000,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "offset": {
+                "description": "Rows to skip before the page (default 0; max 5000). Past the end returns an empty page with `page.total` intact.",
+                "maximum": 5000,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "query": {
+                "description": "Borrower/company name to search (e.g. Finastra, Medline); at least 3 characters.",
+                "type": "string"
+              }
+            },
+            "required": ["query"],
+            "type": "object"
+          },
+          "annotations": {
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:6325d078e93ca49ef5bec45d6475f0c4a598e1fef236355239977e9d52b4f8d5"
+        },
+        {
+          "name": "search_company",
+          "title": "Company Search",
+          "description": "Resolve a company name, ticker or CIK to its SEC identity. Returns {results, count}, up to 20 matches (hard cap); each result carries SEC-EDGAR-derivable identity fields only: ticker, companyName, cik, sicCode, exchange, fiscalYearEnd, tickerStatus (check it before treating a match as a live listing). A null field is OMITTED from the row, so never assume `cik` is present. Matching is a literal substring on ticker / companyName (plus the other class-share punctuation, and a digit-only CIK); former names and misspellings do NOT resolve. Once resolved, call get_fundamentals or get_business_summary. Source: Oxford Ledge company profiles, limited to SEC-submission identity fields.",
+          "inputSchema": {
+            "properties": {
+              "query": {
+                "description": "Search query (company name, ticker, or industry)",
+                "type": "string"
+              }
+            },
+            "required": ["query"],
+            "type": "object"
+          },
+          "annotations": {
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:cc054cc2c08266d88b4a67a424cb0d8becd6bd3e7a40c86d24780c53829c312e"
+        },
+        {
+          "name": "search_news_archive",
+          "title": "News Archive Search",
+          "description": "TF-IDF full-text search over the archived news headlines + the pulse-fact corpus (a lexical index, not embeddings). Returns {query, count, results, index}; each result is {type ('news' | 'fact'), text, score (0-1 cosine), metadata}. `limit` default 20, hard cap 50. The first call after a restart pays the index build (seconds); later calls are fast. RESTRICTED posture: a keyed tool (refuses anonymous callers). For per-ticker archive reads use get_news; for semantic retrieval over SEC filings use ol_filing_search. Needs a free Oxford Ledge API key that the client's operator configures.",
+          "inputSchema": {
+            "properties": {
+              "limit": {
+                "description": "Max results to return (default 20)",
+                "maximum": 50,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "query": {
+                "description": "Search query (e.g. 'oil prices', 'Fed rate cut')",
+                "type": "string"
+              }
+            },
+            "required": ["query"],
+            "type": "object"
+          },
+          "annotations": {
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:eca92db53e98dc78471e93656f28291c0db484470ff8856ea8abd950ac76a3d2"
+        }
+      ],
+      "digest": "sha256:67f0c5d5d053ad1a2cb5f31d4d2be467688cd5d40abb527615dacc4e7642e4ec"
+    }
+  }
+}

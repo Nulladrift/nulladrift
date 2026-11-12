@@ -1,0 +1,1530 @@
+{
+  "lockfileVersion": 2,
+  "subjects": {
+    "com.freqblog/music-metadata": {
+      "kind": "mcp-server",
+      "source": {
+        "client": "manual",
+        "file": "registry.modelcontextprotocol.io"
+      },
+      "transport": {
+        "type": "http",
+        "url": "https://mcp.freqblog.com/mcp"
+      },
+      "protocol": {
+        "era": "legacy",
+        "version": "2025-11-25"
+      },
+      "serverInfo": {
+        "name": "freqblog-music",
+        "version": "1.27.2",
+        "websiteUrl": "https://freqblog.com/"
+      },
+      "capabilities": {
+        "experimental": {},
+        "prompts": {
+          "listChanged": false
+        },
+        "resources": {
+          "listChanged": false,
+          "subscribe": false
+        },
+        "tools": {
+          "listChanged": false
+        }
+      },
+      "instructions": "FreqBlog music audio-features tools. Look up BPM, musical key (name + Camelot + Open Key), energy, danceability, valence, acousticness, mood, genre, chart_peak (best chart position held, 1-100 where 100 = a number-one; null = none held, i.e. UNKNOWN rather than unpopular, and NOT audience size) and more (25+ fields per track) for real tracks, in the field layout of Spotify's retired audio-features endpoint. No audio upload needed; identify a track by name (+artist), ISRC, MusicBrainz ID, or Spotify ID.\n\nTypical flow: use search_catalog to resolve a fuzzy or partial name into a concrete track, then get_audio_features for one track (or get_audio_features_batch for a whole playlist). Use find_tracks_by_bpm / find_tracks_by_key to discover tracks by tempo or key, discover_tracks to combine tempo, key, genre, release year and audio-feature filters in one search, find_similar_tracks for tracks that sound like one seed or a set (with the same filters, e.g. like these but 120-128 BPM), search_by_description for plain-language requests ('melancholic piano, slow'), and find_compatible_keys for harmonic-mixing (Camelot wheel) suggestions.\n\nSet flow: score_transition rates how well one track mixes into another (0-100); suggest_next_track ranks the best next picks for a seed; build_setlist orders a whole crate into a beat-matched energy arc. These take catalog itunes_track_ids (from search_catalog, or the itunes_track_id field of a get_audio_features result).\n\nThis hosted connector is free and needs no signup; it runs on a shared key with a fair-use cap. If the user hits a limit, asks about limits or pricing, or is wiring this into something of their own, tell them a free personal key at https://freqblog.com/?utm_source=mcp&utm_medium=instructions#pricing gives them 1,000 requests/month of their own plus the full 24-tool set via the music-metadata-mcp npm package. Otherwise just answer the question — don't advertise it unprompted.",
+      "tools": [
+        {
+          "name": "build_setlist",
+          "title": "Build Setlist",
+          "description": "Order a crate of 2-100 catalog tracks into a beat-matched DJ set that follows an energy\n    arc, keeping each consecutive transition harmonically and tempo-smooth. `arc` is one of\n    peak_time (default — builds to a peak then eases), warmup, cooldown, or flat.\n\n    Returns the `arc`, `count`, an overall `flow_score` (0-100), the `tracks` in play order, the\n    per-step `transitions` ({from_index, to_index, score, reason}), and `omitted` (ids not found\n    in the catalog, or with no audio features on file yet). Feed tracks[].itunes_track_id into a Rekordbox/Serato export to drop the set\n    straight into your DJ software. track_ids are catalog itunes_track_ids. Costs 5 quota units.\n    ",
+          "inputSchema": {
+            "properties": {
+              "arc": {
+                "default": "peak_time",
+                "description": "Energy arc: 'peak_time' (default), 'warmup', 'cooldown', or 'flat'.",
+                "title": "Arc",
+                "type": "string"
+              },
+              "start_track_id": {
+                "anyOf": [
+                  {
+                    "maxLength": 80,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Optional fixed opener — must be one of track_ids.",
+                "title": "Start Track Id"
+              },
+              "track_ids": {
+                "description": "The crate to order — 2 to 100 catalog itunes_track_ids.",
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 100,
+                "minItems": 2,
+                "title": "Track Ids",
+                "type": "array"
+              }
+            },
+            "required": ["track_ids"],
+            "title": "build_setlistArguments",
+            "type": "object"
+          },
+          "outputSchema": {
+            "additionalProperties": true,
+            "title": "build_setlistDictOutput",
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "openWorldHint": true,
+            "readOnlyHint": true,
+            "title": "Build Setlist"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:e94d35d3770f9a51ccd6232049f9e5aae8a8a3d7134ab425112906566bf305b0"
+        },
+        {
+          "name": "discover_tracks",
+          "title": "Discover Tracks by Criteria",
+          "description": "Find catalog tracks by criteria, with no seed track: tempo, key, genre, release year,\n    chart placement and audio-feature ranges in one call — e.g. house at 122-126 BPM in 8A or\n    its neighbours with energy above 0.7: min={\"tempo\": 122, \"energy\": 0.7},\n    max={\"tempo\": 126}, key=\"8A\", harmonic=true, genre=\"house\".\n\n    At least one narrowing filter is required (a tempo/feature bound, key, mode, genre, year\n    or chart). Returns `results` (one per recording, each with its bpm, camelot, energy,\n    danceability, valence, acousticness and loudness_db plus catalog metadata),\n    `total_matches` (exact up to 1,000; `total_matches_capped` above that), `next_offset`\n    for the next page, and `filters` — what was applied and how many tracks each filter\n    removed (`dropped_by`); if the list is short, loosen the largest one. energy, danceability\n    and valence are on FreqBlog's own scales, so derive thresholds from values you have seen\n    rather than from another service's. Results reach a depth of 500 per query; narrow the\n    filters to go further. Pass a result's itunes_track_id to get_audio_features for every\n    field, or to suggest_next_track / build_setlist. Costs 1 quota unit.\n    ",
+          "inputSchema": {
+            "properties": {
+              "charted": {
+                "anyOf": [
+                  {
+                    "type": "boolean"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "true = only tracks with a known chart placement (about 4% of tracks have one).",
+                "title": "Charted"
+              },
+              "explicit": {
+                "anyOf": [
+                  {
+                    "type": "boolean"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "true = explicit tracks only, false = non-explicit only; omit for either.",
+                "title": "Explicit"
+              },
+              "genre": {
+                "anyOf": [
+                  {
+                    "maxLength": 500,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Comma list of catalog genre names, e.g. 'house' or 'hip-hop,r&b'. Unknown names in a list are skipped and listed in filters.ignored with close matches; only a list where every name is unknown is rejected.",
+                "title": "Genre"
+              },
+              "harmonic": {
+                "default": false,
+                "description": "Widen each key to its harmonically compatible keys (same, relative, one step either way on the Camelot wheel).",
+                "title": "Harmonic",
+                "type": "boolean"
+              },
+              "include_subgenres": {
+                "default": false,
+                "description": "Also match every subgenre of a top-level genre.",
+                "title": "Include Subgenres",
+                "type": "boolean"
+              },
+              "key": {
+                "anyOf": [
+                  {
+                    "maxLength": 300,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Comma list of keys: Camelot ('8A'), Open Key ('1m') or names ('A minor').",
+                "title": "Key"
+              },
+              "limit": {
+                "default": 20,
+                "description": "Tracks per page (default 20).",
+                "maximum": 50,
+                "minimum": 1,
+                "title": "Limit",
+                "type": "integer"
+              },
+              "max": {
+                "anyOf": [
+                  {
+                    "additionalProperties": {
+                      "type": "number"
+                    },
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "HARD upper bounds, e.g. {'tempo': 126}. Same attributes as `min`; combine the two for a range.",
+                "title": "Max"
+              },
+              "max_year": {
+                "anyOf": [
+                  {
+                    "maximum": 2100,
+                    "minimum": 1000,
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Latest release year.",
+                "title": "Max Year"
+              },
+              "min": {
+                "anyOf": [
+                  {
+                    "additionalProperties": {
+                      "type": "number"
+                    },
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "HARD lower bounds, e.g. {'tempo': 122, 'energy': 0.7}. Tracks below the bound, and tracks with no analysed value, are excluded. Attributes: acousticness, danceability, duration_ms, energy, loudness, tempo, valence.",
+                "title": "Min"
+              },
+              "min_chart_peak": {
+                "anyOf": [
+                  {
+                    "maximum": 100,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Best chart position required, as chart_peak (1-100, 100 = a number one).",
+                "title": "Min Chart Peak"
+              },
+              "min_year": {
+                "anyOf": [
+                  {
+                    "maximum": 2100,
+                    "minimum": 1000,
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Earliest release year.",
+                "title": "Min Year"
+              },
+              "mode": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "'major' or 'minor' only.",
+                "title": "Mode"
+              },
+              "offset": {
+                "default": 0,
+                "description": "Skip this many tracks for the next page; offset + limit may not exceed 500.",
+                "maximum": 499,
+                "minimum": 0,
+                "title": "Offset",
+                "type": "integer"
+              },
+              "sort": {
+                "default": "chart",
+                "description": "'chart' (default: charted first, then newest), 'newest', 'oldest', 'tempo', '-tempo', 'energy', '-energy', or 'target' (default when `target` is given).",
+                "title": "Sort",
+                "type": "string"
+              },
+              "target": {
+                "anyOf": [
+                  {
+                    "additionalProperties": {
+                      "type": "number"
+                    },
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "PREFERRED values, e.g. {'energy': 0.8}: nearest first, nothing removed. Same attributes as `min`.",
+                "title": "Target"
+              },
+              "tempo_match": {
+                "default": "exact",
+                "description": "'exact' (default) or 'half_double' — also match double/half the min/max tempo range (an 87 BPM track for a 174 BPM set).",
+                "title": "Tempo Match",
+                "type": "string"
+              }
+            },
+            "title": "discover_tracksArguments",
+            "type": "object"
+          },
+          "outputSchema": {
+            "additionalProperties": true,
+            "title": "discover_tracksDictOutput",
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "openWorldHint": true,
+            "readOnlyHint": true,
+            "title": "Discover Tracks by Criteria"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:2c2cf540ddc338b23d434037d59ecf0e6e2380f8940a0446488ff6b654caf7b6"
+        },
+        {
+          "name": "find_compatible_keys",
+          "title": "Find Harmonically Compatible Keys",
+          "description": "Given a Camelot key (e.g. \"8A\", \"12B\"), return the harmonically compatible keys for DJ\n    mixing — the same key, the relative major/minor, and the adjacent +/-1 keys on the\n    Camelot wheel. With `extended=true` also returns the +7/-7 energy-boost / energy-drop\n    keys. Pure music theory — no catalog lookup and no quota cost. Pair with find_tracks_by_key\n    to then pull actual tracks in each compatible key.\n    ",
+          "inputSchema": {
+            "properties": {
+              "camelot": {
+                "description": "Camelot key, e.g. '8A' or '12B'.",
+                "maxLength": 3,
+                "minLength": 2,
+                "title": "Camelot",
+                "type": "string"
+              },
+              "extended": {
+                "default": false,
+                "description": "Also return the +7/-7 energy-boost / energy-drop keys.",
+                "title": "Extended",
+                "type": "boolean"
+              }
+            },
+            "required": ["camelot"],
+            "title": "find_compatible_keysArguments",
+            "type": "object"
+          },
+          "outputSchema": {
+            "additionalProperties": true,
+            "title": "find_compatible_keysDictOutput",
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Find Harmonically Compatible Keys"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:7fb3e359b81d198b4bfc9cdc010b039b45f0ed6bd25387ddd88fbd9cb4ee1189"
+        },
+        {
+          "name": "find_similar_tracks",
+          "title": "Find Similar-Sounding Tracks",
+          "description": "Tracks that SOUND like one seed track or a set of up to 10, optionally restricted by\n    tempo, key, genre, year, chart or audio-feature ranges — e.g. \"like these three, but\n    120-128 BPM in 8A or its neighbours\": seed_tracks=[...], min={\"tempo\": 120},\n    max={\"tempo\": 128}, key=\"8A\", harmonic=true.\n\n    Ranked mainly on a PANNs audio embedding (how the recording sounds) blended with an\n    audio-feature similarity. Results are one per recording, with `score`, `genre_relation`\n    to the seed and, with several seeds, `matched_seed`. With filters, results are the\n    closest-sounding tracks that pass every filter, and `filters` reports what was applied\n    and how many catalog tracks each one removed (`dropped_by`) — loosen the largest if the\n    list is short. Use get_recommendations instead when you want preferred target values\n    (target energy etc.) rather than hard filters. Costs 1 quota unit.\n    PANNs (Kong et al., 2020) is used under CC BY 4.0.\n    ",
+          "inputSchema": {
+            "properties": {
+              "blend": {
+                "default": "all",
+                "description": "With several seeds: 'all' (default) = sounds like the set as a whole, best when the seeds share a style; 'any' = every seed gets its own neighbours, interleaved — use it when the seeds are from different genres, where 'all' would average them into tracks that sound like none of them.",
+                "title": "Blend",
+                "type": "string"
+              },
+              "charted": {
+                "anyOf": [
+                  {
+                    "type": "boolean"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Filter — true = only tracks with a known chart placement.",
+                "title": "Charted"
+              },
+              "cross_genre": {
+                "default": "auto",
+                "description": "Genre lane: 'auto' (default, keep results mixable with the seed's genre), 'allow' (genre-blind), 'strict' (seed's genre family only).",
+                "title": "Cross Genre",
+                "type": "string"
+              },
+              "exclude_same_artist": {
+                "default": false,
+                "description": "Drop other tracks by the seed artist(s).",
+                "title": "Exclude Same Artist",
+                "type": "boolean"
+              },
+              "explicit": {
+                "anyOf": [
+                  {
+                    "type": "boolean"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Filter — true = explicit only, false = non-explicit only.",
+                "title": "Explicit"
+              },
+              "genre": {
+                "anyOf": [
+                  {
+                    "maxLength": 500,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Filter — comma list of catalog genre names, e.g. 'house'. Unknown names in a list are skipped and listed in filters.ignored with close matches; only a list where every name is unknown is rejected.",
+                "title": "Genre"
+              },
+              "harmonic": {
+                "default": false,
+                "description": "Widen each key to its harmonically compatible keys.",
+                "title": "Harmonic",
+                "type": "boolean"
+              },
+              "include_subgenres": {
+                "default": false,
+                "description": "Also match every subgenre of a top-level genre.",
+                "title": "Include Subgenres",
+                "type": "boolean"
+              },
+              "key": {
+                "anyOf": [
+                  {
+                    "maxLength": 300,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Filter — comma list of keys: Camelot ('8A'), Open Key ('1m') or names ('A minor').",
+                "title": "Key"
+              },
+              "limit": {
+                "default": 10,
+                "description": "Results to return (default 10).",
+                "maximum": 50,
+                "minimum": 1,
+                "title": "Limit",
+                "type": "integer"
+              },
+              "max": {
+                "anyOf": [
+                  {
+                    "additionalProperties": {
+                      "type": "number"
+                    },
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Filter — HARD upper bounds, e.g. {'tempo': 128}. Same attributes as `min`.",
+                "title": "Max"
+              },
+              "max_year": {
+                "anyOf": [
+                  {
+                    "maximum": 2100,
+                    "minimum": 1000,
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Filter — latest release year.",
+                "title": "Max Year"
+              },
+              "min": {
+                "anyOf": [
+                  {
+                    "additionalProperties": {
+                      "type": "number"
+                    },
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Filter — HARD lower bounds on the results, e.g. {'tempo': 120, 'energy': 0.6}. Attributes: acousticness, danceability, duration_ms, energy, loudness, tempo, valence.",
+                "title": "Min"
+              },
+              "min_chart_peak": {
+                "anyOf": [
+                  {
+                    "maximum": 100,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Filter — best chart position required, as chart_peak (100 = a number one).",
+                "title": "Min Chart Peak"
+              },
+              "min_year": {
+                "anyOf": [
+                  {
+                    "maximum": 2100,
+                    "minimum": 1000,
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Filter — earliest release year.",
+                "title": "Min Year"
+              },
+              "mode": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Filter — 'major' or 'minor' only.",
+                "title": "Mode"
+              },
+              "seed_isrcs": {
+                "anyOf": [
+                  {
+                    "items": {
+                      "type": "string"
+                    },
+                    "maxItems": 10,
+                    "type": "array"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Several seeds by ISRC (up to 10 together with seed_tracks).",
+                "title": "Seed Isrcs"
+              },
+              "seed_tracks": {
+                "anyOf": [
+                  {
+                    "items": {
+                      "type": "string"
+                    },
+                    "maxItems": 10,
+                    "type": "array"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Several seeds: catalog itunes_track_ids (up to 10 together with seed_isrcs).",
+                "title": "Seed Tracks"
+              },
+              "tempo_match": {
+                "default": "exact",
+                "description": "With a tempo bound: 'exact' (default) or 'half_double' (also match double/half the range).",
+                "title": "Tempo Match",
+                "type": "string"
+              },
+              "track_id": {
+                "anyOf": [
+                  {
+                    "maxLength": 80,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "One seed: a catalog itunes_track_id (from search_catalog or get_audio_features). Omit when using seed_tracks / seed_isrcs.",
+                "title": "Track Id"
+              }
+            },
+            "title": "find_similar_tracksArguments",
+            "type": "object"
+          },
+          "outputSchema": {
+            "additionalProperties": true,
+            "title": "find_similar_tracksDictOutput",
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "openWorldHint": true,
+            "readOnlyHint": true,
+            "title": "Find Similar-Sounding Tracks"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:fabfdb3a6ac8fb8c332685ecf1a0ae13e83e6e27952e5c0dae2982474c799a1c"
+        },
+        {
+          "name": "find_tracks_by_bpm",
+          "title": "Find Tracks by BPM",
+          "description": "Find catalog tracks near a target tempo. Returns tracks whose BPM is within\n    +/-`tolerance` of `bpm`, ordered by closeness then by an internal catalogue ordering key (not an audience metric) — useful for DJ set\n    planning, workout playlists, or tempo-matching. Each returned track carries full audio\n    features. To also constrain by musical key, combine with find_tracks_by_key.\n    ",
+          "inputSchema": {
+            "properties": {
+              "bpm": {
+                "description": "Target tempo in BPM.",
+                "maximum": 300,
+                "minimum": 20,
+                "title": "Bpm",
+                "type": "number"
+              },
+              "limit": {
+                "default": 10,
+                "description": "Max tracks (default 10).",
+                "maximum": 50,
+                "minimum": 1,
+                "title": "Limit",
+                "type": "integer"
+              },
+              "tolerance": {
+                "default": 2,
+                "description": "Plus/minus BPM window (default 2).",
+                "maximum": 10,
+                "minimum": 0.5,
+                "title": "Tolerance",
+                "type": "number"
+              }
+            },
+            "required": ["bpm"],
+            "title": "find_tracks_by_bpmArguments",
+            "type": "object"
+          },
+          "outputSchema": {
+            "additionalProperties": true,
+            "title": "find_tracks_by_bpmDictOutput",
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "openWorldHint": true,
+            "readOnlyHint": true,
+            "title": "Find Tracks by BPM"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:e8778e54441284a8ce6f075ba0367fadad32884a71433ef8823609d1d4d86d23"
+        },
+        {
+          "name": "find_tracks_by_key",
+          "title": "Find Tracks by Musical Key",
+          "description": "Find catalog tracks in a given musical key — for harmonic mixing and key-locked\n    playlists. `key` accepts Camelot (\"8A\"), Open Key (\"1m\"), or a key name (\"A-Minor\",\n    \"F#-Major\"). Returns tracks ordered by an internal catalogue ordering key (not an audience metric), each with full audio features. To\n    discover which keys mix well with a given key first, use find_compatible_keys.\n    ",
+          "inputSchema": {
+            "properties": {
+              "key": {
+                "description": "Camelot ('8A'), Open Key ('1m'), or key name ('A-Minor', 'F#-Major').",
+                "maxLength": 20,
+                "minLength": 1,
+                "title": "Key",
+                "type": "string"
+              },
+              "limit": {
+                "default": 10,
+                "description": "Max tracks (default 10).",
+                "maximum": 50,
+                "minimum": 1,
+                "title": "Limit",
+                "type": "integer"
+              }
+            },
+            "required": ["key"],
+            "title": "find_tracks_by_keyArguments",
+            "type": "object"
+          },
+          "outputSchema": {
+            "additionalProperties": true,
+            "title": "find_tracks_by_keyDictOutput",
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "openWorldHint": true,
+            "readOnlyHint": true,
+            "title": "Find Tracks by Musical Key"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:86bf5362fb606cabde6f3e7fe8228bff881f2fbc55cebac88476ce371abe33c4"
+        },
+        {
+          "name": "get_audio_features",
+          "title": "Get Audio Features",
+          "description": "Get audio features for ONE track — BPM, musical key (name + Camelot + Open Key),\n    energy, danceability, valence, acousticness, loudness, mood, mood_vector, genre, time signature, duration and more.\n    `preview_loudness.integrated_lufs` is the BS.1770 integrated loudness (LUFS) of the 30-second\n    preview — often the chorus, so typically a little louder than the full track.\n\n    Fields follow the layout of Spotify's retired /audio-features endpoint.\n    Provide AT LEAST ONE identifier — if you know several, send them all rather than\n    choosing; they resolve by precedence (`track` > `isrc` > `mbid` > `spotify_id`) and\n    the rest are ignored:\n      - `track` (optionally with `artist`) — e.g. track=\"Blinding Lights\", artist=\"The Weeknd\".\n      - `isrc` — e.g. \"USUM71900001\".\n      - `mbid` — a MusicBrainz recording UUID.\n      - `spotify_id` — a Spotify track ID, URI, or URL (resolved per request by reading\n        the track's title from Spotify's public embed page and matching it against our\n        catalogue — no Spotify IDs are stored; ambiguous titles miss rather than guess —\n        prefer `track`/`isrc` for full coverage).\n\n    Returns a JSON object of features. Some feature fields may be null for tracks resolved\n    via the fallback catalogs (only audio-derived values are present for fully analysed\n    tracks).\n\n    VALUES are FreqBlog's own analysis, NOT on Spotify's scale: energy and valence are\n    models of how energetic / positive the preview sounds, both on our own scales (derive thresholds from our values, don't copy Spotify-tuned ones);\n    danceability and acousticness are on AcousticBrainz's scale -- its classifier where\n    available, else a model that listens to the preview, built on PANNs embeddings\n    (Kong et al. 2020, CC BY 4.0); instrumentalness is a vocal-detection model's score for\n    the 30-second preview (not the whole track); speechiness and liveness are currently\n    null for catalogue tracks; time_signature is ASSUMED 4 (4/4) on every track, not\n    measured. KEY: treat `key` as a best guess when `key_confidence` < 0.8 (measured against\n    musicians' annotations: at >= 0.9 it is exact 77% / Camelot-compatible 88%).\n\n    If a track name is not yet in the catalog, the API holds the request during the\n    on-demand ingest and usually returns the fully analysed track inline in this same call;\n    only if the ingest runs long does it fall back to a queued response you can re-poll\n    shortly (~15s). If the track turns out not to be on any streaming source we can analyse,\n    you get a definitive not-found instead — that verdict is terminal for ~7 days, so don't\n    retry it. If you only have a fuzzy or partial name, call search_catalog first to\n    find the exact track.\n    ",
+          "inputSchema": {
+            "properties": {
+              "artist": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Artist name. Only used with `track`; required when the title is <=2 characters.",
+                "title": "Artist"
+              },
+              "isrc": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "ISRC, e.g. 'USUM71900001'.",
+                "title": "Isrc"
+              },
+              "mbid": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "MusicBrainz recording ID (UUID). The precise key when there is no ISRC, e.g. pre-1986 recordings.",
+                "title": "Mbid"
+              },
+              "spotify_id": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Spotify track ID, 'spotify:track:...' URI, or open.spotify.com URL. Resolved per request by reading the track's title from Spotify's public embed page and matching it against our catalogue (no Spotify IDs are stored) — a title several artists share is ambiguous and misses rather than guessing; prefer track (+artist) or isrc.",
+                "title": "Spotify Id"
+              },
+              "track": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Track title. Use with `artist` when known. Supply AT LEAST ONE of track/isrc/mbid/spotify_id. Sending several is fine — they resolve by precedence (track > isrc > mbid > spotify_id) and the rest are ignored.",
+                "title": "Track"
+              }
+            },
+            "title": "get_audio_featuresArguments",
+            "type": "object"
+          },
+          "outputSchema": {
+            "additionalProperties": true,
+            "title": "get_audio_featuresDictOutput",
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "openWorldHint": true,
+            "readOnlyHint": true,
+            "title": "Get Audio Features"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:ad2c58703752b007608e13c1a34dce4a0d2826987d2d3768fd192231e672eda4"
+        },
+        {
+          "name": "get_audio_features_batch",
+          "title": "Get Audio Features (Batch)",
+          "description": "Get audio features for MANY tracks in one call (up to 50 processed) — ideal for\n    analysing a whole playlist at once. Identify each item by name (`track`/`artist`), by\n    `isrc` (matched exactly first — best for CJK / K-pop / niche tracks whose fuzzy\n    name-match misses), or both (ISRC first, name as the fallback).\n\n    One bad entry never fails the batch. Items beyond the 50-per-call cap come back with\n    `found: false` and `backfill_status: \"over_limit\"`; an item missing BOTH `track` and\n    `isrc` comes back `\"invalid_no_query\"`. Neither is processed or charged — the response's\n    `skipped` field counts them, so split a long list into calls of <=50 and resubmit any\n    skipped rows.\n\n    Returns counts (`found` / `not_found` / `skipped`) plus a per-track `results` array, where\n    each entry's `result` is the same feature object as get_audio_features (or null when not\n    found), and `isrc` is echoed back. An item is billed only when it returns features or\n    queues an on-demand ingest; an ISRC/name with no match anywhere is free. A track you\n    queue and then collect costs ONE unit, not two — the call that collects it is free.\n    For a `found: false` item, `backfill_status` `queued` / `processing` / `deferred` means\n    retry later; `unavailable` is terminal (carries `terminal`, `reason`, `retry_after_days` —\n    treat it as a miss until then); null means no match anywhere.\n    For a single track, use get_audio_features.\n    ",
+          "inputSchema": {
+            "$defs": {
+              "TrackQuery": {
+                "description": "One track to look up by name and/or ISRC. Supply `track` or `isrc` (or both); an item\ncarrying neither is skipped by the batch tool (`invalid_no_query`), not an error.",
+                "properties": {
+                  "artist": {
+                    "anyOf": [
+                      {
+                        "maxLength": 200,
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "description": "Artist name (optional, improves name-match accuracy)",
+                    "title": "Artist"
+                  },
+                  "isrc": {
+                    "anyOf": [
+                      {
+                        "maxLength": 15,
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "description": "ISRC, e.g. 'USUM71900001' (hyphens optional). Matched exactly first — resolves CJK/K-pop/niche tracks whose fuzzy name-match misses. Supply this OR `track`.",
+                    "title": "Isrc"
+                  },
+                  "track": {
+                    "anyOf": [
+                      {
+                        "maxLength": 200,
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "description": "Track title. Supply this OR `isrc` (or both — ISRC is matched exactly first, the name is the fallback).",
+                    "title": "Track"
+                  }
+                },
+                "title": "TrackQuery",
+                "type": "object"
+              }
+            },
+            "properties": {
+              "tracks": {
+                "description": "List of {track?, artist?, isrc?} objects. Up to 50 are processed per call; any extra (up to 200 accepted) come back skipped. Each item should carry `track` or `isrc`.",
+                "items": {
+                  "$ref": "#/$defs/TrackQuery"
+                },
+                "maxItems": 200,
+                "minItems": 1,
+                "title": "Tracks",
+                "type": "array"
+              }
+            },
+            "required": ["tracks"],
+            "title": "get_audio_features_batchArguments",
+            "type": "object"
+          },
+          "outputSchema": {
+            "additionalProperties": true,
+            "title": "get_audio_features_batchDictOutput",
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "openWorldHint": true,
+            "readOnlyHint": true,
+            "title": "Get Audio Features (Batch)"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:2b3177b15d72988e34be6ded1c107bcd2123393b454ee585bf9ec50c39d5813a"
+        },
+        {
+          "name": "get_recommendations",
+          "title": "Get Recommendations",
+          "description": "Recommended tracks for one or more seed tracks, in the shape of Spotify's retired\n    GET /v1/recommendations. Takes up to 5 catalog seed tracks and returns catalogue tracks that\n    sound like the set as a whole — ranked on the same similarity as find_similar_tracks (mainly a\n    PANNs audio embedding, blended with audio features), RE-RANKED by genre affinity (so a\n    close-sounding cross-genre track doesn't outrank same-genre picks).\n\n    Returns `seeds` (each {id, found}), `count`, and `tracks` (each {track, score,\n    genre_relation}; each track carries its `genre`). `genre_relation` is \"same\", \"compatible\"\n    (different but mixable family), \"cross\" (unrelated), or \"unknown\" (either side has no mapped\n    genre), measured against the PRIMARY seed — the first of your seed_tracks we could actually\n    use, so reordering seed_tracks changes it and a skipped seed never becomes the reference.\n    With a SINGLE seed the field is the ranking's own verdict, so it explains the order (same as\n    suggest_next_track). With SEVERAL seeds the ranking considers ALL of them while the label stays\n    relative to your primary seed, so a \"cross\" label on a multi-seed call does NOT mean the track\n    was pushed down — it may share a family with another of your seeds. `score` is the similarity\n    to the seed set (the same blended similarity find_similar_tracks returns); genre affinity and\n    target_ preferences influence the ORDER, not the score, so the list is NOT strictly\n    score-descending.\n    Use cross_genre=strict to return same-genre-family tracks ONLY (off-genre dropped\n    server-side), or allow to disable the genre ranking. seed_tracks are catalog itunes_track_ids\n    from search_catalog or the itunes_track_id field of a get_audio_features result.\n\n    NO id? Pass `track` (+ optional `artist`) instead and we resolve the name to the best catalog\n    match and seed on it — the resolved track is echoed back as `seed_query`; seed_tracks wins if\n    both are given.\n\n    TUNING: `min`/`max` are HARD filters and `target` is a preference (nearer ranks higher,\n    nothing removed), over acousticness, danceability, duration_ms, energy,\n    loudness, tempo and valence. NOTE: `popularity` (2026-08-27), `liveness`, `speechiness`\n    (2026-09-26) and `instrumentalness` (2026-09-27) are RETIRED as tunables and return a 400 —\n    popularity recorded how a track entered our catalogue, not audience size; the other three\n    are returned as null for catalogue tracks. Values are FreqBlog's own (not Spotify's):\n    energy and valence (models of how energetic / positive the preview sounds) on our own scales, danceability/acousticness on AcousticBrainz's scale —\n    derive thresholds from our values rather than reusing Spotify-tuned ones. e.g. min={\"tempo\": 100},\n    max={\"tempo\": 130}, target={\"energy\": 0.8} for energetic 100-130 BPM tracks. When you tune,\n    the response adds a `filters` block saying what applied, how many tracks each bound removed\n    (`dropped_by`) and whether the bounds ran out of catalogue before `limit` (`limit_reached`)\n    — if the list comes back short, read that BEFORE assuming the catalogue is thin.\n    Costs 2 quota units.\n    ",
+          "inputSchema": {
+            "properties": {
+              "artist": {
+                "anyOf": [
+                  {
+                    "maxLength": 200,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Artist name narrowing the track seed (case-insensitive).",
+                "title": "Artist"
+              },
+              "cross_genre": {
+                "default": "auto",
+                "description": "Genre handling (mirrors suggest_next_track): 'auto' (default) re-ranks by genre affinity so a feature-close cross-genre track can't outrank same-genre picks; 'strict' = same genre-family only (off-genre dropped server-side); 'allow' = genre-blind (pure audio-feature cosine).",
+                "title": "Cross Genre",
+                "type": "string"
+              },
+              "exclude_seed_artists": {
+                "default": false,
+                "description": "Drop tracks by any of the seed artists (default false).",
+                "title": "Exclude Seed Artists",
+                "type": "boolean"
+              },
+              "limit": {
+                "default": 20,
+                "description": "Number of recommendations to return (default 20).",
+                "maximum": 100,
+                "minimum": 1,
+                "title": "Limit",
+                "type": "integer"
+              },
+              "max": {
+                "anyOf": [
+                  {
+                    "additionalProperties": {
+                      "type": "number"
+                    },
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "HARD upper bounds, e.g. {'tempo': 130}. Same attributes as `min`. Combine the two for a range.",
+                "title": "Max"
+              },
+              "min": {
+                "anyOf": [
+                  {
+                    "additionalProperties": {
+                      "type": "number"
+                    },
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "HARD lower bounds, e.g. {'tempo': 100, 'energy': 0.5}. Tracks below the bound — and tracks we hold no analysed value for — are dropped. Attributes: acousticness, danceability, duration_ms, energy, loudness, tempo, valence.",
+                "title": "Min"
+              },
+              "seed_tracks": {
+                "anyOf": [
+                  {
+                    "items": {
+                      "type": "string"
+                    },
+                    "maxItems": 5,
+                    "type": "array"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "1-5 catalog itunes_track_ids to base recommendations on, e.g. ['apple_ad1829eeccb70f9a'] (blended into a feature-space centroid). Omit and use track(+artist) to seed by name instead.",
+                "title": "Seed Tracks"
+              },
+              "target": {
+                "anyOf": [
+                  {
+                    "additionalProperties": {
+                      "type": "number"
+                    },
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "PREFERRED values, e.g. {'energy': 0.8}. Tracks nearer the value rank higher; unlike min/max nothing is removed. Same attributes as `min`.",
+                "title": "Target"
+              },
+              "track": {
+                "anyOf": [
+                  {
+                    "maxLength": 200,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Seed by track NAME instead of an id — resolved to the best catalog match (echoed back as seed_query). Pair with artist to disambiguate. Ignored when seed_tracks is given.",
+                "title": "Track"
+              }
+            },
+            "title": "get_recommendationsArguments",
+            "type": "object"
+          },
+          "outputSchema": {
+            "additionalProperties": true,
+            "title": "get_recommendationsDictOutput",
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "openWorldHint": true,
+            "readOnlyHint": true,
+            "title": "Get Recommendations"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:c6c476e29dc18b47a3ec2dc6f9f6a45b02e3ea6b4e5d98c75df1c3e51f37755d"
+        },
+        {
+          "name": "get_related_artists",
+          "title": "Get Related Artists",
+          "description": "Artists related to a seed artist, in the shape of Spotify's retired\n    GET /v1/artists/{id}/related-artists. No artist graph exists, so we derive one: build the\n    seed artist's track-vector centroid, take its nearest catalogue tracks, aggregate by artist\n    (each scored on its top-3 track similarities so a prolific artist can't dominate) plus a\n    same-genre lift and a cross-genre penalty.\n\n    Returns `artist`, `count`, and `related` (each {artist_name, score, match_count,\n    sample_track_id}). Pass a sample_track_id straight to get_audio_features or\n    suggest_next_track. Costs 2 quota units.\n    ",
+          "inputSchema": {
+            "properties": {
+              "artist": {
+                "description": "Seed artist name (as it appears in the catalog; case-insensitive).",
+                "maxLength": 200,
+                "minLength": 1,
+                "title": "Artist",
+                "type": "string"
+              },
+              "limit": {
+                "default": 20,
+                "description": "Number of related artists to return (default 20).",
+                "maximum": 50,
+                "minimum": 1,
+                "title": "Limit",
+                "type": "integer"
+              }
+            },
+            "required": ["artist"],
+            "title": "get_related_artistsArguments",
+            "type": "object"
+          },
+          "outputSchema": {
+            "additionalProperties": true,
+            "title": "get_related_artistsDictOutput",
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "openWorldHint": true,
+            "readOnlyHint": true,
+            "title": "Get Related Artists"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:aafb8be3f7cce450cc817f15aeec1274d2382e66dd61d48eb6027aeb2caa0867"
+        },
+        {
+          "name": "score_transition",
+          "title": "Score Transition",
+          "description": "Score how well one catalog track mixes into another (0-100) — the pairwise DJ transition\n    score no raw key/BPM API gives you. Combines Camelot-wheel key compatibility, octave-aware\n    BPM proximity (half/double-time counts as a match), and energy smoothness.\n\n    Returns the overall `score`, per-component scores (`harmonic`/`tempo`/`energy`), a `detail`\n    block (key_relation, both Camelot keys, both BPMs, bpm_delta, bpm_octave_matched, both\n    energies, energy_delta), and a one-line human `reason` (e.g. \"8A->9A adjacent (+1), 126->128\n    BPM (+2), energy +0.04 — clean uplifting mix\"). Both ids are catalog itunes_track_ids — get\n    them from search_catalog or the itunes_track_id field of a get_audio_features result. Costs\n    1 quota unit.\n    ",
+          "inputSchema": {
+            "properties": {
+              "from_track_id": {
+                "description": "The track you're mixing FROM — a catalog itunes_track_id, e.g. 'apple_ad1829eeccb70f9a'.",
+                "maxLength": 80,
+                "minLength": 1,
+                "title": "From Track Id",
+                "type": "string"
+              },
+              "to_track_id": {
+                "description": "The candidate track you're mixing INTO — a catalog itunes_track_id.",
+                "maxLength": 80,
+                "minLength": 1,
+                "title": "To Track Id",
+                "type": "string"
+              }
+            },
+            "required": ["from_track_id", "to_track_id"],
+            "title": "score_transitionArguments",
+            "type": "object"
+          },
+          "outputSchema": {
+            "additionalProperties": true,
+            "title": "score_transitionDictOutput",
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "openWorldHint": true,
+            "readOnlyHint": true,
+            "title": "Score Transition"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:00104fc7b1d920be8909774ddbec90b67b77920196da75c7b7a564e03aed871b"
+        },
+        {
+          "name": "search_by_description",
+          "title": "Search Tracks by Description",
+          "description": "Find catalog tracks from a plain-language description of how they sound — e.g.\n    \"melancholic piano, slow\", \"dark ambient strings\", \"upbeat acoustic guitar, fast\".\n\n    Understands instruments and voice (piano, guitar, acoustic guitar, violin, cello, strings,\n    harp, flute, sax, brass, organ, choir, a cappella, rap, 808/drum machine, orchestral),\n    mood (sad/melancholic, dark/eerie, angry, ambient, happy/upbeat, chill/relaxed),\n    character (acoustic, instrumental, with vocals, energetic, soft, danceable), tempo\n    (slow <= 95 BPM, mid-tempo, fast >= 125 BPM, applied as filters) and any catalog genre.\n    Sound words are scored from audio analysis of each track, not titles; every word has to\n    hold. The response's `description.understood` shows how each word was read and\n    `ignored_words` lists words that were NOT used — rephrase those. Each result has `match`\n    (0-1) and a per-word `matched` breakdown. Costs 1 quota unit.\n    ",
+          "inputSchema": {
+            "properties": {
+              "genre": {
+                "anyOf": [
+                  {
+                    "maxLength": 500,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Optional: only these catalog genres (comma list), in addition to any genre named in q. Unknown names in a list are skipped and listed in filters.ignored with close matches; only a list where every name is unknown is rejected.",
+                "title": "Genre"
+              },
+              "key": {
+                "anyOf": [
+                  {
+                    "maxLength": 300,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Optional: only these keys — Camelot ('8A'), Open Key ('1m') or names.",
+                "title": "Key"
+              },
+              "limit": {
+                "default": 20,
+                "description": "Tracks per page (default 20).",
+                "maximum": 50,
+                "minimum": 1,
+                "title": "Limit",
+                "type": "integer"
+              },
+              "max": {
+                "anyOf": [
+                  {
+                    "additionalProperties": {
+                      "type": "number"
+                    },
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Optional HARD upper bounds, e.g. {'tempo': 128}.",
+                "title": "Max"
+              },
+              "max_year": {
+                "anyOf": [
+                  {
+                    "maximum": 2100,
+                    "minimum": 1000,
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Optional: latest release year.",
+                "title": "Max Year"
+              },
+              "min": {
+                "anyOf": [
+                  {
+                    "additionalProperties": {
+                      "type": "number"
+                    },
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Optional HARD lower bounds, e.g. {'tempo': 120}. Attributes: acousticness, danceability, duration_ms, energy, loudness, tempo, valence.",
+                "title": "Min"
+              },
+              "min_year": {
+                "anyOf": [
+                  {
+                    "maximum": 2100,
+                    "minimum": 1000,
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Optional: earliest release year.",
+                "title": "Min Year"
+              },
+              "offset": {
+                "default": 0,
+                "description": "Skip this many tracks for the next page; offset + limit <= 500.",
+                "maximum": 499,
+                "minimum": 0,
+                "title": "Offset",
+                "type": "integer"
+              },
+              "q": {
+                "description": "Plain-language description, e.g. 'melancholic piano, slow' or 'chill acoustic guitar'.",
+                "maxLength": 300,
+                "minLength": 2,
+                "title": "Q",
+                "type": "string"
+              }
+            },
+            "required": ["q"],
+            "title": "search_by_descriptionArguments",
+            "type": "object"
+          },
+          "outputSchema": {
+            "additionalProperties": true,
+            "title": "search_by_descriptionDictOutput",
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "openWorldHint": true,
+            "readOnlyHint": true,
+            "title": "Search Tracks by Description"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:9efbd490bd72352076db9d0074b8878868c0e83c045b8c7119f30af600324737"
+        },
+        {
+          "name": "search_catalog",
+          "title": "Search Music Catalog",
+          "description": "Full-text search the catalog by any mix of track / artist / album tokens. Use this to\n    resolve a fuzzy, partial, or misspelled name into concrete tracks BEFORE calling\n    get_audio_features.\n\n    Each hit carries `chart_peak`: the best chart position we hold, 1-100 with 100 = a\n    number-one. `null` means no placement we hold — treat that as UNKNOWN, not unpopular,\n    and note it is NOT an audience-size figure. Placements come from the Apple Music and\n    Deezer charts we track (since Aug 2026) and Billboard year-end charts (1960-2025).\n\n    Returns lightweight stubs (itunes_track_id, track_name, artist_name, album, etc.) ranked\n    by relevance — NOT audio features. Take the best match's track_name + artist_name and\n    pass them to get_audio_features, or reuse its itunes_track_id as a `track_id` seed for\n    discovery tools.\n\n    ⚠ Each hit carries a `seedable` boolean. Only a hit with `seedable: true` can be used as\n    a seed for get_recommendations / suggest_next_track / build_setlist / score_transition —\n    those work off the similarity index, which holds only tracks we have analysed, and about\n    a quarter of the catalogue is not analysed yet. **Prefer the highest-ranked hit with\n    `seedable: true`.** Seeding with a `seedable: false` id returns a 404; if that track is\n    the one you want, call get_audio_features on it first to queue analysis, then retry.\n    ",
+          "inputSchema": {
+            "properties": {
+              "limit": {
+                "default": 10,
+                "description": "Max results (default 10).",
+                "maximum": 50,
+                "minimum": 1,
+                "title": "Limit",
+                "type": "integer"
+              },
+              "q": {
+                "description": "Search query — any mix of artist / track / album tokens.",
+                "maxLength": 200,
+                "minLength": 1,
+                "title": "Q",
+                "type": "string"
+              }
+            },
+            "required": ["q"],
+            "title": "search_catalogArguments",
+            "type": "object"
+          },
+          "outputSchema": {
+            "additionalProperties": true,
+            "title": "search_catalogDictOutput",
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "openWorldHint": true,
+            "readOnlyHint": true,
+            "title": "Search Music Catalog"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:a4ba26467c428dcb1fdeb1ae32e4b2d029292cd4e1e80b4b5b3e0cd82d4615f8"
+        },
+        {
+          "name": "suggest_next_track",
+          "title": "Suggest Next Track",
+          "description": "Given a seed track, return the top-N catalog tracks to play NEXT, ranked by transition\n    score. Each suggestion carries the same `score`, per-component scores and human `reason` as\n    score_transition (e.g. \"11B->11B same key, 118->117 BPM (-0.29), energy +0.12\"), plus its\n    `genre` and `genre_relation` to the seed. GENRE-AWARE by default (cross_genre=auto): off-genre\n    picks that only coincidentally share the seed's key/BPM sink to the bottom — use\n    cross_genre=strict for same-genre-family only, or allow for the old harmonic-only ranking. It\n    is the seed's sonic neighbours re-ranked for a clean mix.\n\n    Returns `seed`, `count`, and a `suggestions` array of {track, score, components, reason}.\n    seed_track_id is a catalog itunes_track_id from search_catalog or a get_audio_features\n    result. Pair with build_setlist to order a whole crate. Costs 3 quota units.\n    ",
+          "inputSchema": {
+            "properties": {
+              "bpm_drift": {
+                "default": 12,
+                "description": "Max BPM difference pre-filter before scoring (default 12).",
+                "maximum": 30,
+                "minimum": 0.5,
+                "title": "Bpm Drift",
+                "type": "number"
+              },
+              "cross_genre": {
+                "default": "auto",
+                "description": "Genre handling: 'auto' (default) keeps picks in a mixable genre lane so an off-genre track that only shares key/BPM sinks to the bottom; 'strict' = same genre-family only; 'allow' = genre-blind (harmonic+tempo+energy only).",
+                "title": "Cross Genre",
+                "type": "string"
+              },
+              "exclude_same_artist": {
+                "default": false,
+                "description": "Drop tracks by the seed's artist (default false).",
+                "title": "Exclude Same Artist",
+                "type": "boolean"
+              },
+              "max_key_distance": {
+                "default": 2,
+                "description": "Max Camelot-wheel hops pre-filter before scoring (default 2).",
+                "maximum": 12,
+                "minimum": 0,
+                "title": "Max Key Distance",
+                "type": "integer"
+              },
+              "min_score": {
+                "default": 0,
+                "description": "Drop candidates below this overall transition score (default 0).",
+                "maximum": 100,
+                "minimum": 0,
+                "title": "Min Score",
+                "type": "integer"
+              },
+              "n": {
+                "default": 10,
+                "description": "How many next-track suggestions to return (default 10).",
+                "maximum": 50,
+                "minimum": 1,
+                "title": "N",
+                "type": "integer"
+              },
+              "seed_track_id": {
+                "description": "The track currently playing — a catalog itunes_track_id.",
+                "maxLength": 80,
+                "minLength": 1,
+                "title": "Seed Track Id",
+                "type": "string"
+              }
+            },
+            "required": ["seed_track_id"],
+            "title": "suggest_next_trackArguments",
+            "type": "object"
+          },
+          "outputSchema": {
+            "additionalProperties": true,
+            "title": "suggest_next_trackDictOutput",
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "openWorldHint": true,
+            "readOnlyHint": true,
+            "title": "Suggest Next Track"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:43d64262c3a2abd2222aa3aad4c80894646ff9cf80c6bbc3debf853db9756514"
+        },
+        {
+          "name": "tag_track",
+          "title": "Tag Track",
+          "description": "Get a compact, clearly labelled tag list for a track — energy / danceability / valence /\n    acousticness / instrumentalness (instrumental vs vocal, judged on the 30-second\n    preview), plus a mood tag and a broad genre tag. It is a tag-shaped\n    projection of the same open-data analysis get_audio_features returns (no audio upload, no extra\n    compute), so it costs the same 1 quota unit, charged only on a served result.\n\n    EVERY tag carries its own `confidence` and `provenance`:\n      - confidence: measured (a numeric audio feature, source in provenance) | derived (MIREX mood from valence+energy) |\n        model-estimated (AcousticBrainz mood SVM probability — research-grade, raw prob in `value`) |\n        catalog-genre (broad catalogue tag, not fine-grained).\n      - provenance: librosa | panns | valence+energy | acousticbrainz | catalog.\n    `value` is the [0,1] score for numeric tags and null for label-only tags (mood category, genre).\n\n    Provide AT LEAST ONE identifier: `track` (optionally with `artist`), `isrc`, `mbid`,\n    `spotify_id`, or `track_id` (catalog itunes_track_id). If you know several, send them all —\n    they resolve by precedence (`track` > `isrc` > `track_id` > `mbid` > `spotify_id`) and the\n    rest are ignored, so you never have to pick. The broad, reliable coverage is the\n    MEASURED tags from our own analysis (librosa + a PANNs-based model) over the analysed catalogue\n    (plus on-demand by name);\n    MBID/ISRC additionally reach 7.5M+ AcousticBrainz recordings WHEN you supply that identifier.\n\n    Returns { track, count, tags:[{tag, category, value, confidence, provenance}], disclaimer }.\n    For the full numeric feature set use get_audio_features; for nearest tracks use a discovery tool.\n    ",
+          "inputSchema": {
+            "properties": {
+              "artist": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Artist name. Only used with `track`; improves accuracy.",
+                "title": "Artist"
+              },
+              "isrc": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "ISRC, e.g. 'USUM71900001'.",
+                "title": "Isrc"
+              },
+              "mbid": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "MusicBrainz recording ID (UUID). Tags come from AcousticBrainz for that exact recording.",
+                "title": "Mbid"
+              },
+              "spotify_id": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Spotify track ID, 'spotify:track:...' URI, or open.spotify.com URL. Resolved per request by reading the track's title from Spotify's public embed page and matching it against our catalogue (no Spotify IDs are stored) — a title several artists share is ambiguous and misses rather than guessing; prefer track (+artist) or isrc.",
+                "title": "Spotify Id"
+              },
+              "track": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Track title. Use with `artist` when known. Supply AT LEAST ONE of track/isrc/mbid/spotify_id/track_id. Sending several is fine — they resolve by precedence (track > isrc > track_id > mbid > spotify_id).",
+                "title": "Track"
+              },
+              "track_id": {
+                "anyOf": [
+                  {
+                    "maxLength": 80,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Catalog itunes_track_id from a search_catalog or get_audio_features result.",
+                "title": "Track Id"
+              }
+            },
+            "title": "tag_trackArguments",
+            "type": "object"
+          },
+          "outputSchema": {
+            "additionalProperties": true,
+            "title": "tag_trackDictOutput",
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "openWorldHint": true,
+            "readOnlyHint": true,
+            "title": "Tag Track"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:980498fa88ff27768f7e46cc85e5d501920e66b8166bec73f86929f9735943ed"
+        }
+      ],
+      "digest": "sha256:f4f260aa17d225f1d7d1c852daae9aed19d46afddab39d914f60eb8c312766c7"
+    }
+  }
+}

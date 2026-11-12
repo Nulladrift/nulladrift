@@ -1,0 +1,2247 @@
+{
+  "lockfileVersion": 2,
+  "subjects": {
+    "com.multilocale/multilocale": {
+      "kind": "mcp-server",
+      "source": {
+        "client": "manual",
+        "file": "registry.modelcontextprotocol.io"
+      },
+      "transport": {
+        "type": "http",
+        "url": "https://mcp.multilocale.com/mcp"
+      },
+      "protocol": {
+        "era": "modern",
+        "version": "2026-07-28",
+        "supportedVersions": ["2026-07-28"]
+      },
+      "serverInfo": {
+        "name": "multilocale-mcp",
+        "title": "MultiLocale",
+        "version": "0.1.2"
+      },
+      "capabilities": {
+        "extensions": {
+          "io.modelcontextprotocol/skills": {}
+        },
+        "resources": {
+          "listChanged": false
+        },
+        "tools": {
+          "listChanged": false
+        }
+      },
+      "instructions": "# Localization workspace with Multilocale\n\n## Interactive workspace\n\nUse `open_multilocale` with no arguments when the user wants to open the product\nand browse visually. It is a read-only sidebar entrypoint with up to 100 items,\nusing the same tenant authorization as the other tools. Selection shares bounded\nentity context with the host; subsequent writes still require their normal approval.\n\n## What this connector can and cannot do\n\nRead this before planning any work. The Multilocale connector is remote and\nOAuth-scoped: it can read and write translation data, but it cannot see or edit\nthe user's codebase.\n\n| It can                                                                    | It cannot                                                  |\n| ------------------------------------------------------------------------- | ---------------------------------------------------------- |\n| Read and write translation data — projects, locales, phrases, team roster | Read, search, write or diff any file on the user's machine |\n| Machine-translate one phrase, or every phrase of a new locale             | Extract the strings an app currently hard-codes            |\n| Export a locale dictionary as bounded, paginated JSON                     | Write a translation file into a repository                 |\n| Audit coverage and duplicate source copy inside a project                 | Run a command, install a package, or open a pull request   |\n\nSo **\"localize my app\" is not a request this connector can complete on its\nown.** Reading the strings a codebase already contains, and writing translation\nfiles back into it, is the job of the `multilocale` CLI (`npx multilocale`) —\nrun by the user, or by an agent that does have shell and filesystem access,\nsuch as Claude Code, Codex or Cursor. `multilocale import` uploads a codebase's\nexisting flat JSON or Android `strings.xml`; `multilocale download` writes every\nlocale back out.\n\nWhen a user asks for a whole app to be localized:\n\n1. Say plainly that this connector holds the translation data while the CLI\n   moves the files, so part of the work happens in their terminal.\n2. Do the part that does belong here — create or inspect the project, set its\n   locales, review coverage, fix wording.\n3. Hand over the file-side commands, and point at the companion\n   `localize-an-app` skill (`npx skills add multilocale/skills`) and\n   https://www.multilocale.com/integrations/cli/ for the full recipe.\n\nNever invent phrase keys or values from a guess about the user's UI, and never\nreport an app as localized on the strength of connector calls alone: no tool\nhere has read a line of their code.\n\n## Connecting\n\nThis skill drives the Multilocale MCP connector. The user must have connected\nMultilocale and signed in to an account with access to a project. If a call\nfails with an authorization error, ask the user to connect Multilocale instead\nof retrying or asking for an API key.\n\n## Start by resolving the project\n\nProject names are organization-scoped slugs. Most phrase tools take the\nproject name, while project detail and write tools may accept an id or name.\n\n- Call `list_projects` when the user has not identified a project precisely.\n- Use `get_project` for exact metadata or `show_project_overview` when an\n  inline overview would help.\n- Do not guess a project from a common name such as `app` or `website`.\n- Use the returned project name for phrase calls. Never infer an organization\n  id; OAuth supplies the tenant boundary.\n\n## Available tools\n\nProject and team reads:\n\n| Tool                    | Use it when someone asks…                                                                        |\n| ----------------------- | ------------------------------------------------------------------------------------------------ |\n| `list_projects`         | which projects they have; also resolves the project name the phrase tools need                   |\n| `get_project`           | about one project's default locale and configured locales                                        |\n| `show_project_overview` | for a one-card overview of one project                                                           |\n| `list_team_members`     | who is on the team; display name and role only, email and internal member/role IDs stay excluded |\n\nPhrase reads and audits:\n\n| Tool                           | Use it when someone asks…                                                   |\n| ------------------------------ | --------------------------------------------------------------------------- |\n| `list_phrases`                 | to see a project's strings, optionally in one locale or for one exact key   |\n| `get_phrase`                   | how one exact key is translated across locales, with generated-copy status  |\n| `search_phrases`               | to find strings by the words they contain, when the exact key is unknown    |\n| `find_missing_translations`    | what is still untranslated: coverage percentages and missing keys by locale |\n| `find_duplicate_phrase_values` | which keys repeat the same default-locale text, as consolidation candidates |\n| `export_locale_dictionary`     | for one language's key/value pairs, paginated                               |\n\nWrites:\n\n| Tool             | Use it when someone asks…                                                 |\n| ---------------- | ------------------------------------------------------------------------- |\n| `add_project`    | to create a project with a default locale and initial locale set          |\n| `update_project` | to replace locales, change the default locale, or set translation context |\n| `add_phrase`     | to add a new key, machine-translated to every configured locale           |\n| `add_locale`     | to add one new language, machine-translating every source key             |\n| `share_phrase`   | to reuse one key's locale rows in additional projects                     |\n| `update_phrase`  | to overwrite one existing translation, marking it human-edited            |\n| `delete_phrase`  | to permanently delete a key's complete locale group                       |\n\n## Choose the narrowest read\n\nUse `get_phrase` when the key is known. Use `search_phrases` only to discover a\nkey, then switch to the exact read before editing. `list_phrases` and search\nresults are bounded previews; they are not evidence that a large project has no\nmore rows.\n\nUse `export_locale_dictionary` for a broad locale review. It returns\n`hasMore`; continue with the returned next `skip` until false. Values can be\ntruncated at 500 characters and each page contains at most 50 entries. If\n`valuesTruncated`, `offsetCapReached`, or a `partial` status is returned, say\nthat the export is a preview and do not silently treat it as a byte-exact file.\nUse the Multilocale CLI when the user needs the complete file bytes.\n\n`find_missing_translations` checks at most 10 locales and scans at most 2,000\nphrases per locale. `find_duplicate_phrase_values` scans at most 2,000 source\nphrases. Treat `partial`, `scanTruncated`, `sourceScanTruncated`,\n`targetScanTruncated`, or `localesTruncated` as an explicit completeness caveat,\nnot evidence that unscanned copy is complete or unique.\n\n## A standard localization audit\n\nWhen asked to audit a project:\n\n1. `get_project` to establish its default locale and configured locales.\n2. `find_missing_translations` across all configured target locales.\n3. `find_duplicate_phrase_values` to identify repeated default-locale copy.\n4. `list_phrases` per target locale when the user wants a bounded review of\n   machine-generated values.\n5. `get_phrase` for each key whose wording or sharing needs close review.\n6. `export_locale_dictionary` only when the user requests a full language\n   dictionary or a broad copy review; paginate until `hasMore` is false, and\n   preserve any `partial` caveat.\n\nReport coverage gaps separately from copy quality. A present machine-generated\nvalue counts as translated, but it may still need human review.\n\nNo connector tool creates one missing translation for a key that already\nexists in other locales: `add_phrase` refuses an existing key, `update_phrase`\nchanges only an existing row, and `add_locale` refuses a locale the project\nalready has. Report such gaps as findings; do not fill them by overwriting\nanother locale.\n\n## Writes require exact intent\n\nDo not turn an audit, suggestion, or translation request into a saved workspace\nchange. Before any write, identify the exact project, key or locale, summarize\nwhat will happen, and obtain the user's approval when the host has not already\nshown an approval prompt.\n\nAll seven writes declare `destructiveHint: true`. This is a conservative\ncross-host approval boundary because each one persists a workspace mutation;\nit does not mean every write deletes data. The individual tool description and\nthe rules below identify whether the operation creates data, replaces a list,\nwidens sharing, overwrites copy, spends translation capacity, or deletes rows.\n\n`add_project` refuses a duplicate name. Include the default locale in the\nplanned locale set and show all initial locales before creating it.\n\n`add_phrase` refuses an existing key. First call `get_phrase`; if it exists,\nuse `update_phrase` only after the user chooses one locale and approves the\nreplacement. Show the source value, configured target locales, requested model\nwhen specified, and context. The tool can spend translation credits and saves\nmachine-generated values.\n\n`add_locale` can translate every source key and therefore has variable cost and\na potentially large write surface. First call `find_missing_translations` for\nthe proposed locale, report the missing-key count, translation model and\ncontext, then confirm. Do not call it once per missing key. It translates every\nkey before saving anything, within one request, so a very large project can\ntime out with nothing saved; `multilocale localize` in the CLI is the\ndocumented path for whole new languages.\n\n`update_project` treats `locales` as a **complete replacement list**, not a\npatch. Read the project first, preserve every locale the user did not ask to\nremove, and explicitly confirm any removal. A new default locale must be in\nthe replacement list.\n\n`share_phrase` makes future edits affect every attached project. Read the exact\nkey first, resolve each target with `get_project`, remove the source project\nand duplicates from the target list, then show the resulting sharing set.\n\n## Overwrites and deletion\n\n`update_phrase` overwrites an existing value. It is idempotent but destructive:\nread the exact key and locale immediately before the call, show the previous\nand proposed values, list every shared project from the read result, and\nconfirm the replacement. Do not overwrite a different locale as a shortcut for\nadding a missing translation.\n\n`delete_phrase` permanently removes every locale row for the key. If the rows\nare shared, deletion also affects those other projects; it is not a detach\noperation. Immediately before deletion, call `get_phrase` without a language\nfilter, show the number of translations and all shared projects, and ask for\nexplicit confirmation naming the key and source project. Never perform broad\nor inferred deletion.\n\n## Interactive views\n\n`show_project_overview` renders a bounded project card, and `get_phrase` can\nrender a phrase-detail card, in hosts that support MCP Apps. When a card is\nvisible, add analysis the card does not show instead of restating every field.\n",
+      "tools": [
+        {
+          "name": "add_locale",
+          "title": "Add a language and translate it",
+          "description": "Use this when someone asks to add a new language to a project and translate their strings into it. Returns the updated language list and how many strings were machine-translated, one per key, all before anything is saved, so a very large project can time out. Not for a language the project already has.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "context": {
+                "description": "Note applied to every translation in this run, up to 600 characters",
+                "maxLength": 600,
+                "type": "string"
+              },
+              "locale": {
+                "description": "Locale code to add, such as it or pt-BR",
+                "maxLength": 35,
+                "minLength": 1,
+                "type": "string"
+              },
+              "model": {
+                "description": "Translation model id; defaults to gpt-6-luna",
+                "maxLength": 64,
+                "type": "string"
+              },
+              "project": {
+                "description": "Project id or name",
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": ["locale", "project"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "locale": {
+                "maxLength": 35,
+                "type": "string"
+              },
+              "locales": {
+                "items": {
+                  "maxLength": 35,
+                  "type": "string"
+                },
+                "maxItems": 200,
+                "type": "array"
+              },
+              "project": {
+                "anyOf": [
+                  {
+                    "maxLength": 128,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "status": {
+                "enum": ["created", "not-found", "already-exists"],
+                "type": "string"
+              },
+              "translationCount": {
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": ["locale", "locales", "project", "status", "translationCount"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": true,
+            "idempotentHint": false,
+            "openWorldHint": false,
+            "readOnlyHint": false,
+            "title": "Add a language and translate it"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": false,
+            "readOnly": false
+          },
+          "meta": {
+            "securitySchemes": [
+              {
+                "scopes": ["multilocale:write"],
+                "type": "oauth2"
+              }
+            ]
+          },
+          "digest": "sha256:0232a13e26cb1ddedca37c535a2a4b209bcf7142e3d2b72f0782e65ed92cd252"
+        },
+        {
+          "name": "add_phrase",
+          "title": "Add a string and translate it",
+          "description": "Use this when someone asks to add a new string or key to their app's translations. Returns the created key with one machine translation per configured locale, made from the source text in the default locale. A key that already exists returns already-exists and is left unchanged. Not for changing an existing translation.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "context": {
+                "description": "Note for the translator that disambiguates the string, up to 600 characters",
+                "maxLength": 600,
+                "type": "string"
+              },
+              "key": {
+                "description": "New key, 1 to 256 characters",
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              "model": {
+                "description": "Translation model id; defaults to gpt-6-luna",
+                "maxLength": 64,
+                "type": "string"
+              },
+              "project": {
+                "description": "Project id or name",
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              "value": {
+                "description": "Source text in the default locale, up to 2,000 characters; defaults to the key itself",
+                "maxLength": 2000,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": ["key", "project"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "defaultLocale": {
+                "anyOf": [
+                  {
+                    "maxLength": 35,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "key": {
+                "maxLength": 256,
+                "type": "string"
+              },
+              "locales": {
+                "items": {
+                  "maxLength": 35,
+                  "type": "string"
+                },
+                "maxItems": 200,
+                "type": "array"
+              },
+              "project": {
+                "anyOf": [
+                  {
+                    "maxLength": 128,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "status": {
+                "enum": ["created", "not-found", "already-exists"],
+                "type": "string"
+              },
+              "translationCount": {
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": ["defaultLocale", "key", "locales", "project", "status", "translationCount"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": true,
+            "idempotentHint": false,
+            "openWorldHint": false,
+            "readOnlyHint": false,
+            "title": "Add a string and translate it"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": false,
+            "readOnly": false
+          },
+          "meta": {
+            "securitySchemes": [
+              {
+                "scopes": ["multilocale:write"],
+                "type": "oauth2"
+              }
+            ]
+          },
+          "digest": "sha256:62d02378381018cd0818f6b540e90e1b5254253e8abd8954f33f0db174c890cf"
+        },
+        {
+          "name": "add_project",
+          "title": "Create a localization project",
+          "description": "Use this when someone asks to create a new localization project with a given name and languages. Returns the new project with its default locale and locales; if the name is taken it returns already-exists and creates nothing. Not for adding a language to an existing project.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "defaultLocale": {
+                "description": "Locale code of the source language, such as en",
+                "maxLength": 35,
+                "minLength": 1,
+                "type": "string"
+              },
+              "locales": {
+                "description": "Other locale codes to start with, such as it or de; the default locale is added automatically",
+                "items": {
+                  "maxLength": 35,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "maxItems": 200,
+                "type": "array"
+              },
+              "name": {
+                "description": "Name of the new project, 1 to 128 characters; a URL-safe slug such as my-app is easiest to reference later",
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": ["defaultLocale", "name"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "project": {
+                "anyOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "creationTime": {
+                        "anyOf": [
+                          {
+                            "maxLength": 32,
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "defaultLocale": {
+                        "anyOf": [
+                          {
+                            "maxLength": 35,
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "id": {
+                        "anyOf": [
+                          {
+                            "pattern": "^[0-9a-f]{24}$",
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "lastEditTime": {
+                        "$ref": "#/properties/project/anyOf/0/properties/creationTime"
+                      },
+                      "locales": {
+                        "items": {
+                          "$ref": "#/properties/project/anyOf/0/properties/defaultLocale/anyOf/0"
+                        },
+                        "maxItems": 200,
+                        "type": "array"
+                      },
+                      "name": {
+                        "maxLength": 128,
+                        "type": "string"
+                      }
+                    },
+                    "required": ["creationTime", "defaultLocale", "id", "lastEditTime", "locales", "name"],
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "status": {
+                "enum": ["created", "already-exists"],
+                "type": "string"
+              }
+            },
+            "required": ["project", "status"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": true,
+            "idempotentHint": false,
+            "openWorldHint": false,
+            "readOnlyHint": false,
+            "title": "Create a localization project"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": false,
+            "readOnly": false
+          },
+          "meta": {
+            "securitySchemes": [
+              {
+                "scopes": ["multilocale:write"],
+                "type": "oauth2"
+              }
+            ]
+          },
+          "digest": "sha256:358fab95945ab97f20ef15ef328853cd1845433d9d083f4859538646531ee86b"
+        },
+        {
+          "name": "delete_phrase",
+          "title": "Delete a string in every language",
+          "description": "Use this when someone asks to remove a key from their translations. Returns how many language rows were deleted and which other projects shared them; a shared string is deleted permanently for those projects too. Not for removing only one language's translation.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "key": {
+                "description": "Exact key to delete in every language",
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              "project": {
+                "description": "Project id or name that has the key",
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": ["key", "project"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "deletedTranslationCount": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "key": {
+                "maxLength": 256,
+                "type": "string"
+              },
+              "project": {
+                "anyOf": [
+                  {
+                    "maxLength": 128,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "sharedProjects": {
+                "description": "Other projects the deleted string was also removed from",
+                "items": {
+                  "maxLength": 128,
+                  "type": "string"
+                },
+                "maxItems": 100,
+                "type": "array"
+              },
+              "status": {
+                "enum": ["deleted", "not-found"],
+                "type": "string"
+              }
+            },
+            "required": ["deletedTranslationCount", "key", "project", "sharedProjects", "status"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": true,
+            "idempotentHint": false,
+            "openWorldHint": false,
+            "readOnlyHint": false,
+            "title": "Delete a string in every language"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": false,
+            "readOnly": false
+          },
+          "meta": {
+            "securitySchemes": [
+              {
+                "scopes": ["multilocale:write"],
+                "type": "oauth2"
+              }
+            ]
+          },
+          "digest": "sha256:820c407b5ae49f677fe0c1e29b5692e921e9a3a459dd7d80f91265cdf3d47255"
+        },
+        {
+          "name": "export_locale_dictionary",
+          "title": "Export one language's strings",
+          "description": "Use this when someone wants the key and value pairs of one language, for example to review or copy a translation file. Returns up to 50 entries per call (25 by default) sorted by key, values cut to 500 characters, with nextSkip for the next page. Not for a complete file download, which the MultiLocale CLI provides.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "language": {
+                "description": "Locale code to export, such as en",
+                "maxLength": 35,
+                "minLength": 1,
+                "type": "string"
+              },
+              "limit": {
+                "description": "Entries to return, from 1 to 50; defaults to 25",
+                "exclusiveMinimum": 0,
+                "maximum": 50,
+                "type": "integer"
+              },
+              "project": {
+                "description": "Project name; an id matches nothing",
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              "skip": {
+                "description": "Keys to skip in alphabetical order, for paging: pass the previous nextSkip; defaults to 0, at most 10000",
+                "maximum": 10000,
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": ["language", "project"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "entries": {
+                "description": "Key and value pairs sorted by key, values cut to 500 characters",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "key": {
+                      "maxLength": 256,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "value": {
+                      "maxLength": 500,
+                      "type": "string"
+                    }
+                  },
+                  "required": ["key", "value"],
+                  "type": "object"
+                },
+                "maxItems": 50,
+                "type": "array"
+              },
+              "hasMore": {
+                "type": "boolean"
+              },
+              "language": {
+                "maxLength": 35,
+                "type": "string"
+              },
+              "nextSkip": {
+                "anyOf": [
+                  {
+                    "$ref": "#/properties/skip"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Pass as skip to get the next page; null on the last page"
+              },
+              "offsetCapReached": {
+                "type": "boolean"
+              },
+              "project": {
+                "maxLength": 128,
+                "type": "string"
+              },
+              "returnedCount": {
+                "maximum": 50,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "skip": {
+                "maximum": 10000,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "status": {
+                "enum": ["found", "empty", "partial"],
+                "type": "string"
+              },
+              "valuesTruncated": {
+                "type": "boolean"
+              }
+            },
+            "required": ["entries", "hasMore", "language", "nextSkip", "offsetCapReached", "project", "returnedCount", "skip", "status", "valuesTruncated"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Export one language's strings"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "securitySchemes": [
+              {
+                "scopes": ["multilocale:read"],
+                "type": "oauth2"
+              }
+            ]
+          },
+          "digest": "sha256:76bea8caefb5f2cce60059981ae7c46c75619cba8974db708c1338eb9ba6bef3"
+        },
+        {
+          "name": "find_duplicate_phrase_values",
+          "title": "Find duplicate source strings",
+          "description": "Use this when someone wants to clean up a project by finding keys that repeat the same default-language text. Returns up to 25 repeated values with the keys that share them, scanning 1,000 default-locale strings by default and at most 2,000. Not for untranslated strings.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "project": {
+                "description": "Project id or name",
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              "scanLimit": {
+                "description": "Default-locale strings to scan, from 1 to 2000; defaults to 1000",
+                "exclusiveMinimum": 0,
+                "maximum": 2000,
+                "type": "integer"
+              }
+            },
+            "required": ["project"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "defaultLocale": {
+                "anyOf": [
+                  {
+                    "maxLength": 35,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "duplicateCount": {
+                "maximum": 2000,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "duplicates": {
+                "description": "Up to 25 default-locale values used by more than one key, with up to 10 keys each and the other projects sharing them",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "keys": {
+                      "items": {
+                        "maxLength": 256,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "maxItems": 10,
+                      "type": "array"
+                    },
+                    "keysTruncated": {
+                      "type": "boolean"
+                    },
+                    "sharedWith": {
+                      "items": {
+                        "maxLength": 128,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "maxItems": 10,
+                      "type": "array"
+                    },
+                    "sharedWithTruncated": {
+                      "type": "boolean"
+                    },
+                    "value": {
+                      "maxLength": 500,
+                      "type": "string"
+                    },
+                    "valueTruncated": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": ["keys", "keysTruncated", "sharedWith", "sharedWithTruncated", "value", "valueTruncated"],
+                  "type": "object"
+                },
+                "maxItems": 25,
+                "type": "array"
+              },
+              "duplicatesTruncated": {
+                "type": "boolean"
+              },
+              "phrasesScanned": {
+                "maximum": 2000,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "project": {
+                "anyOf": [
+                  {
+                    "maxLength": 128,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "scanLimit": {
+                "exclusiveMinimum": 0,
+                "maximum": 2000,
+                "type": "integer"
+              },
+              "scanTruncated": {
+                "type": "boolean"
+              },
+              "status": {
+                "enum": ["found", "none", "partial", "not-found"],
+                "type": "string"
+              }
+            },
+            "required": ["defaultLocale", "duplicateCount", "duplicates", "duplicatesTruncated", "phrasesScanned", "project", "scanLimit", "scanTruncated", "status"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Find duplicate source strings"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "securitySchemes": [
+              {
+                "scopes": ["multilocale:read"],
+                "type": "oauth2"
+              }
+            ]
+          },
+          "digest": "sha256:fc48e179e7d965c54984f28f204405408090ed1b0f980d05ec5a25043222db16"
+        },
+        {
+          "name": "find_missing_translations",
+          "title": "Find missing translations",
+          "description": "Use this when someone asks which strings are not translated yet, or how complete each language is. Returns completion percentages and up to 25 missing keys per locale, for one locale or up to 10, compared with the default locale. Nothing is translated or written. Not for filling in the missing translations.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "language": {
+                "description": "One locale code to check; omit to check the configured locales",
+                "maxLength": 35,
+                "minLength": 1,
+                "type": "string"
+              },
+              "localeLimit": {
+                "description": "How many configured locales to check when language is omitted, from 1 to 10; defaults to 10",
+                "exclusiveMinimum": 0,
+                "maximum": 10,
+                "type": "integer"
+              },
+              "project": {
+                "description": "Project id or name",
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              "scanLimit": {
+                "description": "Strings to scan per locale, from 1 to 2000; defaults to 1000",
+                "exclusiveMinimum": 0,
+                "maximum": 2000,
+                "type": "integer"
+              }
+            },
+            "required": ["project"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "defaultLocale": {
+                "anyOf": [
+                  {
+                    "maxLength": 35,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "locales": {
+                "description": "One row per checked locale with its completion and up to 25 missing keys; status partial means a scan cap was reached",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "analysisIncomplete": {
+                      "type": "boolean"
+                    },
+                    "completionPercent": {
+                      "maximum": 100,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "language": {
+                      "maxLength": 35,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "missingKeyCount": {
+                      "maximum": 2000,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "missingKeys": {
+                      "items": {
+                        "maxLength": 256,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "maxItems": 25,
+                      "type": "array"
+                    },
+                    "missingKeysTruncated": {
+                      "type": "boolean"
+                    },
+                    "targetPhrasesScanned": {
+                      "maximum": 2000,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "targetScanTruncated": {
+                      "type": "boolean"
+                    },
+                    "totalKeys": {
+                      "maximum": 2000,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "translatedKeys": {
+                      "maximum": 2000,
+                      "minimum": 0,
+                      "type": "integer"
+                    }
+                  },
+                  "required": ["analysisIncomplete", "completionPercent", "language", "missingKeyCount", "missingKeys", "missingKeysTruncated", "targetPhrasesScanned", "targetScanTruncated", "totalKeys", "translatedKeys"],
+                  "type": "object"
+                },
+                "maxItems": 10,
+                "type": "array"
+              },
+              "localesTruncated": {
+                "type": "boolean"
+              },
+              "project": {
+                "anyOf": [
+                  {
+                    "maxLength": 128,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "scanLimit": {
+                "exclusiveMinimum": 0,
+                "maximum": 2000,
+                "type": "integer"
+              },
+              "sourcePhrasesScanned": {
+                "maximum": 2000,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "sourceScanTruncated": {
+                "type": "boolean"
+              },
+              "status": {
+                "enum": ["complete", "incomplete", "partial", "not-found"],
+                "type": "string"
+              }
+            },
+            "required": ["defaultLocale", "locales", "localesTruncated", "project", "scanLimit", "sourcePhrasesScanned", "sourceScanTruncated", "status"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Find missing translations"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "securitySchemes": [
+              {
+                "scopes": ["multilocale:read"],
+                "type": "oauth2"
+              }
+            ]
+          },
+          "digest": "sha256:412cb3012190a8cc08d5904cf2bc4e601c0b57fc2303f93ce7f81d445b567c77"
+        },
+        {
+          "name": "get_phrase",
+          "title": "Show one string's translations",
+          "description": "Use this when someone asks how one exact key is translated, in every language or in one. Returns that key's text per locale, up to 24 locales and 2,000 characters each, with machine-translation flags and the projects sharing it, and renders a phrase card. Not for searching keys by text.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "key": {
+                "description": "Exact key, matched case-sensitively",
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              "language": {
+                "description": "One locale code such as en or it; every language when absent",
+                "maxLength": 35,
+                "type": "string"
+              },
+              "project": {
+                "description": "Project name; an id matches nothing",
+                "maxLength": 128,
+                "type": "string"
+              }
+            },
+            "required": ["key", "project"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "key": {
+                "maxLength": 256,
+                "type": "string"
+              },
+              "project": {
+                "maxLength": 128,
+                "type": "string"
+              },
+              "status": {
+                "enum": ["found", "not-found"],
+                "type": "string"
+              },
+              "translationCount": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "translations": {
+                "description": "One row per locale, up to 24, values cut to 2,000 characters; projects lists every project sharing the row",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "creationTime": {
+                      "anyOf": [
+                        {
+                          "maxLength": 32,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "id": {
+                      "anyOf": [
+                        {
+                          "pattern": "^[0-9a-f]{24}$",
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "language": {
+                      "maxLength": 35,
+                      "type": "string"
+                    },
+                    "lastEditTime": {
+                      "$ref": "#/properties/translations/items/properties/creationTime"
+                    },
+                    "machineTranslated": {
+                      "type": ["boolean", "null"]
+                    },
+                    "projects": {
+                      "items": {
+                        "maxLength": 128,
+                        "type": "string"
+                      },
+                      "maxItems": 100,
+                      "type": "array"
+                    },
+                    "value": {
+                      "maxLength": 2000,
+                      "type": "string"
+                    },
+                    "valueTruncated": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": ["creationTime", "id", "language", "lastEditTime", "machineTranslated", "projects", "value", "valueTruncated"],
+                  "type": "object"
+                },
+                "maxItems": 24,
+                "type": "array"
+              },
+              "translationsTruncated": {
+                "type": "boolean"
+              }
+            },
+            "required": ["key", "project", "status", "translationCount", "translations", "translationsTruncated"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Show one string's translations"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "openai/outputTemplate": "ui://multilocale/phrase-detail-v2.html",
+            "openai/toolInvocation/invoked": "MultiLocale phrase ready.",
+            "openai/toolInvocation/invoking": "Loading MultiLocale phrase…",
+            "securitySchemes": [
+              {
+                "scopes": ["multilocale:read"],
+                "type": "oauth2"
+              }
+            ],
+            "ui": {
+              "resourceUri": "ui://multilocale/phrase-detail-v2.html"
+            },
+            "ui/resourceUri": "ui://multilocale/phrase-detail-v2.html"
+          },
+          "digest": "sha256:ba77d1903ff568675dbec8227d199bfd46f32bdb891aa1b70d52770eeb1bad77"
+        },
+        {
+          "name": "get_project",
+          "title": "Get project details",
+          "description": "Use this when someone asks about one localization project, such as which languages it has or its default locale. Returns the project's id, name, default locale, configured locales and creation and edit times. Not for how complete its translations are.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "projectIdOrName": {
+                "description": "Project id or name",
+                "maxLength": 128,
+                "type": "string"
+              }
+            },
+            "required": ["projectIdOrName"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "project": {
+                "anyOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "creationTime": {
+                        "anyOf": [
+                          {
+                            "maxLength": 32,
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "defaultLocale": {
+                        "anyOf": [
+                          {
+                            "maxLength": 35,
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "id": {
+                        "anyOf": [
+                          {
+                            "pattern": "^[0-9a-f]{24}$",
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "lastEditTime": {
+                        "$ref": "#/properties/project/anyOf/0/properties/creationTime"
+                      },
+                      "locales": {
+                        "items": {
+                          "$ref": "#/properties/project/anyOf/0/properties/defaultLocale/anyOf/0"
+                        },
+                        "maxItems": 200,
+                        "type": "array"
+                      },
+                      "name": {
+                        "maxLength": 128,
+                        "type": "string"
+                      }
+                    },
+                    "required": ["creationTime", "defaultLocale", "id", "lastEditTime", "locales", "name"],
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "status": {
+                "enum": ["found", "not-found"],
+                "type": "string"
+              }
+            },
+            "required": ["project", "status"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Get project details"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "securitySchemes": [
+              {
+                "scopes": ["multilocale:read"],
+                "type": "oauth2"
+              }
+            ]
+          },
+          "digest": "sha256:44c0fa1366fc8314119640d1d233838c70bc4138f0fea8468e82b68c61aeef77"
+        },
+        {
+          "name": "list_phrases",
+          "title": "List a project's strings",
+          "description": "Use this when someone asks to see the translation strings in a project, optionally in one language or for one key. Returns up to 100 phrases with id, key, language and value, plus the total count. Not for finding strings by the words they contain.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "key": {
+                "description": "Only this exact key",
+                "maxLength": 256,
+                "type": "string"
+              },
+              "language": {
+                "description": "Only strings in this locale code, such as en, it or pt-BR",
+                "maxLength": 35,
+                "type": "string"
+              },
+              "project": {
+                "description": "Project name; an id matches nothing",
+                "maxLength": 128,
+                "type": "string"
+              }
+            },
+            "required": ["project"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "phraseCount": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "phrases": {
+                "description": "Up to 100 phrases, one row per key and language, values cut to 2,000 characters; phraseCount has the total",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "creationTime": {
+                      "anyOf": [
+                        {
+                          "maxLength": 32,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "id": {
+                      "anyOf": [
+                        {
+                          "pattern": "^[0-9a-f]{24}$",
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "key": {
+                      "maxLength": 256,
+                      "type": "string"
+                    },
+                    "language": {
+                      "maxLength": 35,
+                      "type": "string"
+                    },
+                    "lastEditTime": {
+                      "$ref": "#/properties/phrases/items/properties/creationTime"
+                    },
+                    "machineTranslated": {
+                      "type": ["boolean", "null"]
+                    },
+                    "projects": {
+                      "items": {
+                        "maxLength": 128,
+                        "type": "string"
+                      },
+                      "maxItems": 100,
+                      "type": "array"
+                    },
+                    "value": {
+                      "maxLength": 2000,
+                      "type": "string"
+                    },
+                    "valueTruncated": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": ["creationTime", "id", "key", "language", "lastEditTime", "machineTranslated", "projects", "value", "valueTruncated"],
+                  "type": "object"
+                },
+                "maxItems": 100,
+                "type": "array"
+              },
+              "phrasesTruncated": {
+                "type": "boolean"
+              },
+              "status": {
+                "enum": ["found", "empty"],
+                "type": "string"
+              }
+            },
+            "required": ["phraseCount", "phrases", "phrasesTruncated", "status"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "List a project's strings"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "securitySchemes": [
+              {
+                "scopes": ["multilocale:read"],
+                "type": "oauth2"
+              }
+            ]
+          },
+          "digest": "sha256:ee93ae02916b1e4c7508ddc306ff58aef54fb0bf709ec88637b066dc7d690c8b"
+        },
+        {
+          "name": "list_projects",
+          "title": "List your localization projects",
+          "description": "Use this when someone asks which localization projects they have in MultiLocale. Returns each project's id, name, default locale, languages and timestamps, up to 100 projects. Not for listing the strings inside a project.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {},
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "projectCount": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "projects": {
+                "description": "Up to 100 projects; projectCount has the total",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "creationTime": {
+                      "anyOf": [
+                        {
+                          "maxLength": 32,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "defaultLocale": {
+                      "anyOf": [
+                        {
+                          "maxLength": 35,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "id": {
+                      "anyOf": [
+                        {
+                          "pattern": "^[0-9a-f]{24}$",
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "lastEditTime": {
+                      "$ref": "#/properties/projects/items/properties/creationTime"
+                    },
+                    "locales": {
+                      "items": {
+                        "$ref": "#/properties/projects/items/properties/defaultLocale/anyOf/0"
+                      },
+                      "maxItems": 200,
+                      "type": "array"
+                    },
+                    "name": {
+                      "maxLength": 128,
+                      "type": "string"
+                    }
+                  },
+                  "required": ["creationTime", "defaultLocale", "id", "lastEditTime", "locales", "name"],
+                  "type": "object"
+                },
+                "maxItems": 100,
+                "type": "array"
+              },
+              "projectsTruncated": {
+                "type": "boolean"
+              },
+              "status": {
+                "enum": ["found", "empty"],
+                "type": "string"
+              }
+            },
+            "required": ["projectCount", "projects", "projectsTruncated", "status"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "List your localization projects"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "securitySchemes": [
+              {
+                "scopes": ["multilocale:read"],
+                "type": "oauth2"
+              }
+            ]
+          },
+          "digest": "sha256:ae4a7a18abf0b78c36c556f40795b2e2a2ea17353b37089c70f15b710eaa62bc"
+        },
+        {
+          "name": "list_team_members",
+          "title": "List your team",
+          "description": "Use this when someone asks who is on their MultiLocale team or what role each person has. Returns each member's display name and role, up to 100 members (no emails, ids or contact details). Not for inviting or removing people.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {},
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "memberCount": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "members": {
+                "description": "Display name and role only. Email addresses, member ids, role ids, phone, country and signup device details are never returned.",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "name": {
+                      "maxLength": 200,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "role": {
+                      "maxLength": 100,
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": ["name", "role"],
+                  "type": "object"
+                },
+                "maxItems": 100,
+                "type": "array"
+              },
+              "membersTruncated": {
+                "type": "boolean"
+              },
+              "status": {
+                "enum": ["found", "empty"],
+                "type": "string"
+              }
+            },
+            "required": ["memberCount", "members", "membersTruncated", "status"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "List your team"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "securitySchemes": [
+              {
+                "scopes": ["multilocale:read"],
+                "type": "oauth2"
+              }
+            ]
+          },
+          "digest": "sha256:07a5c94018eac84894a8d1552cb88ba6a1153d85e709ac557c7b647f6098fb0c"
+        },
+        {
+          "name": "open_multilocale",
+          "title": "MultiLocale",
+          "description": "Use this when someone wants to open Multilocale and browse their workspace interactively. Localization projects, strings and translations. Starts with up to 100 items. Not for changing data.",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {},
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "additionalProperties": false,
+            "properties": {
+              "items": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "defaultLocale": {
+                      "anyOf": [
+                        {
+                          "maxLength": 32,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "id": {
+                      "anyOf": [
+                        {
+                          "maxLength": 200,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "locales": {
+                      "items": {
+                        "maxLength": 32,
+                        "type": "string"
+                      },
+                      "maxItems": 100,
+                      "type": "array"
+                    },
+                    "logoUrl": {
+                      "anyOf": [
+                        {
+                          "maxLength": 2048,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "name": {
+                      "maxLength": 200,
+                      "type": "string"
+                    },
+                    "subtitle": {
+                      "maxLength": 300,
+                      "type": "string"
+                    }
+                  },
+                  "required": ["defaultLocale", "id", "locales", "logoUrl", "name", "subtitle"],
+                  "type": "object"
+                },
+                "maxItems": 100,
+                "type": "array"
+              },
+              "truncated": {
+                "type": "boolean"
+              }
+            },
+            "required": ["items", "truncated"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "icons": [
+            {
+              "src": "data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%2220%22%20height%3D%2220%22%20viewBox%3D%2218%2018%2064%2064%22%3E%3Cpath%20fill%3D%22currentColor%22%20d%3D%22M53.83%2063.00L53.83%2063.00Q53.19%2063.45%2052.16%2063.81Q51.13%2064.17%2049.86%2064.17L49.86%2064.17Q48.42%2064.17%2047.30%2063.72Q46.17%2063.27%2045.72%2062.28L45.72%2062.28Q40.86%2052.20%2037.36%2043.83Q33.84%2035.46%2031.68%2029.97L31.68%2029.97L31.32%2029.97Q31.05%2036.72%2030.74%2042.53Q30.43%2048.33%2030.06%2053.87Q29.70%2059.40%2029.34%2065.07Q28.98%2070.74%2028.63%2077.22L28.63%2077.22Q28.09%2077.41%2027.23%2077.58Q26.38%2077.77%2025.38%2077.77L25.38%2077.77Q23.41%2077.77%2022.59%2076.95Q21.79%2076.14%2021.79%2074.61L21.79%2074.61Q21.79%2073.71%2021.92%2070.74Q22.05%2067.77%2022.32%2063.54Q22.59%2059.31%2022.91%2054.18Q23.23%2049.05%2023.63%2043.74Q24.04%2038.43%2024.44%2033.30Q24.84%2028.17%2025.20%2023.94L25.20%2023.94Q25.93%2023.31%2027.27%2022.77Q28.63%2022.23%2030.34%2022.23L30.34%2022.23Q34.48%2022.23%2036.09%2025.56L36.09%2025.56Q37.80%2029.07%2039.56%2032.99Q41.31%2036.90%2043.07%2040.95Q44.83%2045.00%2046.49%2048.96Q48.16%2052.92%2049.69%2056.52L49.69%2056.52L50.05%2056.52Q52.03%2051.75%2054.00%2047.12Q55.98%2042.48%2057.88%2038.16Q59.77%2033.84%2061.47%2030.06Q63.19%2026.28%2064.53%2023.13L64.53%2023.13Q65.34%2022.68%2066.61%2022.46Q67.86%2022.23%2068.94%2022.23L68.94%2022.23Q73.17%2022.23%2073.80%2025.11L73.80%2025.11Q74.16%2026.73%2074.61%2030.47Q75.06%2034.20%2075.52%2039.06Q75.97%2043.92%2076.37%2049.50Q76.77%2055.08%2077.14%2060.26Q77.50%2065.44%2077.77%2069.80Q78.03%2074.16%2078.22%2076.68L78.22%2076.68Q76.59%2077.77%2074.44%2077.77L74.44%2077.77Q73.08%2077.77%2072.05%2077.09Q71.02%2076.41%2070.83%2074.61L70.83%2074.61Q70.39%2068.04%2070.03%2061.56Q69.66%2055.08%2069.35%2049.23Q69.03%2043.38%2068.77%2038.48Q68.50%2033.57%2068.31%2030.15L68.31%2030.15L67.95%2030.15Q66.97%2032.67%2065.66%2035.82Q64.36%2038.97%2062.60%2042.93Q60.84%2046.89%2058.69%2051.89Q56.53%2056.88%2053.83%2063.00Z%22%2F%3E%3C%2Fsvg%3E",
+              "mimeType": "image/svg+xml"
+            }
+          ],
+          "meta": {
+            "openai/outputTemplate": "ui://multilocale/workspace-v3.html",
+            "openai/ui": {
+              "entrypoints": [
+                {
+                  "type": "global"
+                }
+              ]
+            },
+            "openai/widgetAccessible": true,
+            "securitySchemes": [
+              {
+                "scopes": ["multilocale:read"],
+                "type": "oauth2"
+              }
+            ],
+            "ui": {
+              "resourceUri": "ui://multilocale/workspace-v3.html"
+            }
+          },
+          "digest": "sha256:8b91169b7fd7b5c1a9f9d892926cf0249ba1b85dbfed37d628081a6c053f75a6"
+        },
+        {
+          "name": "search_phrases",
+          "title": "Search strings by text",
+          "description": "Use this when someone asks to find translation strings that contain a word or phrase, in their keys or text. Returns up to 100 matches with id, key, language and value from a case-insensitive match within one project. Not for one exact key.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "language": {
+                "description": "Only search this locale code; every language when absent",
+                "maxLength": 35,
+                "type": "string"
+              },
+              "project": {
+                "description": "Project name; an id matches nothing",
+                "maxLength": 128,
+                "type": "string"
+              },
+              "query": {
+                "description": "Text to find in keys or values, case-insensitive, 1 to 200 characters",
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": ["project", "query"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "phraseCount": {
+                "minimum": 0,
+                "type": "integer"
+              },
+              "phrases": {
+                "description": "Up to 100 matching phrases, values cut to 2,000 characters; phraseCount has the total",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "creationTime": {
+                      "anyOf": [
+                        {
+                          "maxLength": 32,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "id": {
+                      "anyOf": [
+                        {
+                          "pattern": "^[0-9a-f]{24}$",
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "key": {
+                      "maxLength": 256,
+                      "type": "string"
+                    },
+                    "language": {
+                      "maxLength": 35,
+                      "type": "string"
+                    },
+                    "lastEditTime": {
+                      "$ref": "#/properties/phrases/items/properties/creationTime"
+                    },
+                    "machineTranslated": {
+                      "type": ["boolean", "null"]
+                    },
+                    "projects": {
+                      "items": {
+                        "maxLength": 128,
+                        "type": "string"
+                      },
+                      "maxItems": 100,
+                      "type": "array"
+                    },
+                    "value": {
+                      "maxLength": 2000,
+                      "type": "string"
+                    },
+                    "valueTruncated": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": ["creationTime", "id", "key", "language", "lastEditTime", "machineTranslated", "projects", "value", "valueTruncated"],
+                  "type": "object"
+                },
+                "maxItems": 100,
+                "type": "array"
+              },
+              "phrasesTruncated": {
+                "type": "boolean"
+              },
+              "status": {
+                "enum": ["found", "empty", "no-matches"],
+                "type": "string"
+              }
+            },
+            "required": ["phraseCount", "phrases", "phrasesTruncated", "status"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Search strings by text"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "securitySchemes": [
+              {
+                "scopes": ["multilocale:read"],
+                "type": "oauth2"
+              }
+            ]
+          },
+          "digest": "sha256:0f6fa95578abaaf3251bc56be132f2cc178d9dddb1f2e8cc972170dfc0109456"
+        },
+        {
+          "name": "share_phrase",
+          "title": "Share a string with other projects",
+          "description": "Use this when someone asks to reuse a key's translations in other projects, such as a common button label. Returns the target projects and how many language rows were attached, up to 25 targets; later edits to that string apply in every attached project. Not for a copy that can differ per project.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "key": {
+                "description": "Exact key to share, with all of its languages",
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              "project": {
+                "description": "Project id or name that already has the key",
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              },
+              "targetProjects": {
+                "description": "1 to 25 project ids or names to attach the key to",
+                "items": {
+                  "maxLength": 128,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "maxItems": 25,
+                "minItems": 1,
+                "type": "array"
+              }
+            },
+            "required": ["key", "project", "targetProjects"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "key": {
+                "maxLength": 256,
+                "type": "string"
+              },
+              "project": {
+                "anyOf": [
+                  {
+                    "maxLength": 128,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "status": {
+                "enum": ["updated", "not-found", "no-targets", "already-shared"],
+                "type": "string"
+              },
+              "targetProjects": {
+                "items": {
+                  "maxLength": 128,
+                  "type": "string"
+                },
+                "maxItems": 25,
+                "type": "array"
+              },
+              "translationCount": {
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": ["key", "project", "status", "targetProjects", "translationCount"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": true,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": false,
+            "title": "Share a string with other projects"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": false
+          },
+          "meta": {
+            "securitySchemes": [
+              {
+                "scopes": ["multilocale:write"],
+                "type": "oauth2"
+              }
+            ]
+          },
+          "digest": "sha256:3b5591dd60ddce21a57534eb928eca05cd23290585ba05ae3c1a5b6f828a42fe"
+        },
+        {
+          "name": "show_project_overview",
+          "title": "Show project overview",
+          "description": "Use this when someone wants a quick overview of one of their localization projects. Returns an overview card with the project's default locale, up to 24 configured locales and timestamps. Not for translation completeness.",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "projectIdOrName": {
+                "description": "Project id or name",
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": ["projectIdOrName"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "additionalProperties": false,
+            "properties": {
+              "project": {
+                "anyOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "creationTime": {
+                        "anyOf": [
+                          {
+                            "maxLength": 32,
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "defaultLocale": {
+                        "anyOf": [
+                          {
+                            "maxLength": 35,
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "id": {
+                        "anyOf": [
+                          {
+                            "pattern": "^[0-9a-f]{24}$",
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "lastEditTime": {
+                        "anyOf": [
+                          {
+                            "maxLength": 32,
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "localeCount": {
+                        "maximum": 9007199254740991,
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "locales": {
+                        "items": {
+                          "maxLength": 35,
+                          "type": "string"
+                        },
+                        "maxItems": 24,
+                        "type": "array"
+                      },
+                      "localesTruncated": {
+                        "type": "boolean"
+                      },
+                      "name": {
+                        "maxLength": 128,
+                        "type": "string"
+                      }
+                    },
+                    "required": ["creationTime", "defaultLocale", "id", "lastEditTime", "localeCount", "locales", "localesTruncated", "name"],
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": ["project"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Show project overview"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "openai/outputTemplate": "ui://multilocale/project-overview-v2.html",
+            "openai/toolInvocation/invoked": "MultiLocale project overview ready.",
+            "openai/toolInvocation/invoking": "Loading MultiLocale project…",
+            "securitySchemes": [
+              {
+                "scopes": ["multilocale:read"],
+                "type": "oauth2"
+              }
+            ],
+            "ui": {
+              "resourceUri": "ui://multilocale/project-overview-v2.html"
+            },
+            "ui/resourceUri": "ui://multilocale/project-overview-v2.html"
+          },
+          "digest": "sha256:cf6a1e27165cf4f21255549d8ae4c946b6e379bae81b978f04cbe4083048b026"
+        },
+        {
+          "name": "update_phrase",
+          "title": "Edit a translation",
+          "description": "Use this when someone asks to fix or change the text of one key in one language. Returns the previous and new text and the projects sharing that string; the change applies in all of them and marks the text as human-edited. Not for adding a new key.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "key": {
+                "description": "Exact existing key",
+                "maxLength": 256,
+                "minLength": 1,
+                "type": "string"
+              },
+              "language": {
+                "description": "Locale code of the translation to change, such as en or it",
+                "maxLength": 35,
+                "minLength": 1,
+                "type": "string"
+              },
+              "project": {
+                "description": "Project name; an id matches nothing",
+                "maxLength": 128,
+                "type": "string"
+              },
+              "value": {
+                "description": "New text for that language, 1 to 2,000 characters",
+                "maxLength": 2000,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": ["key", "language", "project", "value"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "key": {
+                "maxLength": 256,
+                "type": "string"
+              },
+              "language": {
+                "maxLength": 35,
+                "type": "string"
+              },
+              "previousValue": {
+                "anyOf": [
+                  {
+                    "maxLength": 2000,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "project": {
+                "maxLength": 128,
+                "type": "string"
+              },
+              "sharedProjects": {
+                "description": "Every project using this string; the change applies to all of them",
+                "items": {
+                  "maxLength": 128,
+                  "type": "string"
+                },
+                "maxItems": 100,
+                "type": "array"
+              },
+              "status": {
+                "enum": ["not-found", "no-change", "updated"],
+                "type": "string"
+              },
+              "value": {
+                "anyOf": [
+                  {
+                    "maxLength": 2000,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": ["key", "language", "previousValue", "project", "sharedProjects", "status", "value"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": true,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": false,
+            "title": "Edit a translation"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": false
+          },
+          "meta": {
+            "securitySchemes": [
+              {
+                "scopes": ["multilocale:write"],
+                "type": "oauth2"
+              }
+            ]
+          },
+          "digest": "sha256:6456dc323ad8db8064afa083beae70f47a1a0ecc09d9db0f839a184e23bd74fa"
+        },
+        {
+          "name": "update_project",
+          "title": "Change project languages or context",
+          "description": "Use this when someone asks to change a project's default locale, replace its list of languages, or set its translation context. Returns which fields changed. The language list is replaced as a whole, no strings are translated or deleted, and the project name stays fixed. Not for adding a language with its translations.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "context": {
+                "description": "Translation context for the whole project, up to 600 characters; an empty string clears it",
+                "maxLength": 600,
+                "type": "string"
+              },
+              "defaultLocale": {
+                "description": "New default locale code; it has to be one of the project's locales",
+                "maxLength": 35,
+                "minLength": 1,
+                "type": "string"
+              },
+              "locales": {
+                "description": "Complete replacement list of locale codes, including the default locale",
+                "items": {
+                  "maxLength": 35,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "maxItems": 200,
+                "minItems": 1,
+                "type": "array"
+              },
+              "projectIdOrName": {
+                "description": "Project id or name",
+                "maxLength": 128,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": ["projectIdOrName"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "changedFields": {
+                "items": {
+                  "enum": ["defaultLocale", "locales", "context"],
+                  "type": "string"
+                },
+                "maxItems": 3,
+                "type": "array"
+              },
+              "project": {
+                "anyOf": [
+                  {
+                    "maxLength": 128,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "status": {
+                "enum": ["no-input", "not-found", "no-change", "updated"],
+                "type": "string"
+              }
+            },
+            "required": ["changedFields", "project", "status"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": true,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": false,
+            "title": "Change project languages or context"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": false
+          },
+          "meta": {
+            "securitySchemes": [
+              {
+                "scopes": ["multilocale:write"],
+                "type": "oauth2"
+              }
+            ]
+          },
+          "digest": "sha256:077b728708bc82adf25b561a2f7d3469b565067965ef23c49bd365c2a169549d"
+        }
+      ],
+      "resources": [
+        {
+          "uri": "skill://multilocale/localization-workspace/SKILL.md",
+          "name": "localization-workspace",
+          "title": "localization-workspace skill",
+          "description": "Review and manage a Multilocale localization workspace — projects, locale coverage, exact phrase translations, duplicate source copy, machine-translation status, locale dictionaries, project setup, locale rollout, and carefully confirmed phrase changes. This is a remote connector over translation data only; it cannot read or edit files in a codebase, so localizing an actual app also needs the `multilocale` CLI. Use when asked to audit translation completeness, inspect or revise localized copy, add a phrase or locale, export a language dictionary, or understand which Multilocale projects share a phrase.",
+          "mimeType": "text/markdown",
+          "digest": "sha256:0ccb78fa83d889b8c4e033bfbb666acde8981a97a4806c02fd3900023e767b52"
+        },
+        {
+          "uri": "skill://multilocale/localize-an-app/SKILL.md",
+          "name": "localize-an-app",
+          "title": "localize-an-app skill",
+          "description": "End-to-end recipe for translating a whole application with Multilocale — choose the ecosystem's own i18n runtime, create a project with explicit locales, import an existing catalogue once, download the generated files, and wire them in. Covers both a greenfield app with no i18n and an app already running next-intl, react-i18next, Lingui, Android resources or iOS .strings. Use when asked to localize, internationalize, translate, or add languages to an app, website or repository, rather than to change a single phrase.",
+          "mimeType": "text/markdown",
+          "digest": "sha256:4b2046067d2465c81a9c0d14e85deef9ba6977e0f89585d31541e1d8bfec73ca"
+        },
+        {
+          "uri": "skill://multilocale/multilocale/SKILL.md",
+          "name": "multilocale",
+          "title": "multilocale skill",
+          "description": "Manage translations on multilocale.com with the `multilocale` CLI — add a phrase and machine-translate it into every project locale, correct a single translation, share one phrase across projects, roll a project out to new locales, download translation dictionaries (JSON, JavaScript, Swift .strings, Android strings.xml), import existing translation files, and audit duplicate or unused keys. Use when asked to add or fix a translation, localize an app into more languages, sync translation files with a codebase, audit localization coverage, or anything involving the `multilocale` command or app.multilocale.com data.",
+          "mimeType": "text/markdown",
+          "digest": "sha256:609d18ead020af532e1defbda18931016623582b3fa1f38970f87d693b470705"
+        },
+        {
+          "uri": "ui://multilocale/phrase-detail-v2.html",
+          "name": "multilocale-phrase-detail",
+          "description": "An inline MultiLocale view that presents one exact tenant-scoped phrase key.",
+          "mimeType": "text/html;profile=mcp-app",
+          "digest": "sha256:b98cc067fd1d2645df256286832f10d08bc253c79bc2280a38e93cf4554b2d1b"
+        },
+        {
+          "uri": "ui://multilocale/phrase-detail-v1.html",
+          "name": "multilocale-phrase-detail-v1",
+          "description": "An inline MultiLocale view that presents one exact tenant-scoped phrase key.",
+          "mimeType": "text/html;profile=mcp-app",
+          "digest": "sha256:1ec1b261d3ad89fd269a7d9bcd15862d50a4f3805adef5446a0c8fb869a0677a"
+        },
+        {
+          "uri": "ui://multilocale/project-overview-v2.html",
+          "name": "multilocale-project-overview",
+          "description": "An inline MultiLocale view that presents one tenant-scoped localization project.",
+          "mimeType": "text/html;profile=mcp-app",
+          "digest": "sha256:ce73746fa4d69ea8c1091ce29e2aeb36fcdbcf1024ae60ce93f5796fb6ace511"
+        },
+        {
+          "uri": "ui://multilocale/project-overview-v1.html",
+          "name": "multilocale-project-overview-v1",
+          "description": "An inline MultiLocale view that presents one tenant-scoped localization project.",
+          "mimeType": "text/html;profile=mcp-app",
+          "digest": "sha256:0c4146080b11cc99aa5a7355e504f696862a5e7599a27b24517b67cc850523b9"
+        },
+        {
+          "uri": "ui://multilocale/workspace-v3.html",
+          "name": "multilocale-workspace",
+          "mimeType": "text/html;profile=mcp-app",
+          "digest": "sha256:fe85ac373ec095a9f831094a43664e5235abfee55e575274d9e8bac9c3e6d674"
+        },
+        {
+          "uri": "ui://multilocale/workspace-v1.html",
+          "name": "multilocale-workspace-v1",
+          "mimeType": "text/html;profile=mcp-app",
+          "digest": "sha256:f8b0b72be206d7a8a42cdbb2a1d8b98f859f61b71fbbab19276cc1591952b2e5"
+        },
+        {
+          "uri": "ui://multilocale/workspace-v2.html",
+          "name": "multilocale-workspace-v2",
+          "mimeType": "text/html;profile=mcp-app",
+          "digest": "sha256:f6d0ea5c880b12697da477efb0fcb1061cded804b564daa9f5e7c4663cad0942"
+        }
+      ],
+      "digest": "sha256:9bbd02b003d1b8f6ab35e3fe4ac29d4a4a31aefe1ba06500d8716f69284499fd"
+    }
+  }
+}

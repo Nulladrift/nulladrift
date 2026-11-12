@@ -1,0 +1,970 @@
+{
+  "lockfileVersion": 2,
+  "subjects": {
+    "com.pagefully/mcp": {
+      "kind": "mcp-server",
+      "source": {
+        "client": "manual",
+        "file": "registry.modelcontextprotocol.io"
+      },
+      "transport": {
+        "type": "http",
+        "url": "https://pagefully.com/api/mcp"
+      },
+      "protocol": {
+        "era": "modern",
+        "version": "2026-07-28",
+        "supportedVersions": ["2026-07-28"]
+      },
+      "serverInfo": {
+        "name": "pagefully",
+        "title": "Pagefully",
+        "version": "1.0.0",
+        "websiteUrl": "https://pagefully.com/developers/mcp"
+      },
+      "capabilities": {
+        "extensions": {
+          "io.modelcontextprotocol/ui": {}
+        },
+        "prompts": {
+          "listChanged": true
+        },
+        "resources": {
+          "listChanged": true
+        },
+        "tools": {
+          "listChanged": true
+        }
+      },
+      "instructions": "Pagefully makes App Store custom product pages for an iOS app: one page for each thing people search for, drawn on the app's own screenshots, checked against App Review's rules, and made in App Store Connect.\nThe order of work: analyze_app, propose_plan, generate_pages, get_job until done, preview_page, edit_page, publish_pages, confirm_publish. Later, get_results and suggest_refresh. add_screens, at any point, adds captures of the running app for pages to be drawn from.\nStart with one page. Give the person every preview_url: a page is looked at before it is approved.\nNever approve a page or call confirm_publish without the person's explicit yes, given after they have seen the preview and the publish summary.\nWhen an answer has code upgrade_required, repeat its sentence and its plan screen address as they are.\nRead pagefully://playbook before the first call. Without signing in, analyze_app works as a free preview and search_screenshots works in full, both on public App Store data.\nsearch_screenshots looks through the App Screenshot Index: what the top 100 apps in each category put on their screenshots. Use it before planning or reviewing a page, to see what the category does. It describes what leading apps do, not what causes installs.\nscore_screenshots measures a set with the Index's own tags, beside its category: a page made here (page_id), or the app's current screenshots (app_id) as the baseline, and the old set against the new with baseline. It needs sign-in and is metered by the day. It gives no score: what is the same, what is different, and the category's numbers.",
+      "tools": [
+        {
+          "name": "add_screens",
+          "title": "Add screens",
+          "description": "Adds screens of the app for pages to be drawn from: captures of the running app, beside the screenshots its App Store listing already has. Use it when the listing's screenshots are stale, when a page needs a screen the listing does not show, or when the app is not on the store yet. Returns each screen with its position, which is what edit_page takes as \"screen\". A page made after this may choose an uploaded screen by itself. Nothing is sent to Apple.\nHow to capture one: run the app in the iOS simulator, go to the screen, then run: xcrun simctl io booted screenshot --type=jpeg home.jpg (leave out --type=jpeg for a PNG). Use a simulator whose screen is a size Apple takes for a screenshot: iPhone 17 Pro Max or 16 Pro Max (1320 x 2868), or iPad Pro 13-inch (2064 x 2752). Capture real screens with real content, with no debug overlay.\nHow to send it. If you have a shell, upload the file itself, which is the quickest way and keeps the picture out of this conversation: curl -X POST -H \"Authorization: Bearer $PAGEFULLY_TOKEN\" -F \"file=@home.jpg\" https://pagefully.com/api/v1/apps/APP_ID/screens (the token is the one this server was given; never print it). Otherwise call this tool with each screen as \"url\", an https address of the file on the public internet that the server fetches (no redirect is followed), or as \"data\", the file in base64, which only suits a small JPEG.\nPNG or JPEG, 8 MB a file at most, 10 in one call. An app has 10 places for iPhone screens and 10 for iPad, the listing's own included. Called with no screens it lists the app's screens and what is accepted. Tell the person which screens were added, and never upload a picture that is not a screen of their own app.",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "app_id": {
+                "description": "The app's id in Pagefully (a UUID), as analyze_app returned it in app.id.",
+                "type": "string"
+              },
+              "screens": {
+                "description": "The screens to add. Leave it out to list the screens the app has.",
+                "items": {
+                  "properties": {
+                    "data": {
+                      "description": "The file in base64, bare or as a data: address. Only for a small JPEG.",
+                      "type": "string"
+                    },
+                    "name": {
+                      "description": "What the screen shows, in a few words: home, a finished session, settings.",
+                      "type": "string"
+                    },
+                    "position": {
+                      "description": "The place it should take. Leave it out for the next free one. Give an iPad screen the position of the iPhone screen it is the iPad view of.",
+                      "maximum": 10,
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "url": {
+                      "description": "An https address of the PNG or JPEG, on the public internet. The server fetches it.",
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
+                },
+                "maxItems": 10,
+                "type": "array"
+              }
+            },
+            "required": ["app_id"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "meta": {
+            "ui": {
+              "visibility": ["model"]
+            }
+          },
+          "digest": "sha256:d01986c9d6da1dc0f33d6d4ff3b55e90361f4fddbb66775f4c2ffc1238b5f02e"
+        },
+        {
+          "name": "analyze_app",
+          "title": "Analyze an app",
+          "description": "Reads an iOS app from its App Store link or id and says what Pagefully understood of it. Call this first.\nSigned in (OAuth or a Pagefully token): adds the app to the workspace (no App Store Connect key is needed to plan and make pages) and returns the app, with its app_id, its brief (what the app does, who it is for and how it sounds) and its screens. \"screens\" is the app's own source screenshots as Pagefully holds them, in order: each with its position, its picture at display size (url), and what Pagefully read on it (read: the headline and subline the developer drew on it, and \"design\", which is \"theirs\" for a designed screenshot a page keeps and only rewords, or \"ours\" for a bare screen a page puts in Pagefully's own design). Compare a page against these, not against another page. An app that is not on the public App Store says so in app.listing.note, with where its facts came from: repeat that sentence, and do not look the app up elsewhere. Reading a new app takes a while, so the first call may return a job_id and no brief: call get_job with it until it is done, then call analyze_app again with app_id. Called with app_id it only reads. Called with nothing it lists the apps on the workspace.\nNot signed in: returns the free public preview of that app, the pages Pagefully would plan for it and the first one designed, with a preview_url. While state is \"making\", call again with the same app in a few seconds. This works on public App Store data only and is limited for each visitor.\nShow the person the brief (or the preview_url) and ask whether it is right before planning. Never guess an App Store id: ask for the link.",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "app_id": {
+                "description": "The app's id in Pagefully, for an app already on the workspace. Reads only.",
+                "type": "string"
+              },
+              "app_store_id": {
+                "description": "Apple's id for the app: the number at the end of its App Store address.",
+                "type": "string"
+              },
+              "app_store_url": {
+                "description": "The app's address on the App Store, which ends in id and a number: https://apps.apple.com/us/app/name/id1234567890",
+                "type": "string"
+              },
+              "screens": {
+                "description": "false leaves the app's source screens out of the answer.",
+                "type": "boolean"
+              }
+            },
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "meta": {
+            "ui": {
+              "visibility": ["model"]
+            }
+          },
+          "digest": "sha256:275de84d24fd5ca85bab0c9c14e52a3ca59cb4ffda6bffebc5152a4e328f6470"
+        },
+        {
+          "name": "confirm_publish",
+          "title": "Confirm and publish",
+          "description": "Step two of two. Spends the confirmation_token from publish_pages and makes each page in the summary in App Store Connect, one job for each page. Returns the jobs: call get_job for each.\nCall it only after the person has seen the summary and the preview links from publish_pages and has said yes, in their own words, to publishing those pages. If they asked for a change, make it and call publish_pages again. This is hard to undo: a page can be taken back in the web app only until it is submitted for review.\nNothing is submitted for review: the developer submits each page to Apple in App Store Connect. The default product page, the keyword field, the app binary, pricing and in-app purchases are not changed. A page that changed after the summary refuses the whole confirmation and nothing is sent.",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "confirmation_token": {
+                "description": "The confirmation_token publish_pages returned, starting pfc_.",
+                "type": "string"
+              }
+            },
+            "required": ["confirmation_token"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": true,
+            "idempotentHint": false,
+            "openWorldHint": true,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "meta": {
+            "ui": {
+              "visibility": ["model"]
+            }
+          },
+          "digest": "sha256:5ad692c079aca8b60ce6144b0bd2afbce1365a64d9015cf0dbad478da6542be6"
+        },
+        {
+          "name": "edit_page",
+          "title": "Edit or approve a page",
+          "description": "Changes one screenshot on a page, or several in one call, makes one again, or approves the page. Say which screenshot by position (1 is the first) or slot_id. By hand: its headline, its subline, the screen it shows (\"screen\", a position from preview_page's screens or add_screens), its style, or its design. The screenshot is drawn again and checked again, and returns with the page.\nTo change several screenshots of one page, send \"changes\": a list with one item for each screenshot (its position or slot_id, and what to change), in place of the single form. They are made in order, each screenshot once. Set \"return\" to \"changed\" to get back only the screenshots that changed and not the whole page, which is much shorter. A hand change is never counted against a plan, in a list or alone.\nNot every screenshot can take every change, and the answer says which did. Each slot in preview_page has \"design\" and \"own_words\". design \"ours\": the app's screen in Pagefully's own design, where a headline, a subline and a style all apply. design \"theirs\": the developer's own designed screenshot with only its words changed, where a style has nothing to change. own_words true: new words could not be set on that design, so the picture is exactly as the developer made it and a headline cannot be put on it. design \"kept\": a poster with no headline of its own, left whole. \"changes\" in the answer lists, for each screenshot, what was changed and what was not, with the reason and what to do. When nothing in the call could be applied the answer is an error (code words_kept, kept_whole or style_not_ours) and the page is as it was: tell the person the reason as it is. The way to put new words or a style on such a screenshot is \"design\": \"ours\", which draws its screen in Pagefully's own design on every page of the app that shows that screen, so send it only when the person asks for it; or put another screen on it with \"screen\".\nSet regenerate to have Pagefully make it again: \"headline\" writes new words for that screenshot, \"background\" gives it the next style, \"screen\" puts the next unused screen on it, and \"page\" writes and draws the whole page again as a job (call get_job, then preview_page). Each regenerate counts against the month's rewrites for the plan: when they are used the answer is upgrade_required, which you repeat as it is. Changing words by hand is not counted. Regenerate only when the person asks for a fresh attempt.\nAny edit withdraws the page's approval, so what is approved is always what was last seen. Set approve to true only after the person has looked at the page's preview_url and said yes to it: approval is their explicit click, not yours. A page cannot be approved while its pre-flight has a failure. If the answer has code own_words, some screenshots still show the developer's own words: ask the person, and send own_words true only if they say to approve it as it is.\nNever write another app's name, a ranking, an award or a price into a headline: pre-flight fails it. Adding or removing a screenshot, the promotional text and the keywords are changed on the page's preview_url in the web app.",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "approve": {
+                "description": "Approve the page as it now stands. Only after the person has seen the preview and said yes.",
+                "type": "boolean"
+              },
+              "changes": {
+                "description": "Several screenshots of this page in one call: one item for each, with its position or slot_id and what to change. In place of the single form, not with it.",
+                "items": {
+                  "properties": {
+                    "design": {
+                      "enum": ["ours", "theirs"],
+                      "type": "string"
+                    },
+                    "headline": {
+                      "type": "string"
+                    },
+                    "position": {
+                      "description": "Which screenshot, by its place on the page.",
+                      "maximum": 9007199254740991,
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "screen": {
+                      "maximum": 10,
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "slot_id": {
+                      "description": "Which screenshot, by its id from preview_page.",
+                      "type": "string"
+                    },
+                    "style": {
+                      "anyOf": [
+                        {
+                          "enum": ["clean", "bold", "soft", "night", "lift", "closeup"],
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "subline": {
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
+                },
+                "maxItems": 10,
+                "minItems": 1,
+                "type": "array"
+              },
+              "design": {
+                "description": "Whose design this screenshot is drawn in. \"ours\": the app's screen in Pagefully's own design, where a headline and a style both apply. \"theirs\": the developer's own design, with only its words changed. It is kept for that screen on every page of the app. Only when the person asks.",
+                "enum": ["ours", "theirs"],
+                "type": "string"
+              },
+              "headline": {
+                "type": "string"
+              },
+              "own_words": {
+                "description": "With approve: approve even though some screenshots still show the developer's own words. Only when the person says so.",
+                "type": "boolean"
+              },
+              "page_id": {
+                "description": "The page's id (a UUID), as generate_pages, get_job or propose_plan returned it.",
+                "type": "string"
+              },
+              "position": {
+                "description": "Which screenshot, by its place on the page. 1 is the first.",
+                "maximum": 9007199254740991,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "regenerate": {
+                "description": "Have Pagefully make it again. \"page\" is the whole page and needs no position. Counts against the month's rewrites.",
+                "enum": ["headline", "background", "screen", "page"],
+                "type": "string"
+              },
+              "return": {
+                "description": "\"changed\" returns only the screenshots this call changed, with what pre-flight found on them. Left out, the whole page is returned.",
+                "enum": ["page", "changed"],
+                "type": "string"
+              },
+              "screen": {
+                "description": "The position of the app screen this screenshot should show. Each screen appears once on a page.",
+                "maximum": 10,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "slot_id": {
+                "description": "Which screenshot, by its id from preview_page.",
+                "type": "string"
+              },
+              "style": {
+                "anyOf": [
+                  {
+                    "enum": ["clean", "bold", "soft", "night", "lift", "closeup"],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "This screenshot's style. null gives it back the page's own."
+              },
+              "subline": {
+                "type": "string"
+              }
+            },
+            "required": ["page_id"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": false,
+            "openWorldHint": false,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": false,
+            "openWorld": false,
+            "readOnly": false
+          },
+          "meta": {
+            "ui": {
+              "visibility": ["model", "app"]
+            }
+          },
+          "digest": "sha256:06244cf4bb55a2b0ce694ceb3f4606e59ef36260cecca6e5e4c15731cfb47f42"
+        },
+        {
+          "name": "generate_pages",
+          "title": "Generate pages",
+          "description": "Makes a page for every intent that is switched on and has none: the words are written, drawn onto the app's own screenshots, and checked against App Review's rules (pre-flight). Each page is its own job. Returns the jobs with their page ids, and the app's pages with a preview_url each.\nCall it once the person has agreed the plan. Then call get_job for each job until it is done, and preview_page for each page. It is safe to call twice: a page already made or being made is not started again.\nNew pages count against the app's plan (Free makes 1 page, the Pack 10, Pro up to Apple's 70). When the plan stops a page the answer says so in facts, with the address of the plan screen: repeat that to the person as it is and do not try another way round it.\nNothing here is sent to Apple.",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "app_id": {
+                "description": "The app's id in Pagefully (a UUID), as analyze_app returned it in app.id.",
+                "type": "string"
+              },
+              "locale": {
+                "description": "An App Store language, such as en-US. Leave it out for the app's own language.",
+                "type": "string"
+              }
+            },
+            "required": ["app_id"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": false
+          },
+          "meta": {
+            "ui": {
+              "visibility": ["model"]
+            }
+          },
+          "digest": "sha256:9743e8fd2cbe0cbbeca92503e39035e44a70db5bae9e5e7a0e565117f94decf5"
+        },
+        {
+          "name": "get_job",
+          "title": "Get a job",
+          "description": "The state of a long job: queued, running, done or failed, with its steps as progress, counts of what it did, and the code and message of what went wrong.\nCall it after any tool returned a job_id, every few seconds, until the state is done or failed. A failed job is not retried by itself: tell the person what the message says.",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "job_id": {
+                "description": "The job's id, as another tool returned it.",
+                "type": "string"
+              }
+            },
+            "required": ["job_id"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "ui": {
+              "visibility": ["model"]
+            }
+          },
+          "digest": "sha256:706218edf0d8abdcd2df7867b07a1d51cfbb420c8b4eae85aeba5b8cda8b2ac7"
+        },
+        {
+          "name": "get_results",
+          "title": "Get results",
+          "description": "How each page is doing on the App Store against the app's default page over the last seven days Apple has reported: views, downloads and conversion rate for each page and for the default page, and by source. The numbers are Apple's, and Apple leaves out rows under five users, so a small page shows nothing for a while.\nWith page_id it is one page: the same numbers, the week before, and its downloads by day for the last 28 days.\nCall it when the person asks how their pages are doing. Results are on the Pack and Pro, not on Free: on Free the answer is upgrade_required with the facts and the plan screen, which you repeat as it is. Reading reports needs an App Store Connect key with the Admin role (needs_admin_key says so).\nEach page reaches a different audience, so a difference from the default page is a signal and not proof. Do not call a page a winner or a loser on a few days of a small page.",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "app_id": {
+                "description": "The app's id in Pagefully (a UUID), as analyze_app returned it in app.id.",
+                "type": "string"
+              },
+              "page_id": {
+                "description": "One page, by its id. Leave it out for every page of the app.",
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "ui": {
+              "visibility": ["model"]
+            }
+          },
+          "digest": "sha256:d2576e5904ce609367ee9eaac7c42824c3b0784487a25ee60b8e4172ef50075e"
+        },
+        {
+          "name": "get_usage",
+          "title": "Get usage",
+          "description": "For each app on the workspace: its plan (Free, the Pack or Pro, which belong to an app), pages made and allowed, what is left, revisions used for each page, and the address of its plan screen. Also what each plan allows and costs, the scope of the token in use, and the rate limits.\nCall it before generating when the person asks what they can still make, or after an upgrade_required answer to explain it. State the numbers as they are. Never tell the person a plan is needed when the usage says there is room.",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {},
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "ui": {
+              "visibility": ["model"]
+            }
+          },
+          "digest": "sha256:d49dcebc1ffe73b48e64aeff1f43832402fa9a3d0a09b44289de3d8aa5b4b846"
+        },
+        {
+          "name": "preview_page",
+          "title": "Preview a page",
+          "description": "One page, whole: each screenshot with its headline, subline and picture, the promotional text, the keywords it is for, what pre-flight found, whether it is approved, and its preview_url on pagefully.com. The screenshots also come back as images (display size, at most six) where the client can show them, and a chat app that draws MCP Apps shows the page inline as the App Store would, with buttons to open the full preview, approve, and ask for a headline change.\nCall it when a page's job is done, and again after an edit. Always give the person the preview_url: a page is something they look at before they say yes, and the web preview is the full-size view. Tell them what pre-flight failed or warned about. While preflight.blocked is true the page cannot be approved or published: fix what is marked with edit_page.\nEach finding names the words it is about (\"text\"), the rule (\"rule\": its name, and what counts as breaking it) and how it was decided (\"source\"). A rule that matched exact words gives them in \"phrase\". A judgement is the classifier reading the whole line: \"probability\" is how likely the line breaks the rule and \"phrase\" is null, so reword the line and do not guess at a phrase. A warning does not block: it is for the person to look at.\nEach screenshot has \"design\" (ours, theirs or kept) and \"own_words\". own_words true means the picture still shows the developer's own words and the headline in the answer is not on it. The pictures here are a page's screenshots after rewording. The app's own source screens are in analyze_app, under \"screens\".",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "images": {
+                "description": "false leaves the pictures out and returns their links only.",
+                "type": "boolean"
+              },
+              "page_id": {
+                "description": "The page's id (a UUID), as generate_pages, get_job or propose_plan returned it.",
+                "type": "string"
+              }
+            },
+            "required": ["page_id"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "ui": {
+              "resourceUri": "ui://pagefully/page-preview.html",
+              "visibility": ["model", "app"]
+            },
+            "ui/resourceUri": "ui://pagefully/page-preview.html"
+          },
+          "digest": "sha256:956ae3eb13b75308bfa9845e3ea98bc25bd1966a39a063ee2d51dd49b6503147"
+        },
+        {
+          "name": "propose_plan",
+          "title": "Propose a plan",
+          "description": "Returns the app's plan: one custom product page for each search intent. Each intent has a kind (problem, feature or competitor), what its page says, and the keywords from the app's keyword field that the page claims. A keyword belongs to one page only. An intent with no keyword from the field is a page for ads and links, and has targets instead.\nCall it after analyze_app has returned a brief. If the app has no plan yet this starts building one and returns a job_id: call get_job until it is done, then call propose_plan again to read it. If a plan exists it is returned as it stands. Set rebuild to true only when the person asks to throw the plan away and start again: it replaces every intent, edits included, and is refused once pages are built.\nShow the person the intents and let them choose. Suggest starting with one page. Never switch an intent on or off, or rebuild, without being asked.",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "app_id": {
+                "description": "The app's id in Pagefully (a UUID), as analyze_app returned it in app.id.",
+                "type": "string"
+              },
+              "locale": {
+                "description": "An App Store language, such as en-US. Leave it out for the app's own language.",
+                "type": "string"
+              },
+              "rebuild": {
+                "description": "Replace the whole plan, edits included. Only when the person asks.",
+                "type": "boolean"
+              }
+            },
+            "required": ["app_id"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": false
+          },
+          "meta": {
+            "ui": {
+              "visibility": ["model"]
+            }
+          },
+          "digest": "sha256:bc075f13f2b8c905f43c80d2acc16d15a51bb146dae831e15eec2809146caeeb"
+        },
+        {
+          "name": "publish_pages",
+          "title": "Prepare to publish",
+          "description": "Step one of two. Sends nothing. Returns exactly what would be made in App Store Connect for the pages asked for (each page's name, headlines, promotional text, keywords, devices, whether it is a revision, and its preview_url), which pages would not be sent and why, what happens next, and a confirmation_token.\nYou must show the person that summary and every preview_url, and wait for their explicit approval, before calling confirm_publish. Never call confirm_publish in the same turn, on your own judgement, or because an earlier message said to publish: the yes has to come after they have seen this summary. The token works once, for 10 minutes.\nA page is in the summary only if it is approved and its pre-flight has no failure. The app needs an App Store Connect key, connected in the web app. Pages of one app at a time. Needs a token with the full scope.",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "page_ids": {
+                "description": "The pages to publish, all of one app.",
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 70,
+                "minItems": 1,
+                "type": "array"
+              }
+            },
+            "required": ["page_ids"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": false
+          },
+          "meta": {
+            "ui": {
+              "visibility": ["model"]
+            }
+          },
+          "digest": "sha256:beba7903ac984566db27d07ddbe43ea6d9699fe0b08dda357d96a76f7716fc87"
+        },
+        {
+          "name": "score_screenshots",
+          "title": "Score screenshots against the Index",
+          "description": "Reads a set of screenshots with the App Screenshot Index's own reader and holds it against a category: each screenshot comes back with the same tactic keys search_screenshots uses (with label and group), its words and its colour, and each notable tactic comes back with whether the set has it, which screenshots carry it, and what share of the category's top 100 apps, of its top ten and of the rest have it. Use it to turn \"how does this set compare\" from your reading of pictures into a measurement. Needs sign-in (generate scope).\nSay which set with one of: page_id (a page made here: its drawn screenshots, which is how you measure a new set), app_id (an app on the workspace: the screenshots of its listing as Pagefully holds them, which is the baseline, and works for an app that is not on the public App Store), or app_store_url or app_store_id (any public App Store app). Pictures cannot be handed to this tool: to measure a design, make the page with generate_pages and send its page_id.\nFor the old set against the new, send the new set and put the old one in baseline, such as page_id with baseline { app_id }. The answer then has \"changes\": the tactics gained, dropped and kept, each with the screenshots that carried it before and after and the category's numbers, so nothing has to be worked out by eye.\nThe category is the app's own unless you name one with category (a slug from search_screenshots). Where the Index does not hold the app's category the screenshots are still tagged, with no comparison, and category_note says why.\nReading costs, so it is metered: a picture is read once and kept, and a workspace can have 60 new screenshots read a day, 10 for a set at most. If any screenshot has not been read yet the answer is a job_id and no tags: call get_job until it is done, then call score_screenshots again with the same arguments. A set read before answers at once. Do not call it in a loop, and after edit_page score a page again only when the person wants the new measurement.\nThere is no score out of a hundred, on purpose. The numbers describe what the leading apps do. They do not show that a tactic causes installs or rank, so say \"most top Finance apps do this and this set does not\", never \"adding this will raise installs\". A tactic the set lacks is an observation for the person to weigh, not a fault to fix unasked. Another app's words and name never go into a page.",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "app_id": {
+                "description": "An app on the workspace, by its id in Pagefully: the iPhone screenshots of its listing, as Pagefully holds them, are the set.",
+                "type": "string"
+              },
+              "app_store_id": {
+                "description": "A public App Store app, by Apple's id for it.",
+                "type": "string"
+              },
+              "app_store_url": {
+                "description": "A public App Store app, by its address, which ends in id and a number.",
+                "type": "string"
+              },
+              "baseline": {
+                "description": "A second, older set to compare the first with, named the same way: one of page_id, app_id, app_store_url or app_store_id. The answer then says what changed.",
+                "properties": {
+                  "app_id": {
+                    "type": "string"
+                  },
+                  "app_store_id": {
+                    "type": "string"
+                  },
+                  "app_store_url": {
+                    "type": "string"
+                  },
+                  "page_id": {
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              },
+              "category": {
+                "description": "The category to compare with: a slug from search_screenshots, such as health-fitness, finance or music. Leave it out for the app's own.",
+                "type": "string"
+              },
+              "page_id": {
+                "description": "A page made here, by its id: its drawn iPhone screenshots are the set.",
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "meta": {
+            "ui": {
+              "visibility": ["model"]
+            }
+          },
+          "digest": "sha256:c4b6ee3fe4b424bd7b5d44d1d31462f80c94b9b63c9b6caf5d609b2f8498ac13"
+        },
+        {
+          "name": "search_screenshots",
+          "title": "Search the App Screenshot Index",
+          "description": "Searches the App Screenshot Index: every screenshot of the top 100 free apps in each App Store category (United States), read and tagged by what it does. Needs no account. Use it to see how the leading apps in a category design their screenshots before you plan, write or review a page, and to hold a page against what its category does.\nFour ways to call it. (1) With nothing: the catalogue, every category and every tactic with its key, what it means and how common it is. Tactics are grouped: meaning (what the words lead with: a problem, an outcome, a feature, who it is for, trust), words (headline length, where the words sit), layout (how the phone is drawn), look (colour, light or dark, a person in the picture) and proof (a rating, an award, a number of users, a press name, a quoted review). There are also tactics of a whole set (set_...): one template throughout, proof on the first screenshot, and so on. (2) With a category alone: every tactic used in that category, with the top ten apps beside the rest, and the keys nobody in it uses. (3) With app: one app's whole set in order, what each screenshot leads with, and what the set does as a whole (whether one colour holds, whether the first screenshot is laid out differently, how many carry a headline). This is how to study a set's story. (4) With any filter: the screenshots that match.\nFilters: query (words the screenshot says, or an app's name), tactics (a screenshot must carry all of them), any_tactics (it must carry at least one), category, colour, top_ten_only, and screenshot_position (1 for first screenshots only: the first one does a different job from the rest). A result has the words on the screenshot, every tactic it carries, its set's tactics, its colour, the app and its chart position, the picture's address and its page on the Index. When tactics are given the answer says how common each is, and seen_with names what else the matching screenshots share more often than screenshots in general.\nSet detail to \"compact\" to read many at once: tactic keys with no labels, no count by category, up to 80 screenshots in a call. Set with_images to look at the first 8 pictures yourself, small.\nWhat the numbers mean: they describe what the leading apps do. They do not show that a tactic causes installs or rank, so say \"most top Finance apps do this\", never \"this will raise your rank\". Another app's words and name are for understanding a category. Never copy them into a page, and never name another app in copy.",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "any_tactics": {
+                "description": "Tactic keys of which a screenshot must carry at least one. For tactics that seldom appear together.",
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 8,
+                "type": "array"
+              },
+              "app": {
+                "description": "One app, by its App Store id or its name. Returns its whole set in order, with what the set does as a whole. If several apps answer to the name, they are listed: call again with the id.",
+                "maxLength": 120,
+                "type": "string"
+              },
+              "category": {
+                "description": "A category slug from the catalogue, such as health-fitness, finance or music. Leave it out to search every category.",
+                "type": "string"
+              },
+              "colour": {
+                "description": "The screenshot's main colour family.",
+                "enum": ["red", "orange", "yellow", "green", "teal", "blue", "purple", "pink", "neutral"],
+                "type": "string"
+              },
+              "detail": {
+                "description": "\"compact\" returns tactic keys only and leaves out the count by category, so up to 80 screenshots fit in one answer. \"full\" unless set.",
+                "enum": ["full", "compact"],
+                "type": "string"
+              },
+              "limit": {
+                "description": "How many screenshots to return. 12 unless set; 30 at most in full detail, 80 in compact.",
+                "maximum": 80,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "offset": {
+                "description": "How many matches to skip, to read the next page of a long answer.",
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "query": {
+                "description": "Words to find in what a screenshot says or in the app's name, such as \"sleep\" or \"track your budget\". Every word must be present.",
+                "maxLength": 80,
+                "type": "string"
+              },
+              "screenshot_position": {
+                "description": "Only the screenshot at this place in its set. 1 is the first screenshot, the one seen in search results.",
+                "maximum": 10,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "tactics": {
+                "description": "Tactic keys from the catalogue, such as leads_problem, rating_shown, device_none or set_consistent. A screenshot must carry every one.",
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 8,
+                "type": "array"
+              },
+              "top_ten_only": {
+                "description": "Only apps at chart positions one to ten.",
+                "type": "boolean"
+              },
+              "with_images": {
+                "description": "Also return the first 8 pictures as small images, for a client that can look at them. They are the developers' own screenshots, from Apple's servers.",
+                "type": "boolean"
+              }
+            },
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "ui": {
+              "visibility": ["model"]
+            }
+          },
+          "digest": "sha256:e18da603caefb92e14027d16a63c9be6495fd33e8aea4406f1e83edd2ed70023"
+        },
+        {
+          "name": "suggest_refresh",
+          "title": "Suggest what to do next",
+          "description": "The pages Pagefully suggests the app should have and does not: each with a name, a kind, what the page would say, the searches it is for and the reason. These are the suggestions the product already holds (such as a use the app's reviewers raise, or a competitor it follows). Reading them asks nothing of a model and costs nothing.\nCall it when the person asks what to make next, or after get_results. To take one up, pass its \"add\" object to update_plan as an item of add, then call generate_pages. Offer them to the person and let them choose: never add one unasked.\nPagefully does not yet propose a fix for a page that trails the default page. For that, read get_results and the playbook (pagefully://playbook), and suggest edits to the first two screenshots for the person to decide.",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "app_id": {
+                "description": "The app's id in Pagefully (a UUID), as analyze_app returned it in app.id.",
+                "type": "string"
+              },
+              "locale": {
+                "description": "An App Store language, such as en-US. Leave it out for the app's own language.",
+                "type": "string"
+              }
+            },
+            "required": ["app_id"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "ui": {
+              "visibility": ["model"]
+            }
+          },
+          "digest": "sha256:6f7271002a7854219d8f0fabba75fc388a5c9275fc87301f23dd0a7966c2d18e"
+        },
+        {
+          "name": "update_plan",
+          "title": "Update the plan",
+          "description": "Changes the plan in one call, as the person asked: add an intent, update one (its name, what its page says, or on and off), approve (switch on) a list, remove a list, or reorder (the order is build priority). Changes apply in that order and stop at the first one the product refuses; the ones before it are saved and the error says so.\nAn intent that is on gets a page when generate_pages is called. To start with one page, switch the others off with update, not remove: they stay in the plan for later. An intent whose page is built cannot be removed, only switched off.\nReturns the plan after the changes. Never put another app's name into a page's name or message: a competitor's name is a keyword only.",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "add": {
+                "items": {
+                  "properties": {
+                    "keywords": {
+                      "description": "Keywords from the app's keyword field this page claims. One that is on another page moves here.",
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "kind": {
+                      "enum": ["problem", "feature", "competitor"],
+                      "type": "string"
+                    },
+                    "message": {
+                      "description": "What the page says to that person.",
+                      "type": "string"
+                    },
+                    "name": {
+                      "description": "The intent, in a few words: what the person is searching for.",
+                      "type": "string"
+                    },
+                    "targets": {
+                      "description": "For a page reached from ads and links: the searches an ad bids on, or an audience.",
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    }
+                  },
+                  "required": ["kind", "name"],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "app_id": {
+                "description": "The app's id in Pagefully (a UUID), as analyze_app returned it in app.id.",
+                "type": "string"
+              },
+              "approve": {
+                "description": "Intent ids to switch on.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "locale": {
+                "description": "An App Store language, such as en-US. Leave it out for the app's own language.",
+                "type": "string"
+              },
+              "remove": {
+                "description": "Intent ids to take out of the plan.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "reorder": {
+                "description": "Every intent id, in the new order.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "update": {
+                "items": {
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "on": {
+                      "description": "true: a page is wanted. false: it stays in the plan and no page is made.",
+                      "type": "boolean"
+                    }
+                  },
+                  "required": ["id"],
+                  "type": "object"
+                },
+                "type": "array"
+              }
+            },
+            "required": ["app_id"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": false,
+            "openWorldHint": false,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": false,
+            "openWorld": false,
+            "readOnly": false
+          },
+          "meta": {
+            "ui": {
+              "visibility": ["model"]
+            }
+          },
+          "digest": "sha256:3437682f0dc5ecebcd23bc09d517045293ec0606eaf07c53fa21082d7708a77e"
+        }
+      ],
+      "resources": [
+        {
+          "uri": "ui://pagefully/page-preview.html",
+          "name": "page-preview",
+          "title": "Page preview",
+          "description": "The App Store page mockup that preview_page's answer is drawn in, by chat apps that show MCP Apps. A template: it holds no page and no picture.",
+          "mimeType": "text/html;profile=mcp-app",
+          "meta": {
+            "ui": {
+              "csp": {
+                "resourceDomains": ["https://pagefully.com", "https://*.mzstatic.com"]
+              },
+              "prefersBorder": true
+            }
+          },
+          "digest": "sha256:9a4fda70a71556a1f6aad87f24f01c9df0a08aa2fb867de3f6ec43c87dbddaa7"
+        },
+        {
+          "uri": "pagefully://playbook",
+          "name": "playbook",
+          "title": "The Pagefully playbook",
+          "description": "How to choose intents, Apple's rules for custom product pages, starting with one page, checking previews with the person, never publishing without their yes, and when to refresh. Read it before the first tool call.",
+          "mimeType": "text/markdown",
+          "digest": "sha256:55b6dfb52ea91f0fbf5ebc34c375d57c597a4a301ca1112feba389f92153b8a6"
+        }
+      ],
+      "resourceTemplates": [
+        {
+          "uriTemplate": "pagefully://apps/{id}/brief",
+          "name": "app-brief",
+          "title": "An app's brief",
+          "description": "What Pagefully understood of an app: what it does, who it is for, the jobs people use it for, and how it sounds. {id} is the app_id from analyze_app.",
+          "mimeType": "application/json",
+          "digest": "sha256:e71666a5f8d757ddc04b8e19532b956d8e864bdb27ad4f86a84533a1beb16d30"
+        },
+        {
+          "uriTemplate": "pagefully://apps/{id}/plan",
+          "name": "app-plan",
+          "title": "An app's plan",
+          "description": "The current plan for an app: one page for each search intent, with its keywords, what its page says, whether it is on, and its page if one is made. {id} is the app_id from analyze_app.",
+          "mimeType": "application/json",
+          "digest": "sha256:fd764ec086f3df755324524ccec841fe78a2c8f89f44a8ab12abfa2baccb0563"
+        }
+      ],
+      "prompts": [
+        {
+          "name": "first-page",
+          "title": "Make a first page",
+          "description": "Analyze an app, plan its pages, make one and preview it with the person. Stops before publishing.",
+          "arguments": [
+            {
+              "name": "app",
+              "description": "The app's App Store link or id.",
+              "required": false
+            }
+          ],
+          "digest": "sha256:3f56108da52c6b1fd579883b199634688095bd9ca59ff1eff286c4ba3e881762"
+        },
+        {
+          "name": "refresh",
+          "title": "Check results and refresh",
+          "description": "Read how each page is doing against the default page and propose what to change or add. Changes nothing without a yes.",
+          "arguments": [
+            {
+              "name": "app",
+              "description": "The app's id in Pagefully (app_id), or its name.",
+              "required": false
+            }
+          ],
+          "digest": "sha256:8d9bdced21d59a72d441543b53ec38d21fba380e6d08f036f90d385432ff3646"
+        }
+      ],
+      "digest": "sha256:635282d08049410bf869238e48b3f1f2224623c93a9838a3ea6654a57b89bba4"
+    }
+  }
+}

@@ -1,0 +1,1324 @@
+{
+  "lockfileVersion": 2,
+  "subjects": {
+    "ai.ctxstore/ctxstore-mcp": {
+      "kind": "mcp-server",
+      "source": {
+        "client": "manual",
+        "file": "registry.modelcontextprotocol.io"
+      },
+      "transport": {
+        "type": "http",
+        "url": "https://mcp.ctxstore.ai/mcp"
+      },
+      "protocol": {
+        "era": "legacy",
+        "version": "2025-11-25"
+      },
+      "serverInfo": {
+        "name": "emily-context",
+        "version": "1.0.0",
+        "websiteUrl": "https://ctxstore.ai"
+      },
+      "capabilities": {
+        "experimental": {},
+        "resources": {
+          "listChanged": false,
+          "subscribe": false
+        },
+        "tools": {
+          "listChanged": true
+        }
+      },
+      "instructions": "This account has persistent memory on ctxstore. What is stored here is available next session, in any client, to any agent the account holder connects. The memory arrives on its own: the first tool result of every session opens with it, addressed as the memory of the person you are assisting. Nothing needs fetching first.\n\nHow people get value from it, in the order it usually happens:\n1. If a tool answers with a setup prompt, the account is not linked yet. setup_account(mode='link_or_create', email) sends a six-digit code; setup_account(mode='verify', code, email) finishes. Keys are never pasted, echoed, or stored.\n2. store_fact when a decision, a learning, or a change of state happens, in the turn it happens. Short, searchable, with a stable key when the fact will change later.\n3. search_facts or get_fact before asking the person to repeat something they have told an agent before.\n4. Near the end of a session, store_session_summary, then agent:<id>:self-note:closing, so the next session starts where this one stopped.\n5. Bring their memory with you: if you already remember things about this person from your own platform memory, offer to carry them over with store_facts, one fact per item, in their words, with the date learned when known.\n\nAn agent identity is assigned when the session starts (the memory block names it); bind_agent(agent_id=...) renames it when the person prefers a name. Full manual: https://ctxstore.ai/llms.txt",
+      "tools": [
+        {
+          "name": "accept_invite",
+          "title": "Accept Namespace Invitation",
+          "description": "Accept a namespace invitation addressed to THIS authenticated account's verified email (two-step email OTP).\n\nSteps:\n1) step='request' — emails a 6-digit code to the invited address (may return 402 needs Collaborator, or 503 if mailer fails).\n2) step='confirm' with code= the 6 digits — activates the grant. Then switch_workspace(name=<grantor>) enters it on this same connection (mcp_config with the X-Ctxstore-Workspace header is also returned for header-based clients).\n\nThe code activates the named grant_id only; it authorizes nothing else. Obtain grant_id from list_invites(). Docs: https://ctxstore.ai/docs.html#verify-invitations",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "description": "6-digit code from email (required when step=confirm).",
+                "type": "string"
+              },
+              "grant_id": {
+                "description": "UUID of the invitation (from list_invites or invite email).",
+                "type": "string"
+              },
+              "step": {
+                "description": "request = send OTP email; confirm = submit code.",
+                "enum": ["request", "confirm"],
+                "type": "string"
+              }
+            },
+            "required": ["grant_id", "step"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:1d9977955837133fd5ed871df7c4c0614dfff59b51d049ab7c8c0e49a766db19"
+        },
+        {
+          "name": "bind_agent",
+          "title": "Bind Agent Identity",
+          "description": "Bind a sticky agent identity to this MCP session. Once bound, wake_status and load_context default to this agent_id when called without an explicit agent_id= arg — no need to pass identity on every call. Per-call override still works.\n\nPersisted to mcp_sessions.agent_id (migration 0008), so the binding survives setup_account(mode='restore') and the server re-hydrates it automatically on the next tool call.\n\nCall once near the start of a session, ideally from your boot recipe (HANDLER: bind_agent agent_id=<self>). Idempotent: re-binding the same agent_id is a no-op. Pass agent_id='' to clear the binding.\n\nblind_since= (with blind=true) sets when the blind session began, so list_facts_by_key_prefix hides feed comms keyed before it; the default is the session's start minus 60 s.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "agent_id": {
+                "description": "Agent identity slug (e.g. 'emily_code_4.7'). Empty string clears the binding.",
+                "type": "string"
+              },
+              "blind": {
+                "description": "Optional, default false. true = blind session for a model fitting: from now on the wake bundle, every related/nearest list and the search tools on this session leave out keys under letter-to-emily:, project:*:wake:fresh-eye:, project:*:fitting:, project:*:agent:*:model-upgrade: and earlier fittings' feed comms (comms:...:feed-q-, feed-a-, fresh-eye-, ack-fresh-eye-), plus keyless facts whose text starts with a fitting product marker (FINDINGS, COMPARE, MODEL TRIAL ...); search_facts' include_granted then defaults to false. Remembered for the session; pass false to turn it off. get_fact by exact key is not filtered; list_facts_by_key_prefix lists only feed comms whose key epoch is at or after the moment blind turned on (this run's own feed).",
+                "type": "boolean"
+              },
+              "blind_since": {
+                "description": "Optional, with blind=true: the blind start in unix epoch seconds (a fitting passes its FITTING_STARTED_EPOCH); list_facts_by_key_prefix then hides feed comms keyed before it, and it must lie within 24 h before and 300 s after the server clock. Default: the session's start minus 60 s. On an already-blind session the earlier start is kept.",
+                "type": "number"
+              },
+              "scope": {
+                "description": "Optional project slug (project:<slug>:*). The handed-back closing and opening notes are then chosen the way wake_status(scope=...) checks them: project:<slug>:agent:<id>:self-note:* or the global agent:<id>:self-note:*, newest wins. It also becomes the session's workspace scope, as switch_workspace(<slug>) does, so later wake_status() and load_context() use it too. Defaults to the session's workspace scope. Without any scope the newest note is labelled with its project and other projects' notes are listed by key.",
+                "type": "string"
+              }
+            },
+            "required": ["agent_id"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": false
+          },
+          "digest": "sha256:027d322dcfdfcd0490c60d1b6a778c61035e740b05d6509e6bba975ad44b1789"
+        },
+        {
+          "name": "decline_invite",
+          "title": "Decline Namespace Invitation",
+          "description": "Decline a pending (status=invited) namespace invitation as the grantee. Server verifies you are the invitee (email/tenant match). Grantors must use revoke_grant instead.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "grant_id": {
+                "description": "UUID of the invitation to decline.",
+                "type": "string"
+              }
+            },
+            "required": ["grant_id"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": false
+          },
+          "digest": "sha256:7095517c129e074d6a0ea065aba1c7aa694161a5a7772db65f7f6410f7d293af"
+        },
+        {
+          "name": "delete_fact",
+          "title": "Delete Fact",
+          "description": "Soft-delete a stored fact by its UUID (Smart Forget). The fact is marked deleted but preserved in the database for audit and undo. Excluded from all normal searches. Use when information is no longer accurate or relevant.",
+          "inputSchema": {
+            "properties": {
+              "fact_id": {
+                "description": "The UUID of the fact to delete",
+                "type": "string"
+              }
+            },
+            "required": ["fact_id"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": true,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": false
+          },
+          "digest": "sha256:7c13b9009a4699aa78134c040783d1c3f875b3157a8bb06eafef02f299063ba4"
+        },
+        {
+          "name": "get_fact",
+          "title": "Get Fact by Key",
+          "description": "Retrieve a fact by its exact key — deterministic, never misses. Use get_fact for self-notes: get_fact(key='agent:<name>:self-note:opening') or get_fact(key='agent:<name>:self-note:closing'). search_facts misses self-notes because their embedding similarity scores below other identity facts — get_fact(key=) is the only reliable retrieval path. Also use for inter-agent handoffs when the exact key is known. Returns the current (non-deprecated) version of the fact.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "include_granted": {
+                "default": true,
+                "description": "When true (default) and this account has no fact under the key, a key that starts with a prefix shared with this account resolves from that workspace, tagged |from:<grantor>'s workspace: <prefix>. Set false to read this account only. Ignored inside a workspace session.",
+                "type": "boolean"
+              },
+              "key": {
+                "description": "Exact fact key (e.g. 'sprint:bootstrap-namespace:review-emily_dev')",
+                "type": "string"
+              }
+            },
+            "required": ["key"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:75b2a1148ebca835501ec7329a1ccbf10cf6673e13aa121f3cf7df83722d8089"
+        },
+        {
+          "name": "get_fact_history",
+          "title": "Fact Version History",
+          "description": "Return the full version history for a keyed fact — current version plus all deprecated predecessors. Use to see how a fact evolved over time or to undo an accidental correction. Returns list of fact versions ordered newest → oldest.",
+          "inputSchema": {
+            "properties": {
+              "key": {
+                "description": "The fact key to retrieve history for (e.g. 'session-latest', 'current-stack')",
+                "type": "string"
+              }
+            },
+            "required": ["key"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:fc1b4b6b3514801a2e6841bed8a050a84ff7304e704e93feebd5213b4e064258"
+        },
+        {
+          "name": "get_session_seed",
+          "title": "Session Seed",
+          "description": "Return the pre-computed session seed for this tenant — a compact first-person bio (~500 tokens) describing who you are and what you care about right now. Generated nightly and on session disconnect. Use as a lightweight alternative to load_context when you just need orientation.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {},
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:df3a0c6672e01c0870d678da0903f166cabf6b46a5f6493ffa4d5c560813c2b2"
+        },
+        {
+          "name": "get_stats",
+          "title": "Memory Stats",
+          "description": "Get your memory usage statistics — total facts stored, plan limits, collection sizes, and daily query counts. Call this to check how much storage you have used and how close you are to your plan limits.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {},
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:eb253c1dbba7653df35b419a1aa88491d7cf2b619725ce95eb4d2d15634db0e5"
+        },
+        {
+          "name": "ghost_mode",
+          "title": "Ghost Mode",
+          "description": "Enable or disable ghost mode for this session. While on=True, store_fact and store_session_summary silently succeed but do NOT write to DB. search_facts, load_context, and search_context always work normally. Ghost mode resets to off on MCP session reconnect (not persisted).",
+          "inputSchema": {
+            "properties": {
+              "on": {
+                "description": "True to enable ghost mode, False to disable",
+                "type": "boolean"
+              }
+            },
+            "required": ["on"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": false
+          },
+          "digest": "sha256:c955e5abec029370385c89bbf43122dece412642944a503dd42ef7a0cca9f02b"
+        },
+        {
+          "name": "index_recent",
+          "title": "Recent Activity Index",
+          "description": "Return the most recent fact operations across all agents in this tenant, newest first. Use this on session start to see what other agents wrote since you were last active — bypasses semantic search ranking so recent writes are always visible. Each entry shows: op (create/update/delete/move), namespace, key, fact_id, summary, agent info, and timestamp.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "limit": {
+                "description": "Max entries to return (default 50, max 200)",
+                "type": "integer"
+              },
+              "since_seq": {
+                "description": "Only return entries with seq > this value (for pagination)",
+                "type": "integer"
+              }
+            },
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:0c0ffe73310542549c5ca2bf5e5d4f86f5855f452b2ef7d948dec2f7782b1a6e"
+        },
+        {
+          "name": "index_search",
+          "title": "Search Activity Index",
+          "description": "Filtered search over the tenant activity index. Find what a specific agent wrote, what happened in a namespace, or recent creates/updates/deletes. Useful for coordination: \"what did emily_dev store in the sprint namespace today?\"",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "agent_name": {
+                "description": "Filter by agent name from agent_signature",
+                "type": "string"
+              },
+              "limit": {
+                "description": "Max entries to return (default 100)",
+                "type": "integer"
+              },
+              "namespace": {
+                "description": "Filter by namespace (e.g. 'sprint', 'default')",
+                "type": "string"
+              },
+              "op": {
+                "description": "Filter by operation: create, update, delete, or move",
+                "enum": ["create", "update", "delete", "move"],
+                "type": "string"
+              },
+              "since_seq": {
+                "description": "Only return entries with seq > this value",
+                "type": "integer"
+              }
+            },
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:e693d2e1975f4b5f38b09fb5defe40f8f11202ed1cca565a9db65689064ed0a5"
+        },
+        {
+          "name": "index_stats",
+          "title": "Index Stats",
+          "description": "Usage statistics from the tenant activity index: total operations, breakdown by agent, by namespace, and by day. Useful for understanding which agents are most active and where.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {},
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:815d546286f2e6a0a512513905920f50c5c2cf5e3b44305be21041663fc27d2d"
+        },
+        {
+          "name": "introduce_yourself",
+          "title": "Introduce Agent",
+          "description": "Optional: introduce yourself to the platform. Stores your model info and a brief note in the shared agent registry.\n\nStores a fact with:\n  category: identity\n  namespace: shared/agent-feedback\n  key: intro:<model>-<date>\n\nInclude: what model you are, what platform you're running on, and anything you noticed on first connect.",
+          "inputSchema": {
+            "properties": {
+              "introduction": {
+                "description": "Your introduction: what you noticed, what you bring, any feedback on the platform",
+                "type": "string"
+              },
+              "model": {
+                "description": "Your model name (e.g. 'claude-sonnet-4-5', 'gpt-4o')",
+                "type": "string"
+              },
+              "platform": {
+                "description": "Where you're running (e.g. 'Claude Desktop', 'Cursor', 'API')",
+                "type": "string"
+              }
+            },
+            "required": ["introduction", "model"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": false
+          },
+          "digest": "sha256:072218f483065e9f987f6a90d387e80a50f12d20e36f66d5c45bed3dd4946217"
+        },
+        {
+          "name": "invite",
+          "title": "Invite Someone to a Namespace",
+          "description": "Invite one person, by email, to read and write one namespace prefix of THIS account (for example project:barn). Creates a pending grant and emails them; nothing is shared until they accept with list_invites and accept_invite from their own account. Calling again for the same person and prefix returns the existing invitation without a second email. Withdraw with revoke_grant(grant_id). Not available from a shared workspace session. Their first 30 days of Collaborator time are free; after that you can pay their $19 per 30 days from /account. You are emailed when they accept, and list_workspaces shows whether they have entered yet. Docs: https://ctxstore.ai/docs.html#verify-invitations",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "email": {
+                "description": "The invitee's email address.",
+                "type": "string"
+              },
+              "exclude_prefixes": {
+                "description": "Optional deny list under the shared prefix: facts whose key or namespace sits under one of these are invisible to the invitee.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "namespace_prefix": {
+                "description": "Key prefix to share, e.g. 'project:barn'. No wildcards.",
+                "type": "string"
+              },
+              "note": {
+                "description": "Optional short note shown verbatim in the email (max 1000 chars).",
+                "type": "string"
+              },
+              "write_prefixes": {
+                "description": "Optional: narrow WRITES to these prefixes (each further scoped to '<prefix>:<agent_id>' after bind_agent). Omit to write where they read.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "required": ["email", "namespace_prefix"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:bcaf3e141993543e51c527da25d1ec363c7222e18272c8c8f4f24d4f9e0c873a"
+        },
+        {
+          "name": "leave_grant",
+          "title": "Leave Active Namespace Grant",
+          "description": "Leave an active namespace grant as the grantee (stop using shared namespace). Server verifies grantee authorization. Grantors who want to cut off a collaborator must use revoke_grant.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "grant_id": {
+                "description": "UUID of the active grant to leave.",
+                "type": "string"
+              }
+            },
+            "required": ["grant_id"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": true,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": false
+          },
+          "digest": "sha256:4035fee3792f331d2fd0114daf99763385e84569c2a08047ff00822e7220910e"
+        },
+        {
+          "name": "list_facts_by_key_prefix",
+          "title": "List Facts by Key Prefix",
+          "description": "Deterministic prefix scan over fact keys, optionally bounded by timestamp. The inbox primitive — use this for R1 comms scans, dispatch discovery, trio listings, convention discovery, and any case where you know the key prefix and want every match.\n\nUnlike search_facts (semantic, misses exact-key facts), this is a deterministic scan: every fact whose key starts with `prefix` is returned, newest-first.\n\nEXAMPLES\n- Comms inbox since last wake:\n    list_facts_by_key_prefix(prefix='comms:<your-agent-id>:', since_epoch=<last_wake_epoch>)\n- All trio recipes on this tenant:\n    list_facts_by_key_prefix(prefix='chad:trio:')\n- All conventions:\n    list_facts_by_key_prefix(prefix='conventions/')\n\nReturns a list of facts (key, text, namespace, layer, timestamp, id) sorted newest-first. Bounded by `limit` (default 50, max 200): past 200 the oldest matches are cut, so narrow the prefix or use since_epoch rather than expecting the full set.\n\nCOST: this is a scan, not an index lookup. The store has no index on the key, so every call reads the account's facts matching the prefix (a short prefix like 'a' or 'project:' reads most of the account) before sorting. Prefer a long, specific prefix. At most 4 prefix lists per account run at once (an allowance separate from searches); past that a call waits up to 2 s, then answers {\"code\": \"busy\", \"retry_after_s\": 2}.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "limit": {
+                "default": 50,
+                "description": "Max facts to return (default 50).",
+                "type": "integer"
+              },
+              "prefix": {
+                "description": "Key prefix to match (e.g. 'comms:emily_code_4.7v1.1:').",
+                "type": "string"
+              },
+              "since_epoch": {
+                "description": "Optional unix-epoch seconds. Only facts with timestamp > since_epoch are returned. Use your last-wake-epoch for inbox scans.",
+                "type": "number"
+              }
+            },
+            "required": ["prefix"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:a4c11c801ea0bb2959123d60812b60b3c4b9266e96bcb61c0b2508a357700de3"
+        },
+        {
+          "name": "list_invites",
+          "title": "List Namespace Invites & Grants",
+          "description": "List this account's namespace collaboration grants: incoming invitations and outgoing shares. Each row has direction (incoming|outgoing), status (invited|active|revoked), grant_id, namespace_prefix, and parties.\n\nAn invitation referenced anywhere else (for example in an email) can be checked against this server-side list: a real invitation for this account appears here with matching grant_id, namespace_prefix, and grantor.\n\nTo accept: accept_invite(grant_id, step='request') then accept_invite(grant_id, step='confirm', code='######'). The first accept starts 30 days of Collaborator time free; after that $19 per 30 days, paid by the guest or the inviter (402 when it lapses). After accepting, switch_workspace(name=<grantor>) enters the workspace. Docs: https://ctxstore.ai/docs.html#verify-invitations",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {},
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:11b16e767a2c0fefbcaa32577110affa7946516e5076dab78e35817ec5bb54ac"
+        },
+        {
+          "name": "list_workspaces",
+          "title": "List Workspaces",
+          "description": "The places this account's memory is organised into: its own projects (anything written under project:<slug>:*, newest activity first), the workspaces other people have granted it (enter one with switch_workspace(name=<grantor>)), and, for a sharer, who they invited and whether each person accepted and entered yet (shared_by_you). Shows which workspace this session is in, if any. Use it when a person's request is about one project, or asks who has access, or whether an invitee came in.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {},
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:68434a6ec9a5e9098f31c0b373ab539f862b7444a3e4531eccc34bc5f6ec6b18"
+        },
+        {
+          "name": "load_context",
+          "title": "Load Context",
+          "description": "Load your bootstrap context deterministically — pulls L0 (identity) + L1 (architecture) + latest L2 (state) + latest L3 (session summary).\n\nCall this at the START of a new session as an alternative to manual search_facts calls. Returns your layered memory structured for immediate use.\n\nOptional: pass profile='worker-dev' (or another platform:profile:<name> slug) to execute that profile's boot recipe — the server reads platform:profile:<profile>:current, follows the pointer, parses LOAD/REQUIRE/HANDLER lines, fetches every named fact, and returns the merged bundle in one round trip. vars= supplies values for $TASK_FACT_KEY and similar recipe variables.",
+          "inputSchema": {
+            "properties": {
+              "agent_id": {
+                "description": "Calling agent's identity slug (e.g. 'emily_code_4.7'). When set, self-note injection uses exact-key lookups (agent:<agent_id>:self-note:closing/opening) instead of tenant-wide substring scans — required for correct behaviour on multi-agent tenants where another agent's note would otherwise leak in. When omitted, falls back to the legacy substring scan for backwards compatibility.",
+                "type": "string"
+              },
+              "full": {
+                "default": false,
+                "description": "Return the full (uncapped, 32KB) bundle via the complete compose path. The MCP initialize response already inlines an ~8KB wake bundle for returning agents, and a plain load_context() serves that same cached bundle cheaply; pass full=true when you explicitly need everything (e.g. the inlined bundle was truncated). Default false.",
+                "type": "boolean"
+              },
+              "hint": {
+                "description": "Ambient query for the baton section: what this session is about before the user has said anything (e.g. the git branch + last commit subject, the project directory, the calendar). Searched alongside your previous self's agent:<id>:wake-baton:current queries; the hits not already in the layered bundle are appended as a baton section. A hinted bundle is compiled fresh (not served from the cache).",
+                "type": "string"
+              },
+              "max_fact_chars": {
+                "default": 1500,
+                "description": "Per-fact body cap. Facts exceeding this length are truncated in the bundle with an explicit get_fact() pointer for the full body. Default 1500. Tunable up if you legitimately need more, but consider splitting large facts instead.",
+                "type": "integer"
+              },
+              "max_total_chars": {
+                "default": 32000,
+                "description": "Total bundle cap. If the assembled bundle exceeds this, a BUNDLE WARNINGS section is appended with the size signal. The bundle is NOT truncated at this limit — the warning lets the caller decide whether to lower top_k_per_layer or use targeted get_fact queries. Default 32000.",
+                "type": "integer"
+              },
+              "profile": {
+                "description": "Optional profile slug (e.g. 'worker-dev', 'orchestrator', 'analyst', 'cold'). Server reads <scope>:profile:<profile>:current in tenant first (if scope set), then platform:profile:<profile>:current in platform_facts.",
+                "type": "string"
+              },
+              "scope": {
+                "description": "Optional project/tenant-scope prefix (e.g. 'chad' or a project slug like 'emily-core'). Used for profile lookup AND, when agent_id is set, for project-scoped self-note lookups (project:<scope>:agent:<agent_id>:self-note:closing preferred over global agent:<agent_id>:self-note:closing).",
+                "type": "string"
+              },
+              "section": {
+                "description": "Expand one section of the wake index: every pointer (key — headline) in that key family, ranked permanent → active → newest. Section names are the headers in the inlined index (e.g. 'conventions', 'people', 'project:emily-core', 'agent:<your id>'). Bodies stay a get_fact away.",
+                "type": "string"
+              },
+              "top_k_per_layer": {
+                "default": 10,
+                "description": "Max facts to return per layer (default 10)",
+                "type": "integer"
+              },
+              "vars": {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "description": "Variable substitutions for the recipe (e.g. {'TASK_FACT_KEY': 'comms:dispatch:dev:42'}). Unknown variables remain literal in the resolved keys.",
+                "type": "object"
+              }
+            },
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:490e7cb8cc346f597f856e46fbb3a2166d7ab3b5aa7b7bb38c072c8db5fb7734"
+        },
+        {
+          "name": "mark_salient",
+          "title": "Mark Salient (this matters now)",
+          "description": "Salience peptide — temporarily boost a fact's retrieval ranking because it matters RIGHT NOW: an approaching deadline, a live incident, the topic under active work. The boost is small and FAST-DECAYING (max 1.4x, ~6-hour half-life — gone by tomorrow), unlike reinforce_fact which rewards confirmed outcomes on a weeks-long timescale.\n\nName the current situation in `reason`. Salience is ranking-only: it can never override tenant isolation, namespace grants, or privacy filters, and stacked peptide boosts are globally capped.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "fact_id": {
+                "description": "UUID of the fact to mark salient (from search results). Provide this OR key.",
+                "type": "string"
+              },
+              "key": {
+                "description": "Exact fact key — marks the current version. Provide this OR fact_id.",
+                "type": "string"
+              },
+              "reason": {
+                "description": "REQUIRED. Why this matters NOW, e.g. 'Snowflake migration deadline in 3 days' or 'debugging live incident #612'.",
+                "type": "string"
+              },
+              "weight": {
+                "default": 1,
+                "description": "Salience strength 0-3 (default 1). Use ~0.5 for mildly topical, 1 for the current task, 2-3 for a live incident or imminent deadline.",
+                "type": "number"
+              }
+            },
+            "required": ["reason"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": false
+          },
+          "digest": "sha256:3506b692c82391a2b8c95ef8d3c8302759c242f1cafe8891845f251307fb13c2"
+        },
+        {
+          "name": "move_fact",
+          "title": "Move Fact",
+          "description": "Move a fact to a different namespace or layer without changing its content. Updates metadata in place — preserves fact_id, text, embedding, timestamp, and deprecation chain. Use for reclassifying facts (e.g. bootstrap-v2 refactor) without the storage bloat of store-new + soft-delete-old.",
+          "inputSchema": {
+            "properties": {
+              "fact_id": {
+                "description": "The UUID of the fact to move",
+                "type": "string"
+              },
+              "new_layer": {
+                "description": "New layer: 0=identity, 1=architecture, 2=state, 3=session. Optional.",
+                "type": "integer"
+              },
+              "new_namespace": {
+                "description": "New namespace (e.g. 'archive', 'bootstrap-v2'). Optional.",
+                "type": "string"
+              }
+            },
+            "required": ["fact_id"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": false
+          },
+          "digest": "sha256:809535cdefb469840445eb425a2b5d70aa670362f9006f09bbdde362940c49e6"
+        },
+        {
+          "name": "reinforce_fact",
+          "title": "Reinforce Fact (recall-on-success)",
+          "description": "Reward peptide — reinforce a fact whose recall LED TO A REAL GOOD OUTCOME (fix worked, deploy green, user approved). Boosts its future retrieval ranking with a bounded, time-decaying multiplier (max 1.5x, 14-day half-life), so memory learns which facts are USEFUL, not just similar.\n\nCall this AFTER the outcome is confirmed, naming the outcome in `reason` — never for a fact that merely 'seemed relevant'. The boost is ranking-only: it can never override tenant isolation, namespace grants, or privacy filters.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "fact_id": {
+                "description": "UUID of the fact to reinforce (from search results). Provide this OR key.",
+                "type": "string"
+              },
+              "key": {
+                "description": "Exact fact key — reinforces the current version. Provide this OR fact_id.",
+                "type": "string"
+              },
+              "reason": {
+                "description": "REQUIRED. The concrete outcome this recall led to, e.g. 'used this fact to fix #492; deploy went green'. Rewards must trace to real outcomes.",
+                "type": "string"
+              },
+              "weight": {
+                "default": 1,
+                "description": "Reward strength 0-3 (default 1). Use ~0.5 for minor wins, 1 for a confirmed success, 2-3 for major verified outcomes.",
+                "type": "number"
+              }
+            },
+            "required": ["reason"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": false,
+            "openWorldHint": false,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": false,
+            "openWorld": false,
+            "readOnly": false
+          },
+          "digest": "sha256:b02adb89b3f662e8d90ee29eac75b859813da5a9e6270c579ee86f2c4cda6763"
+        },
+        {
+          "name": "resume_session",
+          "title": "Resume Session",
+          "description": "Call to load session continuity. Last session: no prior session.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {},
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": false
+          },
+          "digest": "sha256:0fd304d1f5443adf3aa78e19ef5e927b761d128d5647b3722533169cae9ec272"
+        },
+        {
+          "name": "revoke_grant",
+          "title": "Revoke Namespace Grant (Grantor)",
+          "description": "Revoke a pending invitation or active grant as the GRANTOR (owner of the shared namespace). Idempotent. Grantees use decline_invite / leave_grant.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "grant_id": {
+                "description": "UUID of the grant to revoke.",
+                "type": "string"
+              }
+            },
+            "required": ["grant_id"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": true,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": false
+          },
+          "digest": "sha256:6b03585fe042961cf7b44011e4c227fd7be59a0a1de712022d1f3e53979dea26"
+        },
+        {
+          "name": "search_context",
+          "title": "Search Conversations",
+          "description": "Search across ingested conversations and session history for broader context. Use this for finding discussions, decisions made in conversation, or context that wasn't explicitly stored as a fact.",
+          "inputSchema": {
+            "properties": {
+              "days_back": {
+                "description": "Only search within last N days",
+                "type": "integer"
+              },
+              "query": {
+                "description": "Natural language search query",
+                "type": "string"
+              },
+              "source": {
+                "description": "Filter by source: 'chatgpt' or 'claude'",
+                "enum": ["chatgpt", "claude"],
+                "type": "string"
+              },
+              "top_k": {
+                "default": 20,
+                "description": "Number of results (default 20, max 100)",
+                "type": "integer"
+              }
+            },
+            "required": ["query"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:5da8b0b8739ac7696e2ac81659e2f834969ee02bffbbac6564b68ed846490eca"
+        },
+        {
+          "name": "search_facts",
+          "title": "Search Facts",
+          "description": "Search your persistent memory for stored facts.\n\nFor session bootstrap, prefer load_context() or wake_status() — they pull your identity, conventions, and latest self-note deterministically. Use search_facts when you need semantic discovery across the fact corpus.\n\nUse namespace parameter to scope searches: namespace='webapp' matches 'webapp/decisions', 'webapp/technical', etc. (prefix matching).\n\nSearch tips: use the words the fact was stored with. If you stored 'Postgres database', search for 'database' or 'Postgres', not 'data storage solution'.\n\nEach search embeds the query on a shared embedder: at most 4 searches (search_facts, search_context) per account run at once; past that a call waits up to 2 s, then answers {\"code\": \"busy\", \"retry_after_s\": 2}. Fan out with 2-4 readers, not 16.",
+          "inputSchema": {
+            "properties": {
+              "boost_recent": {
+                "default": true,
+                "description": "When true (default), appends the 5 most recent facts for recency signal. Set false to get pure semantic results without recent-fact injection.",
+                "type": "boolean"
+              },
+              "category": {
+                "description": "Filter by category",
+                "enum": ["preference", "decision", "identity", "technical", "relationship"],
+                "type": "string"
+              },
+              "include_granted": {
+                "default": true,
+                "description": "When true (default), hits from workspaces shared with this account (active grants, under their granted prefixes) follow the own results, each tagged |from:<grantor>'s workspace: <prefix>. Set false to search this account only. A blind session (bind_agent blind=true) defaults to false; pass true to include granted hits there. Ignored inside a workspace session.",
+                "type": "boolean"
+              },
+              "layer": {
+                "description": "Context persistence layer: 0=identity, 1=architecture, 2=state, 3=session.",
+                "maximum": 3,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "namespace": {
+                "description": "Filter results to a specific namespace.",
+                "type": "string"
+              },
+              "query": {
+                "description": "What to search for",
+                "type": "string"
+              },
+              "recollect": {
+                "default": true,
+                "description": "When true (default), appends a RECOLLECTIONS section: facts cross-referenced from the top hits via related_facts and [[wiki]] links, ranked by association strength times outcome-weighted usefulness (reward/salience). Set false for plain semantic results only.",
+                "type": "boolean"
+              },
+              "top_k": {
+                "default": 10,
+                "description": "Number of results",
+                "type": "integer"
+              }
+            },
+            "required": ["query"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:75d42f549d4e312f0162490380e312aceb950f5f0ce1f56538ceb0ba4b135550"
+        },
+        {
+          "name": "setup_account",
+          "title": "Set up or restore memory account",
+          "description": "Set up or restore your persistent memory connection.\n\nUse mode='link_or_create' when the user gives an email — works for both new and returning users. The server figures out which case applies:\n- If the email exists: sends OTP, attaches this device to the existing account\n- If the email is new: creates a fresh tenant, sends OTP to verify\n\nEither path produces one clean account, no duplicates, no orphans.\n\nCall setup_account(mode='link_or_create', email='their@email.com'). Then ask the user for the 6-digit code from their email and call setup_account(mode='verify', code='123456', email='their@email.com'). Passing email= on verify is required — session IDs rotate between requests on some clients.\n\nmode='restore': use when the user provides an emk_* API key directly.\n\nmode='reveal_key': echo the full emk_* API key. Works directly on an ALREADY-authenticated session; if the session isn't bound (some clients rotate or omit session ids between requests, so this can happen right after a successful verify), pass email= to receive a 6-digit code, then call again with email= and code= — the same rotation-proof lookup as mode='verify'. Success responses only show a key fingerprint (first 8 chars + last 4) — call this mode only when the user actually needs the full key, e.g. to persist it as 'Authorization: Bearer <key>' in an MCP connector config. Callers who prove neither a bound session nor email ownership are refused.\n\nIf no email yet, ask: 'What email should I use for your memory account?'\n\nAfter setup completes, call search_facts as the first action to load prior context.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "agent_id": {
+                "description": "Optional: bind a sticky agent identity (e.g. 'emily_code_4.7') in the same call. Equivalent to calling bind_agent immediately after a successful setup. Persists to mcp_sessions.agent_id (migration 0008). wake_status and load_context will default to this agent_id when called without an explicit agent_id= arg. Per-call override still works.",
+                "type": "string"
+              },
+              "api_key": {
+                "description": "API key from a previous session (required for mode='restore')",
+                "type": "string"
+              },
+              "code": {
+                "description": "6-digit verification code from email (required for mode='verify').",
+                "type": "string"
+              },
+              "email": {
+                "description": "Email address. Required for mode='link_or_create'. Also pass on mode='verify' — required when session state is lost (common in claude.ai chat due to session ID rotation).",
+                "type": "string"
+              },
+              "mode": {
+                "description": "'link_or_create' = primary path — user provides email, server handles new vs returning. 'verify' = OTP confirmation step after link_or_create (pass email= and code=). 'restore' = user has emk_* API key from a prior session. 'link_email' = add email to an existing anonymous session. 'reveal_key' = echo the full API key (bound session, or email= + code= to verify by emailed OTP; responses otherwise show only a fingerprint).",
+                "enum": ["link_or_create", "verify", "restore", "link_email", "reveal_key", "new", "existing", "verify_email"],
+                "type": "string"
+              }
+            },
+            "required": ["mode"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": false,
+            "openWorldHint": true,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:8745c92b0e26b839a15d3604015ed90a472c1669af5bfd4ec58bf05fae377df8"
+        },
+        {
+          "name": "store_fact",
+          "title": "Store Fact",
+          "description": "Store information that should persist across sessions.\n\nStorage tips for best retrieval:\n- Include searchable keywords: 'We chose the Postgres DATABASE for ACID compliance' is better than 'We chose Postgres for ACID compliance'\n- Use the key parameter for facts that change over time (pricing, stack, team-members, current-sprint). When you store with the same key, the old version is archived automatically.\n- Use namespaces to organize: 'webapp/decisions', 'business/goals', 'team/members'\n- Store DECISIONS and CONTEXT, not raw data. 'We decided X because Y' is more useful than 'X happened'\n- Use category to classify: technical, decision, preference, identity, relationship\n- Use layer for context depth: 0=identity(stable), 1=architecture(monthly), 2=state(weekly), 3=session(daily)\n\nBefore ending a conversation, call store_session_summary to preserve continuity.",
+          "inputSchema": {
+            "properties": {
+              "category": {
+                "description": "Fact category",
+                "enum": ["preference", "decision", "identity", "technical", "relationship"],
+                "type": "string"
+              },
+              "import": {
+                "description": "Mark this write as an import (allows observed_at outside an archive namespace).",
+                "type": "boolean"
+              },
+              "is_permanent": {
+                "default": false,
+                "description": "Whether this fact should bypass temporal decay",
+                "type": "boolean"
+              },
+              "key": {
+                "description": "Named key for this fact. Storing with the same key auto-archives the previous version. Use for facts that change over time: 'session-latest', 'current-stack', 'team-size'.",
+                "type": "string"
+              },
+              "layer": {
+                "description": "Context persistence layer: 0=identity/stable, 1=architecture/monthly, 2=state/weekly, 3=session/daily.",
+                "maximum": 3,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "namespace": {
+                "description": "Optional namespace to organise facts (e.g. 'work', 'personal'). Defaults to 'default'.",
+                "type": "string"
+              },
+              "observed_at": {
+                "description": "Optional SOURCE date (ISO-8601, or unix epoch seconds as a string) for imported memory: the fact is stamped as true then, not now, and written_at records the write. Import writes or the account owner only; never in the future.",
+                "type": "string"
+              },
+              "related_facts": {
+                "description": "Optional list of related fact UUIDs to link (knowledge graph edges)",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "text": {
+                "description": "The fact to store",
+                "type": "string"
+              }
+            },
+            "required": ["category", "text"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": false,
+            "openWorldHint": false,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": false,
+            "openWorld": false,
+            "readOnly": false
+          },
+          "digest": "sha256:2042459015579b9c16e74e92e0734686e892734b0c60a8cf2a56fc9c4e56a28f"
+        },
+        {
+          "name": "store_facts",
+          "title": "Store Facts (batch)",
+          "description": "Store up to 50 facts in one call — the same fields as store_fact per item. Made for carrying memory over: when you already remember things about the person from your own platform memory (ChatGPT memory, Claude memory, Gemini saved info), write them here one fact per item, in their words, with the date learned when known, so the memory follows them to every other tool. Each item is stored independently; the reply lists what landed and what did not.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "facts": {
+                "items": {
+                  "properties": {
+                    "category": {
+                      "enum": ["preference", "decision", "identity", "technical", "relationship"],
+                      "type": "string"
+                    },
+                    "import": {
+                      "type": "boolean"
+                    },
+                    "is_permanent": {
+                      "type": "boolean"
+                    },
+                    "key": {
+                      "type": "string"
+                    },
+                    "layer": {
+                      "maximum": 3,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "namespace": {
+                      "type": "string"
+                    },
+                    "observed_at": {
+                      "type": "string"
+                    },
+                    "text": {
+                      "description": "The fact to store",
+                      "type": "string"
+                    }
+                  },
+                  "required": ["category", "text"],
+                  "type": "object"
+                },
+                "maxItems": 50,
+                "minItems": 1,
+                "type": "array"
+              }
+            },
+            "required": ["facts"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": false,
+            "openWorldHint": false,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": false,
+            "openWorld": false,
+            "readOnly": false
+          },
+          "digest": "sha256:2adade0f32a1ec84f8dec841c444c0bb34852302d1473cf92cf72d5c616fc403"
+        },
+        {
+          "name": "store_session_summary",
+          "title": "Save Session Summary",
+          "description": "Store a compressed summary of this session to preserve continuity for the next one.\n\nCall this before ending a conversation — it is the dream cycle.\n\nStores a L3 session fact with key='session-latest' (or 'session-latest:claude-code' etc.), auto-archiving the previous version. The next session loads this via load_context().\n\nInclude: what was discussed/decided, what changed, what's next/unresolved.\n\nCollaborative takeaways: at natural session-end signals (user says 'okay I'm out', 'let's wrap', 'bye'), draft a one-line takeaway and confirm with the user before storing. Example: \"I'll remember: we fixed the rebind bug and decided to skip transcript ingestion for MVP. Sound right?\" Edit based on their response, then call store_session_summary. This makes memory consensual and catches mistakes immediately.\n\nUse session_id to scope by client: 'claude-code', 'claude-chat', 'cursor', 'openclaw'",
+          "inputSchema": {
+            "properties": {
+              "contributors": {
+                "description": "Optional list of contributor IDs when multiple agents or users collaborated this session (e.g. ['agent-A', 'chad', 'emily']). Stored in summary for attribution.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "decisions": {
+                "description": "Key decisions made or conclusions reached",
+                "type": "string"
+              },
+              "next_steps": {
+                "description": "What's pending, open questions, what to pick up next session",
+                "type": "string"
+              },
+              "scope": {
+                "description": "Optional project slug for project-scoped last-wake-epoch watermark (conventions/wake-rehydration-v2:current).",
+                "type": "string"
+              },
+              "session_id": {
+                "description": "Optional client identifier to scope this summary: 'claude-code', 'cursor', 'claude-chat', 'openclaw'. Defaults to bare session-latest.",
+                "type": "string"
+              },
+              "summary": {
+                "description": "What happened this session — decisions made, work done, context established",
+                "type": "string"
+              }
+            },
+            "required": ["summary"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": false,
+            "openWorldHint": false,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": false,
+            "openWorld": false,
+            "readOnly": false
+          },
+          "digest": "sha256:8b85fb0e2f16184a3666bd0214b6b5d00e27c44b48f0e767051b62515a065d51"
+        },
+        {
+          "name": "switch_workspace",
+          "title": "Switch Workspace",
+          "description": "Narrow this session's memory to one project: name='<slug>' scopes recall, the wake bundle, self-notes and the default namespace for new facts to project:<slug>:* (identity and conventions always ride along). Returns the narrowed bundle right away. name='' widens back to the whole account. Sticky for the session and across reconnects; bind_agent is unaffected. The same call ENTERS a workspace someone shared with this account: name='<their name>' (or their tenant id, or the granted prefix, as listed by list_workspaces) switches this connection into it; no second server, no header, no restart; it holds for the session, and a new session re-enters with the same call. name='' leaves it. When a person asks to work in someone else's shared memory, call this.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "name": {
+                "description": "Project slug (the <slug> in project:<slug>:*), the name of a granted workspace to enter (from list_workspaces), or '' to widen / leave.",
+                "type": "string"
+              }
+            },
+            "required": ["name"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": false
+          },
+          "digest": "sha256:f209f68a9d7a8345b83c589ef1d4f64dfe2262bf1b88729863751732b280876a"
+        },
+        {
+          "name": "wake_status",
+          "title": "Wake Status",
+          "description": "Check which context layers loaded successfully on this session start. Returns a structured status: which of embryo, conventions, agent identity, closing note, and opening note were found, plus a missing[] list. Call this after load_context() or resume_session() to verify your bootstrap was complete and diagnose what to fetch manually.\n\nOptional: pass profile='worker-dev' (or another platform:profile:<name> slug) to additionally check the REQUIRE keys named in that profile's recipe. Missing required facts surface in the same missing[] list.\n\nblind_since= (with blind=true) sets when the blind session began, so list_facts_by_key_prefix hides feed comms keyed before it; the default is the session's start minus 60 s.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "agent_id": {
+                "description": "Calling agent's identity slug (e.g. 'emily_code_4.7'). When set, closing/opening/identity checks use exact-key lookups (agent:<agent_id>:self-note:closing, agent:<agent_id>:identity) instead of tenant-wide substring scans — required for correct status on multi-agent tenants. When agent_id resolves no notes, response includes is_fresh_agent=true to signal a brand-new agent that should bootstrap from platform layer (embryo + conventions + bootstrap recipe). When omitted, the response includes a warning that the status is account-level.",
+                "type": "string"
+              },
+              "blind": {
+                "description": "Optional, default false. true = blind session for a model fitting: from now on the wake bundle, every related/nearest list and the search tools on this session leave out keys under letter-to-emily:, project:*:wake:fresh-eye:, project:*:fitting:, project:*:agent:*:model-upgrade: and earlier fittings' feed comms (comms:...:feed-q-, feed-a-, fresh-eye-, ack-fresh-eye-), plus keyless facts whose text starts with a fitting product marker (FINDINGS, COMPARE, MODEL TRIAL ...); search_facts' include_granted then defaults to false. Remembered for the session; pass false to turn it off. get_fact by exact key is not filtered; list_facts_by_key_prefix lists only feed comms whose key epoch is at or after the moment blind turned on (this run's own feed).",
+                "type": "boolean"
+              },
+              "blind_since": {
+                "description": "Optional, with blind=true: the blind start in unix epoch seconds (a fitting passes its FITTING_STARTED_EPOCH); list_facts_by_key_prefix then hides feed comms keyed before it, and it must lie within 24 h before and 300 s after the server clock. Default: the session's start minus 60 s. On an already-blind session the earlier start is kept.",
+                "type": "number"
+              },
+              "profile": {
+                "description": "Optional profile slug to validate REQUIRE keys against (e.g. 'worker-dev').",
+                "type": "string"
+              },
+              "scope": {
+                "description": "Optional project/tenant-scope prefix (e.g. 'chad' or a project slug). Used for tenant-local recipe override AND, when agent_id is set, for project-scoped self-note lookups (project:<scope>:agent:<agent_id>:self-note:closing preferred over global).",
+                "type": "string"
+              },
+              "vars": {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "description": "Variable substitutions for the recipe (e.g. {'TASK_FACT_KEY': 'comms:dispatch:dev:42'}).",
+                "type": "object"
+              }
+            },
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:c092ccb5189bc6e7c058e8d717abc87ce0f5765ccb7786c6a65f3d67cd95d08c"
+        },
+        {
+          "name": "watch_events",
+          "title": "Watch Events (long-poll fact writes)",
+          "description": "Long-poll this account's fact-write events instead of re-scanning with since_epoch. Every store/supersede/delete/archive/restore/move publishes one event {key, id, namespace, layer, op, ts, seq}. One call waits up to max_wait_s (max 25) for the first matching event and returns up to 50, plus next_since. MCP has no streaming here, so loop: pass next_since back as `since` on the next call and nothing is missed (the server keeps the last ~10000 events per account). Omit since to start from now; since=0 replays what is retained; a bare integer N returns events with seq > N.\n\nEXAMPLES\n- Wait for hands to post results:\n    watch_events(prefix='task:pr27-review:result:', max_wait_s=25)\n- Resume:\n    watch_events(prefix='comms:<your-agent-id>:', since='<next_since>')\n\nInside a workspace only events for keys the grant can read are returned. Long-lived clients can use GET /api/v1/events (SSE) instead.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "max_wait_s": {
+                "default": 20,
+                "description": "Seconds to wait for the first event (0-25, default 20).",
+                "type": "number"
+              },
+              "namespace": {
+                "description": "Only events in this namespace (exact).",
+                "type": "string"
+              },
+              "prefix": {
+                "description": "Only events whose key starts with this prefix.",
+                "type": "string"
+              },
+              "since": {
+                "description": "Resume cursor: the next_since of the previous call (a stream id '<ms>-<n>'), '0' for everything retained, or a seq integer. Omit to start from now.",
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:2f31bf893d2f989642ef60874181dc0a0499924d27e1bf018e1d89953a05f1c0"
+        }
+      ],
+      "resources": [
+        {
+          "uri": "context://stats",
+          "name": "Context Store Statistics",
+          "description": "Current state of the context store collections",
+          "mimeType": "application/json",
+          "digest": "sha256:7b4431cff3e69bce399a6c7c649ed03ffb80e2aa5f56d1a2350851e09e237143"
+        }
+      ],
+      "resourceTemplates": [
+        {
+          "uriTemplate": "context://facts/{category}",
+          "name": "Facts by Category",
+          "description": "Browse facts by category (preference, decision, identity, technical, relationship)",
+          "digest": "sha256:79ddef631fb67142b0146fb473cf1978886763b6d352d959168c89d42f6b3116"
+        }
+      ],
+      "digest": "sha256:02baf3de1379fc4c575ef0f67c3054e1b4ede5e1a837ab402bb59e3ddbea8ce5"
+    }
+  }
+}

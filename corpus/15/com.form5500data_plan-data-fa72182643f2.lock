@@ -1,0 +1,867 @@
+{
+  "lockfileVersion": 2,
+  "subjects": {
+    "com.form5500data/plan-data": {
+      "kind": "mcp-server",
+      "source": {
+        "client": "manual",
+        "file": "registry.modelcontextprotocol.io"
+      },
+      "transport": {
+        "type": "http",
+        "url": "https://api.form5500data.com/mcp"
+      },
+      "protocol": {
+        "era": "legacy",
+        "version": "2025-11-25"
+      },
+      "serverInfo": {
+        "name": "Plan Data API",
+        "version": "1.30.0"
+      },
+      "capabilities": {
+        "experimental": {},
+        "prompts": {
+          "listChanged": false
+        },
+        "resources": {
+          "listChanged": false,
+          "subscribe": false
+        },
+        "tools": {
+          "listChanged": false
+        }
+      },
+      "instructions": "Plan Data API: clean, multi-year data on U.S. retirement plans (401(k), 403(b), pension and other plans), built from\nthe Department of Labor's public Form 5500 filings, plan years 2021 onward. A plan is identified by its sponsor's EIN\nplus its 3-digit plan number (pn).\n\nTypical flow: search_plans (by company name) -> get_plan with a result's ein and pn -> get_plan_history or\nget_plan_fees for detail. find_plan_changes lists recordkeeper switches, new plans, mergers and terminations across\nplans. list_prospects lists many plans at once by industry, place and size, with sponsor address, participants,\nassets and inception date. get_coverage (free) lists what the data covers and every limitation.\n\nEvery answer is JSON with `data` and `meta`; `meta.coverage_notes` says what that record can't show. In general: small\nplans (about 9 in 10) file no Schedule C, so they have no recordkeeper, advisor or fee breakdown; Schedule C omits\nproviders paid under $5,000, fees the employer pays directly (so many advisors don't appear) and fund expense ratios;\nthe investment lineup isn't in the data; participant counts use a new definition from plan year 2023; governmental\nplans (public universities, school districts, state pensions) and most church plans don't file a Form 5500, so\nthey aren't here. Each tool\nreturns what the Plan Data API's HTTP endpoint named in its description returns: hints that mention an endpoint\n(GET /search...) mean the matching tool here.\n\nNothing here is investment, legal, tax or fiduciary advice; the terms of use are at the API's /terms.\n\nPayments: each paid tool costs a fixed price per call (search_plans $0.01, get_plan $0.03, get_plan_history $0.25, get_plan_fees $0.10, find_plan_changes $0.25, list_prospects $0.25; get_coverage free), in USDC on Base (mainnet) (eip155:8453), with x402 over MCP. Called without payment, a paid tool returns isError with the x402 PaymentRequired object; an x402 MCP client signs the payment, sends it in _meta[\"x402/payment\"] and repeats the call. Errors and empty results aren't charged: the receipt in _meta[\"x402/payment-response\"] then shows amount 0 and no transaction. No crypto wallet? Buy prepaid credits by card at https://api.form5500data.com/buy and connect with the header 'Authorization: Bearer <key>': each paid tool then takes its price from the key's balance (same prices and rules), with no x402 needed.",
+      "tools": [
+        {
+          "name": "find_plan_changes",
+          "title": "Change events across plans: recordkeeper switches, new plans, mergers, terminations...",
+          "description": "Change events detected by comparing each plan's consecutive filings, newest filing first. Each event\nhas before/after values, a confidence, the year compared against, a plain-English detail and the ACK ID\nof the filing that shows it.\n\nProviders are compared by family, so a rebrand (Great-West → Empower) isn't a change. Each event also\nhas the plan's size around the event (`net_assets_at_event`), which `min_assets` and `sort=assets` use.\nThe newest plan year is still being filed, so its counts grow month to month.\n\nPrice: $0.25 per call, paid in USDC on Base (mainnet) with x402 (MCP transport), or from card credits (an 'Authorization: Bearer <key>' header). Without payment the tool returns the payment requirements. Errors and empty results aren't charged.\n\nSame data as GET /changes of the Plan Data API.",
+          "inputSchema": {
+            "properties": {
+              "ein": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Only this sponsor's plans (EIN, 9 digits, dashes allowed): what changed at one company.",
+                "title": "Ein"
+              },
+              "event_type": {
+                "anyOf": [
+                  {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Event type(s); repeat the parameter or separate with commas. One of: recordkeeper_change, advisor_added, advisor_removed, advisor_changed, auditor_change, audit_opinion_change, late_deposits_appeared, new_plan, plan_merged_in, plan_merged_out, plan_terminated, termination_resolution, filings_stopped, large_asset_jump. Meanings at `get_coverage`.",
+                "title": "Event Type"
+              },
+              "filer_size": {
+                "anyOf": [
+                  {
+                    "enum": ["large", "small"],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "large or small, in the event's plan year.",
+                "title": "Filer Size"
+              },
+              "from_recordkeeper": {
+                "anyOf": [
+                  {
+                    "maxLength": 100,
+                    "minLength": 3,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Only recordkeeper_change events away from this recordkeeper family (any brand name). Combine with `to_recordkeeper` for one move, e.g. Empower to Fidelity.",
+                "title": "From Recordkeeper"
+              },
+              "limit": {
+                "default": 25,
+                "description": "Events per page (1-50). Each event is about 200 tokens of JSON, so the default 25 keeps an answer compact; narrow the filters rather than asking for more.",
+                "maximum": 50,
+                "minimum": 1,
+                "title": "Limit",
+                "type": "integer"
+              },
+              "min_assets": {
+                "anyOf": [
+                  {
+                    "minimum": 0,
+                    "type": "number"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Minimum net assets around the event (`net_assets_at_event`: the larger of the event year's start and end).",
+                "title": "Min Assets"
+              },
+              "min_confidence": {
+                "default": "low",
+                "description": "Lowest confidence to include: high = high only, medium = high and medium, low = all.",
+                "enum": ["high", "medium", "low"],
+                "title": "Min Confidence",
+                "type": "string"
+              },
+              "offset": {
+                "default": 0,
+                "description": "Events to skip (0-500).",
+                "maximum": 500,
+                "minimum": 0,
+                "title": "Offset",
+                "type": "integer"
+              },
+              "plan_type": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Plan type, as in `search_plans` (e.g. 401k, dc, db).",
+                "title": "Plan Type"
+              },
+              "plan_year_from": {
+                "anyOf": [
+                  {
+                    "maximum": 2100,
+                    "minimum": 2000,
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Earliest plan year of the event.",
+                "title": "Plan Year From"
+              },
+              "plan_year_to": {
+                "anyOf": [
+                  {
+                    "maximum": 2100,
+                    "minimum": 2000,
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Latest plan year of the event.",
+                "title": "Plan Year To"
+              },
+              "pn": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "With `ein`: only this plan number.",
+                "title": "Pn"
+              },
+              "recordkeeper": {
+                "anyOf": [
+                  {
+                    "maxLength": 100,
+                    "minLength": 3,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Only recordkeeper_change events to or from this recordkeeper family (any brand name works).",
+                "title": "Recordkeeper"
+              },
+              "since": {
+                "anyOf": [
+                  {
+                    "format": "date",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Only events whose filing DOL received on or after this date (YYYY-MM-DD): \"what's new since I last checked\". Excludes filings_stopped, which no filing reveals.",
+                "title": "Since"
+              },
+              "sort": {
+                "default": "newest",
+                "description": "newest (the default: newest filing first) or assets (largest plan first, by `net_assets_at_event`).",
+                "enum": ["newest", "assets"],
+                "title": "Sort",
+                "type": "string"
+              },
+              "state": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Two-letter state of the sponsor (latest filing).",
+                "title": "State"
+              },
+              "to_recordkeeper": {
+                "anyOf": [
+                  {
+                    "maxLength": 100,
+                    "minLength": 3,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Only recordkeeper_change events to this recordkeeper family (any brand name).",
+                "title": "To Recordkeeper"
+              }
+            },
+            "title": "find_plan_changesArguments",
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Change events across plans: recordkeeper switches, new plans, mergers, terminations..."
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:e108b391b5501b49b1cb289b89610d1c9c7d525883019e4dc522e886362c1d0c"
+        },
+        {
+          "name": "get_coverage",
+          "title": "Data coverage and limitations",
+          "description": "What the data covers per plan year, every limitation, the coverage-note codes responses can carry,\nthe event types, the screening signals and the plan-type values. Free.\n\nAlso lists the prices and what isn't charged. Same data as GET /coverage of the Plan Data API.",
+          "inputSchema": {
+            "properties": {},
+            "title": "get_coverageArguments",
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Data coverage and limitations"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:500efc8348ec9a4b7894b84ba7ed01d3176d507af0955051ffa6662bd214eb81"
+        },
+        {
+          "name": "get_plan",
+          "title": "Latest clean profile of one plan",
+          "description": "The plan as of its latest filing: identity and status, plan type and features, assets and\nparticipants, average balance and approximate return, recordkeeper, advisors and auditor, headline fees,\nscreening signals and data-quality flags.\n\nWhen the latest year is a small-plan filing (no Schedule C), the recordkeeper shown is the last one seen\non an earlier Schedule C, labeled with its year and a lower confidence. `availability` says which years\n`get_plan_history` and `get_plan_fees` will return.\n\nPrice: $0.03 per call, paid in USDC on Base (mainnet) with x402 (MCP transport), or from card credits (an 'Authorization: Bearer <key>' header). Without payment the tool returns the payment requirements. Errors and empty results aren't charged.\n\nSame data as GET /plan of the Plan Data API.",
+          "inputSchema": {
+            "properties": {
+              "ein": {
+                "description": "Sponsor EIN (9 digits, dashes allowed).",
+                "title": "Ein",
+                "type": "string"
+              },
+              "pn": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Plan number (1-999; 1 and 001 both work). Optional when the EIN sponsors only one retirement plan; otherwise the error lists the plans to choose from.",
+                "title": "Pn"
+              }
+            },
+            "required": ["ein"],
+            "title": "get_planArguments",
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Latest clean profile of one plan"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:9e8a76f1a03c38461b87c4a9e84de881386e9394c4985c59e767e96fa4e745bb"
+        },
+        {
+          "name": "get_plan_fees",
+          "title": "Schedule C fee breakdown in dollars and bps, with completeness notes",
+          "description": "For each large plan year: Schedule C pay by role (recordkeeping, advisory, participant advice, TPA,\ninvestment management, trustee, other) in dollars and basis points of average net assets; every provider\non the Schedule C with names as filed, codes, direct and indirect pay; Schedule H line 2i expenses as a\nsecond view; and a completeness rating with the reasons.\n\nSmall plans file no Schedule C: the response still succeeds, with `schedule_c_available: false` and the\nplan-paid expenses that small plans do report. Check `get_plan` `availability.fee_years` first to see\nwhich years have a breakdown. Fees are floors: see `meta.coverage_notes`.\n\nPrice: $0.10 per call, paid in USDC on Base (mainnet) with x402 (MCP transport), or from card credits (an 'Authorization: Bearer <key>' header). Without payment the tool returns the payment requirements. Errors and empty results aren't charged.\n\nSame data as GET /fees of the Plan Data API.",
+          "inputSchema": {
+            "properties": {
+              "ein": {
+                "description": "Sponsor EIN (9 digits, dashes allowed).",
+                "title": "Ein",
+                "type": "string"
+              },
+              "plan_year": {
+                "anyOf": [
+                  {
+                    "maximum": 2100,
+                    "minimum": 2000,
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "One plan year only. Default: every year.",
+                "title": "Plan Year"
+              },
+              "pn": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Plan number (1-999). Optional when the EIN has one plan.",
+                "title": "Pn"
+              }
+            },
+            "required": ["ein"],
+            "title": "get_plan_feesArguments",
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Schedule C fee breakdown in dollars and bps, with completeness notes"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:f65237ddd5533e31cbac762329098d3d1e5fcc4f642971ee251f5f4bfb4da907"
+        },
+        {
+          "name": "get_plan_history",
+          "title": "Every plan year of one plan: assets, participants, growth breakdown, providers, events",
+          "description": "One entry per plan year, oldest first: the filing used, assets and participants, average balance,\napproximate return, participant growth (flagged across the 2023 counting change), the growth breakdown\n(contributions, investment return, distributions, expenses, transfers), plan-paid expenses and Schedule C\nfees in bps, the year's recordkeeper / primary advisor / auditor, and the change events detected that\nyear.\n\nPrice: $0.25 per call, paid in USDC on Base (mainnet) with x402 (MCP transport), or from card credits (an 'Authorization: Bearer <key>' header). Without payment the tool returns the payment requirements. Errors and empty results aren't charged.\n\nSame data as GET /plan/history of the Plan Data API.",
+          "inputSchema": {
+            "properties": {
+              "ein": {
+                "description": "Sponsor EIN (9 digits, dashes allowed).",
+                "title": "Ein",
+                "type": "string"
+              },
+              "pn": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Plan number (1-999). Optional when the EIN has one plan.",
+                "title": "Pn"
+              }
+            },
+            "required": ["ein"],
+            "title": "get_plan_historyArguments",
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Every plan year of one plan: assets, participants, growth breakdown, providers, events"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:19bad437fb38fda2cde080ad51b7541fe27e18d7a93857d56fac7fa6b60b12b5"
+        },
+        {
+          "name": "list_prospects",
+          "title": "Bulk list of plans by industry, place and size: address, industry, participants, assets, inception date, recordkeeper",
+          "description": "A list of plans for prospecting or research, many per call: plan and sponsor name, mailing address,\nEIN and plan number, industry, plan type, effective (inception) date, participants and net assets at the\nend of the latest plan year, form type, recordkeeper and primary advisor last seen on Schedule C, and the\nfiling's ACK ID.\n\nFilter by industry, place (state, city, ZIP), size, plan type, effective date or recordkeeper. Large\n(long-form) filers only unless `filer_size` says otherwise. Use `search_plans` instead to find one company's\nplan by name, and `get_plan` for everything about one plan. Paging stops at offset 500: narrow the\nfilters to see more.\n\nPrice: $0.25 per call, paid in USDC on Base (mainnet) with x402 (MCP transport), or from card credits (an 'Authorization: Bearer <key>' header). Without payment the tool returns the payment requirements. Errors and empty results aren't charged.\n\nSame data as GET /prospects of the Plan Data API.",
+          "inputSchema": {
+            "properties": {
+              "city": {
+                "anyOf": [
+                  {
+                    "maxLength": 60,
+                    "minLength": 2,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Sponsor's city, as on the filing (case doesn't matter). Best with `state`.",
+                "title": "City"
+              },
+              "effective_after": {
+                "anyOf": [
+                  {
+                    "format": "date",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Only plans whose effective (inception) date is on or after this date (YYYY-MM-DD).",
+                "title": "Effective After"
+              },
+              "effective_before": {
+                "anyOf": [
+                  {
+                    "format": "date",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Only plans whose effective (inception) date is on or before this date (YYYY-MM-DD).",
+                "title": "Effective Before"
+              },
+              "filer_size": {
+                "default": "large",
+                "description": "large (the default) = long-form filers: Form 5500 with Schedule H, generally 100+ participants, with providers on Schedule C. small = 5500-SF or Schedule I. any = both.",
+                "enum": ["large", "small", "any"],
+                "title": "Filer Size",
+                "type": "string"
+              },
+              "include_ended": {
+                "default": false,
+                "description": "Include plans that are terminated, merged into another plan, or stopped filing. Off by default.",
+                "title": "Include Ended",
+                "type": "boolean"
+              },
+              "industry": {
+                "anyOf": [
+                  {
+                    "maxLength": 200,
+                    "minLength": 2,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "The sponsor's industry: words (\"restaurants\", \"car dealers\", \"law firms\") or a NAICS business code or its start (\"62\" = health care, \"5411\" = legal services). Separate several with commas. `meta.query.industry` lists the codes each one matched.",
+                "title": "Industry"
+              },
+              "limit": {
+                "default": 50,
+                "description": "Plans per page (1-100). The price is per call, whatever the limit.",
+                "maximum": 100,
+                "minimum": 1,
+                "title": "Limit",
+                "type": "integer"
+              },
+              "max_assets": {
+                "anyOf": [
+                  {
+                    "minimum": 0,
+                    "type": "number"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Maximum end-of-year net assets in dollars.",
+                "title": "Max Assets"
+              },
+              "max_participants": {
+                "anyOf": [
+                  {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Maximum end-of-year participants.",
+                "title": "Max Participants"
+              },
+              "min_assets": {
+                "anyOf": [
+                  {
+                    "minimum": 0,
+                    "type": "number"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Minimum end-of-year net assets in dollars, in the plan's latest plan year.",
+                "title": "Min Assets"
+              },
+              "min_participants": {
+                "anyOf": [
+                  {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Minimum end-of-year participants, in the plan's latest plan year.",
+                "title": "Min Participants"
+              },
+              "offset": {
+                "default": 0,
+                "description": "Plans to skip (0-500).",
+                "maximum": 500,
+                "minimum": 0,
+                "title": "Offset",
+                "type": "integer"
+              },
+              "plan_type": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Plan type, as in `search_plans` (e.g. 401k, dc, db).",
+                "title": "Plan Type"
+              },
+              "recordkeeper": {
+                "anyOf": [
+                  {
+                    "maxLength": 100,
+                    "minLength": 3,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Only plans whose latest Schedule C names this recordkeeper (any brand, matched to its family as in `search_plans`).",
+                "title": "Recordkeeper"
+              },
+              "sort": {
+                "default": "assets",
+                "description": "assets (largest first, the default), participants (most first), name (A-Z by sponsor) or newest_plan (latest effective date first).",
+                "enum": ["assets", "participants", "name", "newest_plan"],
+                "title": "Sort",
+                "type": "string"
+              },
+              "state": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Two-letter state of the sponsor's address, e.g. OH.",
+                "title": "State"
+              },
+              "zip": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Sponsor's ZIP code or its start (3-5 digits), e.g. 432 for the Columbus, OH area.",
+                "title": "Zip"
+              }
+            },
+            "title": "list_prospectsArguments",
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Bulk list of plans by industry, place and size: address, industry, participants, assets, inception date, recordkeeper"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:ea2f2028c2f28f24c3e7a569af57160b2586466cbc94162f55e618e8fedd0483"
+        },
+        {
+          "name": "search_plans",
+          "title": "Find plans by company name, EIN, state, size, recordkeeper or plan type",
+          "description": "Find plans. Give at least one of `name`, `ein`, `state` or `recordkeeper`; the other filters narrow\nthe list. Each result is a short summary: call `get_plan` with its `ein` and `pn` for the profile.\n\nWith `name`, results are ordered by match score, then size; without it, largest plans first. Plans\nthat ended are hidden unless `include_ended=true`. Paging stops at offset 500: narrow the filters to\nsee more.\n\nPrice: $0.01 per call, paid in USDC on Base (mainnet) with x402 (MCP transport), or from card credits (an 'Authorization: Bearer <key>' header). Without payment the tool returns the payment requirements. Errors and empty results aren't charged.\n\nSame data as GET /search of the Plan Data API.",
+          "inputSchema": {
+            "properties": {
+              "ein": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Sponsor EIN (9 digits, dashes allowed). Lists every retirement plan under it.",
+                "title": "Ein"
+              },
+              "filer_size": {
+                "anyOf": [
+                  {
+                    "enum": ["large", "small"],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "large = files Schedule H (generally 100+ participants; has providers and fees); small = 5500-SF or Schedule I.",
+                "title": "Filer Size"
+              },
+              "include_ended": {
+                "default": false,
+                "description": "Include plans that are terminated, merged into another plan, or stopped filing. Off by default.",
+                "title": "Include Ended",
+                "type": "boolean"
+              },
+              "limit": {
+                "default": 10,
+                "description": "Results per page (1-50).",
+                "maximum": 50,
+                "minimum": 1,
+                "title": "Limit",
+                "type": "integer"
+              },
+              "max_assets": {
+                "anyOf": [
+                  {
+                    "minimum": 0,
+                    "type": "number"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Maximum end-of-year net assets in dollars.",
+                "title": "Max Assets"
+              },
+              "max_participants": {
+                "anyOf": [
+                  {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Maximum end-of-year total participants.",
+                "title": "Max Participants"
+              },
+              "min_assets": {
+                "anyOf": [
+                  {
+                    "minimum": 0,
+                    "type": "number"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Minimum end-of-year net assets in dollars, latest plan year.",
+                "title": "Min Assets"
+              },
+              "min_participants": {
+                "anyOf": [
+                  {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Minimum end-of-year total participants.",
+                "title": "Min Participants"
+              },
+              "name": {
+                "anyOf": [
+                  {
+                    "maxLength": 100,
+                    "minLength": 2,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Company or plan name, as you know it. Fuzzy: typos, missing suffixes (Inc, LLC), DBA names and former names all match, and the last word can be a prefix (\"starb\"). Results come best match first with a `match` score.",
+                "title": "Name"
+              },
+              "offset": {
+                "default": 0,
+                "description": "Results to skip (0-500).",
+                "maximum": 500,
+                "minimum": 0,
+                "title": "Offset",
+                "type": "integer"
+              },
+              "plan_type": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Plan type: 401k, 403b, cash_balance, db_and_dc, defined_benefit, esop, ira_based, money_purchase, other_dc, profit_sharing, stock_bonus, target_benefit, type_not_coded, db, dc. `dc` = any defined contribution plan, `db` = any defined benefit plan.",
+                "title": "Plan Type"
+              },
+              "recordkeeper": {
+                "anyOf": [
+                  {
+                    "maxLength": 100,
+                    "minLength": 3,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Recordkeeper, any brand old or new (\"Empower\", \"Great-West\", \"Fidelity\"). Matched to the firm's family, so Great-West and Prudential filings count as Empower. Only plans that filed a Schedule C can match. `meta.query.recordkeeper` shows what it resolved to.",
+                "title": "Recordkeeper"
+              },
+              "state": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Two-letter state of the sponsor's address, e.g. TX.",
+                "title": "State"
+              }
+            },
+            "title": "search_plansArguments",
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Find plans by company name, EIN, state, size, recordkeeper or plan type"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:6964cb24c18b1d6353c2bd30ae167fd6ef13c3f32181fe063974d9dc9699366f"
+        }
+      ],
+      "digest": "sha256:5767edc315001ce46c67ee20f49b144640d8c01e2fcdc9d47f3648bbdf2a67f9"
+    }
+  }
+}

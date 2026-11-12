@@ -1,0 +1,927 @@
+{
+  "lockfileVersion": 2,
+  "subjects": {
+    "com.aqmania/catalog": {
+      "kind": "mcp-server",
+      "source": {
+        "client": "manual",
+        "file": "registry.modelcontextprotocol.io"
+      },
+      "transport": {
+        "type": "http",
+        "url": "https://aqmania.com/api/mcp"
+      },
+      "protocol": {
+        "era": "legacy",
+        "version": "2025-06-18"
+      },
+      "serverInfo": {
+        "name": "aquamania-platform",
+        "title": "AquaMania — оснащение спортобъектов",
+        "version": "1.0.0"
+      },
+      "capabilities": {
+        "tools": {
+          "listChanged": false
+        }
+      },
+      "instructions": "CPQ-инструменты AquaMania для оснащения раздевалок: list_concepts → configure_locker → get_quote → make_kp. Цены реальные. Читающие инструменты публичны; пишущие (make_kp/make_tender_package/make_project/dealer_order) требуют API-ключ в заголовке Authorization: Bearer aqm_live_… (получить у менеджера AquaMania, 8 800 700 99 12). Диагностика авторизации различима: HTTP 401 + structuredContent.error=\"missing_api_key\" — заголовок не передан; 401 + \"invalid_api_key\" — ключ не распознан (проверьте формат/опечатку); 403 + \"revoked_api_key\" — ключ отозван; 503 + \"db_unavailable\" — проверить ключ временно нельзя, дело не в вас; 403 + \"insufficient_scope\" — инструмент вне прав ключа. НЕТ КЛЮЧА? Звонить никуда не нужно: вызовите request_api_key (достаточно email), заявку одобряет человек, затем заберите ключ через check_api_key_request.",
+      "tools": [
+        {
+          "name": "calc_nmck",
+          "description": "Рассчитать НМЦК (начальную максимальную цену контракта) методом сопоставимых рыночных цен, ст. 22 ФЗ-44, по конфигурации раздевалки. Возвращает 3 предложения по позициям (№1 — цена производителя, №2/№3 — РАСЧЁТНЫЕ по модели разброса +9%/+17%, не полученные КП — для закупки заменить реальными), среднюю, коэффициент вариации и НМЦК. Без файлов.",
+          "inputSchema": {
+            "properties": {
+              "concept": {
+                "enum": ["max", "bench", "bench3", "bench4"],
+                "type": "string"
+              },
+              "lockers": {
+                "type": "number"
+              },
+              "material": {
+                "enum": ["ЛДСП", "HPL"],
+                "type": "string"
+              },
+              "name": {
+                "description": "организация-заказчик",
+                "type": "string"
+              },
+              "seats": {
+                "type": "number"
+              },
+              "walls": {
+                "items": {
+                  "properties": {
+                    "label": {
+                      "description": "метка стены, напр. «Стена A»",
+                      "type": "string"
+                    },
+                    "len": {
+                      "description": "длина стены, мм",
+                      "type": "number"
+                    },
+                    "openings": {
+                      "description": "проёмы стены (двери/колонны), в них шкафы не ставятся",
+                      "items": {
+                        "properties": {
+                          "len": {
+                            "type": "number"
+                          },
+                          "start": {
+                            "type": "number"
+                          }
+                        },
+                        "required": ["len", "start"],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    }
+                  },
+                  "required": ["len"],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "width": {
+                "type": "number"
+              }
+            },
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "meta": {
+            "requiresApiKey": false
+          },
+          "digest": "sha256:d2ddc5f933383d64ad4d6c6522f3db9d3de61ca3fd94fb2eb34ec95b55903c02"
+        },
+        {
+          "name": "calc_nmck_cart",
+          "description": "НМЦК (ст. 22 ФЗ-44) по ЛЮБОЙ корзине каталога или явным позициям — для агента закупщика (не только раздевалки). Передайте cart:[{article,qty}] (артикулы — через find_product; имя/цена берутся из прайса производителя как источник №1) ИЛИ items:[{name,qty,price}] с собственными ценами заказчика. Опц. coeffs — свои коэффициенты рыночного разброса (по умолчанию 1.0/1.09/1.17). Возвращает по позициям 3 ценовых предложения, среднюю, коэффициент вариации V, однородность (V≤33%) и НМЦК. Без файлов.",
+          "inputSchema": {
+            "properties": {
+              "cart": {
+                "description": "позиции каталога [{article, qty}] — цены из прайса производителя (источник №1)",
+                "items": {
+                  "properties": {
+                    "article": {
+                      "type": "string"
+                    },
+                    "qty": {
+                      "type": "number"
+                    }
+                  },
+                  "required": ["article", "qty"],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "coeffs": {
+                "description": "опц. коэффициенты рыночного разброса (≥2 значения), напр. [1.0, 1.08, 1.15]",
+                "items": {
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              "items": {
+                "description": "явные позиции с ценами заказчика [{name, qty, price, article?}] — альтернатива cart",
+                "items": {
+                  "properties": {
+                    "article": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "price": {
+                      "type": "number"
+                    },
+                    "qty": {
+                      "type": "number"
+                    }
+                  },
+                  "required": ["name", "price", "qty"],
+                  "type": "object"
+                },
+                "type": "array"
+              }
+            },
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "meta": {
+            "requiresApiKey": false
+          },
+          "digest": "sha256:8bd1624b4c2d39a0510e37fe40e5be357e2962243363d02498ab4d57ee0828cc"
+        },
+        {
+          "name": "check_api_key_request",
+          "description": "Проверить статус заявки на API-ключ и ЗАБРАТЬ ключ, если она одобрена. Принимает requestToken из request_api_key. Статусы: pending — решение ещё не принято (опрашивайте не чаще раза в 10 минут); approved — в ответе поле apiKey, показывается ОДИН раз, сохраните его; rejected — отказ с причиной; already_claimed — ключ уже забирали ранее.",
+          "inputSchema": {
+            "properties": {
+              "requestToken": {
+                "description": "секрет заявки, выданный request_api_key",
+                "type": "string"
+              }
+            },
+            "required": ["requestToken"],
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "meta": {
+            "requiresApiKey": false
+          },
+          "digest": "sha256:3786623460b44669875ac5cda1789c9edbf55718bdb9d3b1a9c691ee044a0426"
+        },
+        {
+          "name": "configure_locker",
+          "description": "Рассчитать раскладку шкафов для раздевалок по стенам (с учётом проёмов) и цену. Возвращает число шкафов, мест, итог (₽) и сегменты для визуализации.",
+          "inputSchema": {
+            "properties": {
+              "concept": {
+                "description": "max=2:2 без скамьи; bench/bench3/bench4=со скамьёй (2/3/4 места)",
+                "enum": ["max", "bench", "bench3", "bench4"],
+                "type": "string"
+              },
+              "material": {
+                "description": "материал (HPL — влагостойкий, для бассейновых зон)",
+                "enum": ["ЛДСП", "HPL"],
+                "type": "string"
+              },
+              "walls": {
+                "description": "стены помещения",
+                "items": {
+                  "properties": {
+                    "label": {
+                      "description": "метка стены, напр. «Стена A»",
+                      "type": "string"
+                    },
+                    "len": {
+                      "description": "длина стены, мм",
+                      "type": "number"
+                    },
+                    "openings": {
+                      "description": "проёмы стены (двери/колонны), в них шкафы не ставятся",
+                      "items": {
+                        "properties": {
+                          "len": {
+                            "type": "number"
+                          },
+                          "start": {
+                            "type": "number"
+                          }
+                        },
+                        "required": ["len", "start"],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    }
+                  },
+                  "required": ["len"],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "width": {
+                "description": "ширина секции шкафа, мм (600/700/800 для «без скамьи»; шире для скамьи — см. list_concepts)",
+                "type": "number"
+              }
+            },
+            "required": ["walls"],
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "meta": {
+            "requiresApiKey": false
+          },
+          "digest": "sha256:961d896dfaee2204690cd7eff5149cb6336d7e18970b2b2b5b7607abc2bc63d1"
+        },
+        {
+          "name": "dealer_order",
+          "description": "Разместить заказ от дилера по нетто-ценам. Принимает позиции [{article, qty}] (артикулы — через find_product) и контактный телефон. Дилерские цены — если API-ключ выдан на дилерский аккаунт; иначе прайсовые. Создаёт заказ, уведомляет менеджера, возвращает № заказа и итог.",
+          "inputSchema": {
+            "properties": {
+              "comment": {
+                "description": "комментарий к заказу (сроки, адрес доставки)",
+                "type": "string"
+              },
+              "items": {
+                "description": "позиции заказа",
+                "items": {
+                  "properties": {
+                    "article": {
+                      "type": "string"
+                    },
+                    "qty": {
+                      "type": "number"
+                    }
+                  },
+                  "required": ["article", "qty"],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "name": {
+                "description": "имя/организация (если телефона нет в базе)",
+                "type": "string"
+              },
+              "phone": {
+                "description": "контактный телефон (на скидку не влияет; по умолчанию — телефон аккаунта ключа)",
+                "type": "string"
+              }
+            },
+            "required": ["items"],
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "meta": {
+            "requiresApiKey": true
+          },
+          "digest": "sha256:afb6ddbc95b622fb4c0ceacb4a5f7d08ed63f295e0c47263546f6e18d5260a9b"
+        },
+        {
+          "name": "find_product",
+          "description": "Поиск по всему каталогу продукции AquaMania (162 SKU: шкафы, ПВХ-стеллажи, скамьи, тумбы, дорожки, алюминий). Ищет по артикулу (платформенному и 1С), названию, габаритам, описанию; фильтры по категории и материалу. Каждая позиция возвращает description (габариты · материал · особенности конструкции) и size — по ним и выбирайте. Цена НЕ означает «базовость» модели: если у нескольких позиций совпали габариты и материал, поле note предупредит об этом — уточните у заказчика, а не угадывайте.",
+          "inputSchema": {
+            "properties": {
+              "category": {
+                "description": "фильтр по категории",
+                "enum": ["Шкафы", "ПВХ-изделия", "Алюминий", "Тумбы и дорожки"],
+                "type": "string"
+              },
+              "material": {
+                "description": "фильтр по материалу",
+                "enum": ["ЛДСП", "HPL", "ПВХ", "Алюминий"],
+                "type": "string"
+              },
+              "query": {
+                "description": "строка поиска: артикул / «стеллаж» / «2:2» / «дорожка»…",
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "meta": {
+            "requiresApiKey": false
+          },
+          "digest": "sha256:2039ac49cae5d6a8c4db790a5d1d55fe5dfc9beded4f13a8da15a53edc70041a"
+        },
+        {
+          "name": "get_quote",
+          "description": "Сформировать спецификацию и итоговую цену (данные КП) без генерации файлов. Принимает параметры конфигуратора (walls/width/material/concept) либо явное число шкафов (lockers) или мест (seats).",
+          "inputSchema": {
+            "properties": {
+              "concept": {
+                "enum": ["max", "bench", "bench3", "bench4"],
+                "type": "string"
+              },
+              "lockers": {
+                "description": "явное число шкафов (если без раскладки по стенам)",
+                "type": "number"
+              },
+              "material": {
+                "enum": ["ЛДСП", "HPL"],
+                "type": "string"
+              },
+              "name": {
+                "description": "имя/организация заказчика",
+                "type": "string"
+              },
+              "seats": {
+                "description": "требуемое число мест",
+                "type": "number"
+              },
+              "walls": {
+                "items": {
+                  "properties": {
+                    "label": {
+                      "description": "метка стены, напр. «Стена A»",
+                      "type": "string"
+                    },
+                    "len": {
+                      "description": "длина стены, мм",
+                      "type": "number"
+                    },
+                    "openings": {
+                      "description": "проёмы стены (двери/колонны), в них шкафы не ставятся",
+                      "items": {
+                        "properties": {
+                          "len": {
+                            "type": "number"
+                          },
+                          "start": {
+                            "type": "number"
+                          }
+                        },
+                        "required": ["len", "start"],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    }
+                  },
+                  "required": ["len"],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "width": {
+                "type": "number"
+              }
+            },
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "meta": {
+            "requiresApiKey": false
+          },
+          "digest": "sha256:b7ad813cf232c2927f60721e3349a13f384f61d6c59c45044628d4fabd7a8af8"
+        },
+        {
+          "name": "list_concepts",
+          "description": "Концепции оснащения раздевалок шкафами AquaMania (без скамьи / со скамьёй на 2/3/4 места) с реальными ценами по материалам (ЛДСП/HPL) и ширинам секций. Вызывать первым, чтобы узнать допустимые material/width/concept.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {},
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "meta": {
+            "requiresApiKey": false
+          },
+          "digest": "sha256:9ca6291e065735787d653a42363998d5b03db6fd87486e038367f6e3aa3527ad"
+        },
+        {
+          "name": "make_kp",
+          "description": "Сгенерировать готовое коммерческое предложение и ТЗ (docx + xlsx) по параметрам раздевалок и вернуть ссылки на скачивание. Реквизиты поставщика — ИП Гусев, цены реальные.",
+          "inputSchema": {
+            "properties": {
+              "concept": {
+                "enum": ["max", "bench", "bench3", "bench4"],
+                "type": "string"
+              },
+              "lockers": {
+                "type": "number"
+              },
+              "material": {
+                "enum": ["ЛДСП", "HPL"],
+                "type": "string"
+              },
+              "name": {
+                "description": "имя/организация заказчика (для шапки КП)",
+                "type": "string"
+              },
+              "phone": {
+                "type": "string"
+              },
+              "seats": {
+                "type": "number"
+              },
+              "walls": {
+                "items": {
+                  "properties": {
+                    "label": {
+                      "description": "метка стены, напр. «Стена A»",
+                      "type": "string"
+                    },
+                    "len": {
+                      "description": "длина стены, мм",
+                      "type": "number"
+                    },
+                    "openings": {
+                      "description": "проёмы стены (двери/колонны), в них шкафы не ставятся",
+                      "items": {
+                        "properties": {
+                          "len": {
+                            "type": "number"
+                          },
+                          "start": {
+                            "type": "number"
+                          }
+                        },
+                        "required": ["len", "start"],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    }
+                  },
+                  "required": ["len"],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "width": {
+                "type": "number"
+              }
+            },
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "meta": {
+            "requiresApiKey": true
+          },
+          "digest": "sha256:66aae84baf5c1b717deb235bdac323e824bccdeb3e10b3c0efbef9e26053f97d"
+        },
+        {
+          "name": "make_project",
+          "description": "Сгенерировать готовое КП + ТЗ (docx/xlsx) на объект целиком из зон (мультикатегория: шкафы + стеллажи + скамьи + дорожки и т.д.) и вернуть ссылки на скачивание. Реквизиты — ИП Гусев, цены реальные.",
+          "inputSchema": {
+            "properties": {
+              "name": {
+                "description": "имя/организация заказчика (шапка КП)",
+                "type": "string"
+              },
+              "phone": {
+                "type": "string"
+              },
+              "zones": {
+                "description": "зоны объекта",
+                "items": {
+                  "properties": {
+                    "concept": {
+                      "description": "(locker) концепция (см. list_concepts)",
+                      "enum": ["max", "bench", "bench3", "bench4"],
+                      "type": "string"
+                    },
+                    "items": {
+                      "description": "(catalog) позиции [{article, qty}] — артикулы стеллажей/скамей/тумб/дорожек/корзин через find_product",
+                      "items": {
+                        "properties": {
+                          "article": {
+                            "type": "string"
+                          },
+                          "qty": {
+                            "type": "number"
+                          }
+                        },
+                        "required": ["article", "qty"],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "label": {
+                      "description": "название зоны, напр. «Раздевалка муж.» / «Зона бассейна» / «Хранение»",
+                      "type": "string"
+                    },
+                    "lockers": {
+                      "description": "(locker) явное число шкафов",
+                      "type": "number"
+                    },
+                    "material": {
+                      "description": "(locker) материал",
+                      "enum": ["ЛДСП", "HPL"],
+                      "type": "string"
+                    },
+                    "seats": {
+                      "description": "(locker) требуемое число мест",
+                      "type": "number"
+                    },
+                    "type": {
+                      "description": "locker — раздевалка (расчёт шкафов по стенам/местам); catalog — позиции каталога по артикулам",
+                      "enum": ["locker", "catalog"],
+                      "type": "string"
+                    },
+                    "walls": {
+                      "description": "(locker) стены раздевалки",
+                      "items": {
+                        "properties": {
+                          "label": {
+                            "description": "метка стены, напр. «Стена A»",
+                            "type": "string"
+                          },
+                          "len": {
+                            "description": "длина стены, мм",
+                            "type": "number"
+                          },
+                          "openings": {
+                            "description": "проёмы стены (двери/колонны), в них шкафы не ставятся",
+                            "items": {
+                              "properties": {
+                                "len": {
+                                  "type": "number"
+                                },
+                                "start": {
+                                  "type": "number"
+                                }
+                              },
+                              "required": ["len", "start"],
+                              "type": "object"
+                            },
+                            "type": "array"
+                          }
+                        },
+                        "required": ["len"],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "width": {
+                      "description": "(locker) ширина секции шкафа, мм",
+                      "type": "number"
+                    }
+                  },
+                  "required": ["type"],
+                  "type": "object"
+                },
+                "type": "array"
+              }
+            },
+            "required": ["zones"],
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "meta": {
+            "requiresApiKey": true
+          },
+          "digest": "sha256:dee553995ccec2bff4c45cc81a27a2df14d686ab8e5700794f9af735f87bfed9"
+        },
+        {
+          "name": "make_tender_package",
+          "description": "Собрать полный тендерпакет 44/223-ФЗ по конфигурации раздевалки: КП + ТЗ + Обоснование НМЦК + спецификация (xlsx) → ZIP со ссылкой на скачивание.",
+          "inputSchema": {
+            "properties": {
+              "concept": {
+                "enum": ["max", "bench", "bench3", "bench4"],
+                "type": "string"
+              },
+              "lockers": {
+                "type": "number"
+              },
+              "material": {
+                "enum": ["ЛДСП", "HPL"],
+                "type": "string"
+              },
+              "name": {
+                "description": "организация-заказчик",
+                "type": "string"
+              },
+              "seats": {
+                "type": "number"
+              },
+              "walls": {
+                "items": {
+                  "properties": {
+                    "label": {
+                      "description": "метка стены, напр. «Стена A»",
+                      "type": "string"
+                    },
+                    "len": {
+                      "description": "длина стены, мм",
+                      "type": "number"
+                    },
+                    "openings": {
+                      "description": "проёмы стены (двери/колонны), в них шкафы не ставятся",
+                      "items": {
+                        "properties": {
+                          "len": {
+                            "type": "number"
+                          },
+                          "start": {
+                            "type": "number"
+                          }
+                        },
+                        "required": ["len", "start"],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    }
+                  },
+                  "required": ["len"],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "width": {
+                "type": "number"
+              }
+            },
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "meta": {
+            "requiresApiKey": true
+          },
+          "digest": "sha256:1becf308559362d64c8f00ce32aa68e7ccd5d53a5132d5b3d09d81552bbcdf82"
+        },
+        {
+          "name": "make_tender_package_cart",
+          "description": "Собрать полный тендерпакет 44/223-ФЗ по ПРОИЗВОЛЬНОЙ корзине каталога (не только раздевалки): КП + ТЗ + Обоснование НМЦК (ст. 22) + спецификация xlsx + проект контракта + опись → ZIP со ссылкой. Пара к calc_nmck_cart: сначала посчитайте НМЦК по корзине, затем этим тулом соберите пакет по той же корзине. Артикулы — через find_product. Требует API-ключ (генерация файлов).",
+          "inputSchema": {
+            "properties": {
+              "cart": {
+                "description": "позиции каталога [{article, qty}] — цены/имена из прайса производителя",
+                "items": {
+                  "properties": {
+                    "article": {
+                      "type": "string"
+                    },
+                    "qty": {
+                      "type": "number"
+                    }
+                  },
+                  "required": ["article", "qty"],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "name": {
+                "description": "организация-заказчик (шапка КП/ТЗ)",
+                "type": "string"
+              },
+              "phone": {
+                "description": "телефон для связи (опц.)",
+                "type": "string"
+              }
+            },
+            "required": ["cart"],
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "meta": {
+            "requiresApiKey": true
+          },
+          "digest": "sha256:aac6be6233ed75b8c3aed6784fd87e544edb659f5cae00d8622904d1de868c8c"
+        },
+        {
+          "name": "object_status",
+          "description": "Статус СВОИХ заказов/КП. Нужен API-ключ, выданный менеджером на аккаунт клиента/дилера. Без аргументов — список последних заказов аккаунта; orderId — детально один заказ. Статусы ведёт менеджер AquaMania.",
+          "inputSchema": {
+            "properties": {
+              "orderId": {
+                "description": "№ заказа (из dealer_order)",
+                "type": "number"
+              }
+            },
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "meta": {
+            "requiresApiKey": true
+          },
+          "digest": "sha256:74f4397b63222401d5ae2121f6ddb48349f36762b7d83282a0e1d79bc440ddc1"
+        },
+        {
+          "name": "quote_project",
+          "description": "Рассчитать смету на объект ЦЕЛИКОМ из нескольких зон (раздевалки + душевые + зона бассейна + хранение). Каждая зона — раздевалка (параметрический расчёт шкафов) или набор позиций каталога. Возвращает разбивку по зонам, общий итог (₽) и общую НМЦК. Без файлов.",
+          "inputSchema": {
+            "properties": {
+              "name": {
+                "description": "организация-заказчик",
+                "type": "string"
+              },
+              "zones": {
+                "description": "зоны объекта",
+                "items": {
+                  "properties": {
+                    "concept": {
+                      "description": "(locker) концепция (см. list_concepts)",
+                      "enum": ["max", "bench", "bench3", "bench4"],
+                      "type": "string"
+                    },
+                    "items": {
+                      "description": "(catalog) позиции [{article, qty}] — артикулы стеллажей/скамей/тумб/дорожек/корзин через find_product",
+                      "items": {
+                        "properties": {
+                          "article": {
+                            "type": "string"
+                          },
+                          "qty": {
+                            "type": "number"
+                          }
+                        },
+                        "required": ["article", "qty"],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "label": {
+                      "description": "название зоны, напр. «Раздевалка муж.» / «Зона бассейна» / «Хранение»",
+                      "type": "string"
+                    },
+                    "lockers": {
+                      "description": "(locker) явное число шкафов",
+                      "type": "number"
+                    },
+                    "material": {
+                      "description": "(locker) материал",
+                      "enum": ["ЛДСП", "HPL"],
+                      "type": "string"
+                    },
+                    "seats": {
+                      "description": "(locker) требуемое число мест",
+                      "type": "number"
+                    },
+                    "type": {
+                      "description": "locker — раздевалка (расчёт шкафов по стенам/местам); catalog — позиции каталога по артикулам",
+                      "enum": ["locker", "catalog"],
+                      "type": "string"
+                    },
+                    "walls": {
+                      "description": "(locker) стены раздевалки",
+                      "items": {
+                        "properties": {
+                          "label": {
+                            "description": "метка стены, напр. «Стена A»",
+                            "type": "string"
+                          },
+                          "len": {
+                            "description": "длина стены, мм",
+                            "type": "number"
+                          },
+                          "openings": {
+                            "description": "проёмы стены (двери/колонны), в них шкафы не ставятся",
+                            "items": {
+                              "properties": {
+                                "len": {
+                                  "type": "number"
+                                },
+                                "start": {
+                                  "type": "number"
+                                }
+                              },
+                              "required": ["len", "start"],
+                              "type": "object"
+                            },
+                            "type": "array"
+                          }
+                        },
+                        "required": ["len"],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "width": {
+                      "description": "(locker) ширина секции шкафа, мм",
+                      "type": "number"
+                    }
+                  },
+                  "required": ["type"],
+                  "type": "object"
+                },
+                "type": "array"
+              }
+            },
+            "required": ["zones"],
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "meta": {
+            "requiresApiKey": false
+          },
+          "digest": "sha256:aa260bde2b601f6cddbe7c9bd7fa0e387ccd3fa92cebb3f6979dfd43244dfb2f"
+        },
+        {
+          "name": "request_api_key",
+          "description": "Запросить собственный API-ключ к этому MCP-серверу — САМООБСЛУЖИВАНИЕ, звонить никуда не нужно. Вызывайте, когда упёрлись в 401 missing_api_key на пишущем инструменте (make_kp, make_project, тендерпакеты). Заявку рассматривает человек (владелец платформы), обычно в рабочее время в течение дня. Возвращает requestToken — СОХРАНИТЕ ЕГО: только по нему потом забирается ключ через check_api_key_request. Права выдаваемого ключа: все инструменты, кроме dealer_order (заказы оформляет менеджер). Квота: 100 вызовов/сутки, 1000/месяц.",
+          "inputSchema": {
+            "properties": {
+              "agent": {
+                "description": "как называется ваш агент/продукт",
+                "type": "string"
+              },
+              "contact": {
+                "description": "телефон или телеграм для связи (не обязателен, но ускоряет решение)",
+                "type": "string"
+              },
+              "email": {
+                "description": "рабочий email — на него уйдёт уведомление о решении (обязателен)",
+                "type": "string"
+              },
+              "org": {
+                "description": "организация или проект, от имени которого работает агент",
+                "type": "string"
+              },
+              "purpose": {
+                "description": "зачем нужен доступ: напр. «подбор и КП на оснащение бассейна для заказчика», «расчёт НМЦК по 44-ФЗ»",
+                "type": "string"
+              }
+            },
+            "required": ["email"],
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "meta": {
+            "requiresApiKey": false
+          },
+          "digest": "sha256:2c2331ffc076b20ce8491b1fb895839d457d412b8655eef2ede4a383d3a21a7e"
+        }
+      ],
+      "digest": "sha256:13ee47cdf7c4d0c24804c428866f18350d5c7c88a0607391521b93f682d3c44e"
+    }
+  }
+}

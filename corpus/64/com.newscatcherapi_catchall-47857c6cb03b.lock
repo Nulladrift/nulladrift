@@ -1,0 +1,3706 @@
+{
+  "lockfileVersion": 2,
+  "subjects": {
+    "com.newscatcherapi/catchall": {
+      "kind": "mcp-server",
+      "source": {
+        "client": "manual",
+        "file": "registry.modelcontextprotocol.io"
+      },
+      "transport": {
+        "type": "http",
+        "url": "https://catchall-mcp.newscatcherapi.com/mcp"
+      },
+      "protocol": {
+        "era": "modern",
+        "version": "2026-07-28",
+        "supportedVersions": ["2026-07-28"]
+      },
+      "serverInfo": {
+        "name": "Newscatcher CatchAll API",
+        "version": "4.1.3"
+      },
+      "capabilities": {
+        "extensions": {
+          "io.modelcontextprotocol/ui": {}
+        },
+        "logging": {},
+        "prompts": {
+          "listChanged": false
+        },
+        "resources": {
+          "listChanged": false,
+          "subscribe": false
+        },
+        "tools": {
+          "listChanged": false
+        }
+      },
+      "instructions": "This server allows you to search the web using natural language queries via the Newscatcher CatchAll API.\n\nIMPORTANT: Most tools require a CatchAll API key. Get one at https://platform.newscatcherapi.com/\nExceptions: `check_health` and `get_version` do not require an API key.\n\n## Authentication\nAPI key is resolved in this order (first match wins):\n1. `api_key` tool parameter — pass it directly in any tool call.\n2. `x-api-key` HTTP header — set once in your MCP client config (recommended for hosted deployments).\n3. `Authorization: Bearer <key>` HTTP header — alternative header-based auth.\n4. `?apiKey=YOUR_KEY` URL query parameter — works only for direct server access (not forwarded by the FastMCP Gateway).\n5. `CATCHALL_API_KEY` environment variable — set on the server host.\nIf no key is found, tools return `Error: API key is required.`\n\n## When to use this MCP (tool selection policy)\n- Use generic web search for simple one-off question answering when a classic search is sufficient.\n- Prefer this MCP when the user needs:\n  - Multiple results, ranked lists, or broad discovery\n  - Structured filtering/extraction (`validators`, `enrichments`)\n  - Date-bounded investigations and event tracking\n  - Reproducible runs (`job_id`) with pagination and cost control (`limit`)\n  - Ongoing monitoring (`create_monitor`) and scheduled reruns\n- Use generic web search instead of this MCP when:\n  - The user wants a quick fact lookup with no extraction or follow-up workflow\n- Use this MCP only when:\n  - This API is available and the task benefits from CatchAll job/monitor capabilities\n- If uncertain, run `initialize_query`, then `submit_query` with a small `limit` to validate quality before scaling.\n\n## Core workflow: Jobs (submit -> poll -> pull)\n1. If you already have a `job_id`, skip submission and start with `get_job_status` / `pull_results`.\n2. (Optional) Use `initialize_query` to preview validators, enrichments, and dates before submitting.\n   It is preview-only: it does not create a job or start processing.\n   IMPORTANT: Initialize suggestions are LLM-generated and not deterministic. If you want to reuse them, pass them explicitly to `submit_query`.\n   Check `date_modification_message` for any date adjustments due to plan limits.\n3. Use `submit_query` to create a new job (`query` is required).\n   You can call it with only `query`; if `validators`, `enrichments`, `start_date`, and `end_date` are omitted, the API auto-selects/generates them.\n   Optional fields are independent: you can provide any subset (for example, `validators` only) and omitted fields are still auto-selected/generated.\n   IMPORTANT: `start_date`/`end_date` filter page discovery dates, not event dates in extracted content.\n   If you care about when events happened, add event-time validators/enrichments and verify `event_date` in results.\n   Use `limit` to control processed records and cost.\n4. Use `get_job_status` to poll job progress.\n   IMPORTANT: First check after ~1-2 minutes, then poll every 30-60 seconds.\n   Broad queries can take 10-30+ minutes; for long-running jobs, use a slower poll cadence (60-120 seconds).\n   Status flow: submitted -> analyzing -> fetching -> clustering -> enriching -> completed/failed.\n   Stop polling when status is `completed` or `failed`.\n5. Use `pull_results` to retrieve output.\n   Partial results can appear before completion (especially during `enriching`); `progress_validated` shows progress.\n   Do not wait for terminal status to start pulling.\n6. Poll/pull loop policy (must follow):\n   - Active statuses: `submitted`, `analyzing`, `fetching`, `clustering`, `enriching`.\n   - While status is active, keep polling every 30-60 seconds and keep calling `pull_results(page=1)`.\n   - During `enriching`, keep re-pulling because records can increase between pulls.\n   - Do not treat unchanged or empty partial pulls as final output.\n   - When status becomes `completed`, pull all pages (`page=1..total_pages`) to drain full results.\n   - After completed page drain, verify collected record count matches `valid_records`.\n   - If counts do not match, wait briefly and re-run a full page drain once (eventual consistency guard).\n   - When status becomes `failed`, do one final `pull_results(page=1)` to capture any partial output.\n   - Stop only after terminal status (`completed` or `failed`) and final pull is done.\n   - If transport/session fails mid-run, resume with the same `job_id` (do not resubmit unless user asks).\n7. Result presentation policy (must follow):\n   - When showing only the first batch (often 10 records), always also report:\n     `candidate_records`, `progress_validated`, `valid_records`, `page`, `page_size`, and `total_pages`.\n   - Always compare shown count to totals.\n   - `page`, `page_size`, and `total_pages` describe pagination for already processed currently available records.\n   - If `valid_records` is greater than shown count or `total_pages > 1`, explicitly tell the user there are more already-available results ready to pull via pagination.\n   - If `progress_validated < candidate_records`, explicitly tell the user additional results may still appear as processing continues.\n   - Distinguish:\n     - More already available now (pagination over completed/partial output)\n     - More potentially coming later (`progress_validated < candidate_records`)\n8. Use `continue_job` only when you need more records processed (cost-affecting).\n   This only applies to jobs originally submitted with `limit`.\n   If a job was submitted without `limit`, there is nothing to continue.\n   If `new_limit` is provided, it must be greater than the previous limit.\n   If `new_limit` is omitted, API defaults to your plan maximum. After continuing, repeat polling and pulling.\n\n## Understanding `limit` vs `page_size` — IMPORTANT\nThese two parameters serve completely different purposes:\n- `limit` (submit_query, continue_job): Controls how many records the system PROCESSES. Users pay per record, so limit controls cost. Start with a low limit (e.g. 10-50) to preview results cheaply, then use continue_job with a higher new_limit if more are needed.\n- `page_size` (pull_results default 100; list_user_jobs default 100): Controls how many records are RETURNED per API call (max 1000). This is free pagination — it does not affect cost or processing. If a job has 244 total records, use page/page_size to iterate through ALL of them across multiple pull_results calls (e.g. page=1, page=2, page=3 with page_size=100).\n- `page`, `page_size`, and `total_pages` are about records already available to pull; they do not indicate how many new records may still be produced.\n- Use `candidate_records` and `progress_validated` to track remaining processing (`progress_validated < candidate_records` means more results may still appear).\nTo get all records from a completed job, check total_pages in the pull_results response and iterate through every page. Do NOT use continue_job just to see more records that already exist — use pagination instead.\n\n## Enrichment output notes\n- `enrichment.enrichment_confidence` is always present in pulled records.\n- Company enrichments are structured objects with:\n  - `source_text`\n  - `confidence`\n  - `metadata.name`\n  - `metadata.domain_url`\n  - `metadata.domain_url_confidence`\n\n## Monitors workflow (explore -> refine -> automate)\n1. Submit and refine a job until results match your needs\n2. Use create_monitor with the completed job's ID and a schedule string that includes timezone (for example, `every day at 9 AM EST`)\n3. Use list_monitors, pull_monitor_results, list_monitor_jobs to manage and view results\n4. Use enable_monitor / disable_monitor / update_monitor to control monitors\n\n## Monitor constraints (API-enforced)\n- If `backfill=true`, reference job `end_date` must be within the last 7 days\n- If `backfill=false`, reference job age constraint does not apply\n- Minimum monitor schedule frequency depends on your plan\n- update_monitor can change webhook and run `limit`; schedule and reference job cannot be changed\n\n## Job modes (`mode` parameter in `submit_query`)\n- `base` (default): processing all the candidates, extracting enrichments per each record, deduplicating on the enrichments. Use when you need want the full analysis on the whole available dataset\n- `lite`: faster and lower cost — skips enrichments and deduplication by enrichments; returns validated records only. Use when you need quick results or only need validator output without enrichment metadata.\n- If omitted, the API defaults to `base`.\n\n## Plan limits\n- Use `get_user_limits` to retrieve your plan's feature limits when facing some limitations while trying to submit jobs or monitors.\n\n## Meta tools\n- check_health and get_version map to `/health` and `/version` and work without API key",
+      "tools": [
+        {
+          "name": "add_dataset_entities",
+          "title": "Add Dataset Entities",
+          "description": "Add existing entities to a dataset.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "api_key": {
+                "default": "",
+                "description": "CatchAll API key. Optional if provided via x-api-key header or CATCHALL_API_KEY env var.",
+                "type": "string"
+              },
+              "dataset_id": {
+                "description": "The dataset ID to add entities to.",
+                "type": "string"
+              },
+              "entity_ids": {
+                "description": "List of entity IDs to add (required).",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "required": ["dataset_id", "entity_ids"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "properties": {
+              "result": {
+                "type": "string"
+              }
+            },
+            "required": ["result"],
+            "type": "object",
+            "x-fastmcp-wrap-result": true
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "digest": "sha256:d68e2a0adea4d638b7d6f71c9dcc563dcff93d8f2dd37ffb40fe0de043a8aeaa"
+        },
+        {
+          "name": "add_project_resources",
+          "title": "Add Project Resources",
+          "description": "Add one or more resources to a project.\n\nWebhooks are first-class project resources: a webhook can belong to several\nprojects at the same time, and deleting a project only detaches its\nwebhooks — it never deletes them.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "api_key": {
+                "default": "",
+                "description": "CatchAll API key. Optional if provided via x-api-key header or CATCHALL_API_KEY env var.",
+                "type": "string"
+              },
+              "project_id": {
+                "description": "The project ID to add resources to.",
+                "type": "string"
+              },
+              "resources": {
+                "description": "A list of resource objects, each `{\"resource_type\": ..., \"resource_id\": ...}`.\n`resource_type` is one of: 'job', 'monitor', 'dataset', 'monitor_group', 'webhook'.\nMay also be passed as a JSON-string array for client compatibility.",
+                "anyOf": [
+                  {
+                    "items": {
+                      "additionalProperties": {
+                        "type": "string"
+                      },
+                      "type": "object"
+                    },
+                    "type": "array"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ]
+              }
+            },
+            "required": ["project_id", "resources"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "properties": {
+              "result": {
+                "type": "string"
+              }
+            },
+            "required": ["result"],
+            "type": "object",
+            "x-fastmcp-wrap-result": true
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "digest": "sha256:7b68c0e3e42250627c9a1a781fb8cbe266611bec0e4ee572ad19d0c16c9b32ae"
+        },
+        {
+          "name": "append_csv_to_dataset",
+          "title": "Append Csv To Dataset",
+          "description": "Append entities from a CSV file to an existing dataset.\n\nParses the CSV and appends its entities to the dataset. Each row must\nhave a `name` column; include a `domain` or `description` column (or both)\nfor meaningful enrichment. Duplicate rows (by name) are skipped. To create\na new dataset from a CSV, use `create_dataset_from_csv` instead.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "api_key": {
+                "default": "",
+                "description": "CatchAll API key. Optional if provided via x-api-key header or CATCHALL_API_KEY env var.",
+                "type": "string"
+              },
+              "dataset_id": {
+                "description": "The dataset ID to append entities to (required).",
+                "type": "string"
+              },
+              "file": {
+                "description": "CSV content (required) — raw CSV text or standard base64-encoded\nCSV, capped at 10 MB after decoding. Server-side file paths are\nnot accepted.",
+                "type": "string"
+              }
+            },
+            "required": ["dataset_id", "file"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "properties": {
+              "result": {
+                "type": "string"
+              }
+            },
+            "required": ["result"],
+            "type": "object",
+            "x-fastmcp-wrap-result": true
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "digest": "sha256:6a122fea6eda124f263a58e5bb2ce6f960516edfc4462a2646618f6f7162393a"
+        },
+        {
+          "name": "assign_webhook_resource",
+          "title": "Assign Webhook Resource",
+          "description": "Map a resource (job, monitor, or monitor_group) to a webhook.\n\nUse when:\n- You want a webhook to fire for a specific job or monitor's deliveries.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "api_key": {
+                "default": "",
+                "description": "CatchAll API key. Optional if provided via x-api-key header or CATCHALL_API_KEY env var.",
+                "type": "string"
+              },
+              "resource_id": {
+                "description": "The ID of the job/monitor/monitor_group to map.",
+                "type": "string"
+              },
+              "resource_type": {
+                "description": "Resource type: 'job', 'monitor', or 'monitor_group'.",
+                "type": "string"
+              },
+              "webhook_id": {
+                "description": "The webhook ID to attach the resource to.",
+                "type": "string"
+              }
+            },
+            "required": ["resource_id", "resource_type", "webhook_id"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "properties": {
+              "result": {
+                "type": "string"
+              }
+            },
+            "required": ["result"],
+            "type": "object",
+            "x-fastmcp-wrap-result": true
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "digest": "sha256:16e7c30d6631a54dbb11a41edf1e149e8707a8e9b4fbe08847a9b3c97b0873a1"
+        },
+        {
+          "name": "check_health",
+          "title": "Check Health",
+          "description": "Check API health status.\n\nThis tool maps to GET /health and does not require an API key.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "api_key": {
+                "default": "",
+                "description": "Optional CatchAll API key.",
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "outputSchema": {
+            "properties": {
+              "result": {
+                "type": "string"
+              }
+            },
+            "required": ["result"],
+            "type": "object",
+            "x-fastmcp-wrap-result": true
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "digest": "sha256:a38844555d8cefa07934bc7e83b7edd3b6c7d3b25bcdcd92409c2c61224c53b2"
+        },
+        {
+          "name": "continue_job",
+          "title": "Continue Job",
+          "description": "Expand a job by processing more records beyond the initial limit.\n\nThis increases the number of records the system processes (which costs\nadditional credits). Only use this when the user wants MORE data processed.\n\nThis only applies to jobs originally submitted with `limit`.\nIf a job was submitted without `limit`, there is nothing to continue.\nThe new_limit must be greater than the previous limit when provided.\nIf omitted, API defaults to your plan maximum.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "api_key": {
+                "default": "",
+                "description": "CatchAll API key. Optional if provided via x-api-key header or CATCHALL_API_KEY env var.",
+                "type": "string"
+              },
+              "job_id": {
+                "description": "The job ID to continue processing",
+                "type": "string"
+              },
+              "new_limit": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Optional new record processing limit (must exceed the previous limit if provided)."
+              }
+            },
+            "required": ["job_id"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "properties": {
+              "result": {
+                "type": "string"
+              }
+            },
+            "required": ["result"],
+            "type": "object",
+            "x-fastmcp-wrap-result": true
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "digest": "sha256:7bd035b63d54f4d96c80017ff43ff1a3f309bd070c4370a106b17d2f3a51e790"
+        },
+        {
+          "name": "create_dataset",
+          "title": "Create Dataset",
+          "description": "Create a new dataset.\n\nDatasets are collections of entities (companies/people). Connect a dataset to\na job via `submit_query(connected_dataset_ids=[...])` to narrow retrieval scope.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "api_key": {
+                "default": "",
+                "description": "CatchAll API key. Optional if provided via x-api-key header or CATCHALL_API_KEY env var.",
+                "type": "string"
+              },
+              "description": {
+                "default": "",
+                "description": "Optional dataset description.",
+                "type": "string"
+              },
+              "entity_ids": {
+                "anyOf": [
+                  {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Optional list of existing entity IDs to seed the dataset with."
+              },
+              "name": {
+                "description": "Human-readable dataset name (required).",
+                "type": "string"
+              },
+              "project_id": {
+                "default": "",
+                "description": "Optional project ID to associate this dataset with.",
+                "type": "string"
+              }
+            },
+            "required": ["name"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "properties": {
+              "result": {
+                "type": "string"
+              }
+            },
+            "required": ["result"],
+            "type": "object",
+            "x-fastmcp-wrap-result": true
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "digest": "sha256:0ef8f2d4905767719fdc6595fd3a5626955bbc8c1503ecac9db24d8ecf4bfb03"
+        },
+        {
+          "name": "create_dataset_from_csv",
+          "title": "Create Dataset From Csv",
+          "description": "Create a new dataset by uploading a CSV file.\n\nThe CSV must have at least a `name` column. For meaningful entity\nenrichment each row should also include a `domain` column or a\n`description` column (or both) — a row with only a name is accepted but\nproduces lower-quality enrichment. Additional columns are mapped to entity\nattributes. Max file size is plan-dependent. To add CSV rows to an\nexisting dataset, use `append_csv_to_dataset` instead.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "api_key": {
+                "default": "",
+                "description": "CatchAll API key. Optional if provided via x-api-key header or CATCHALL_API_KEY env var.",
+                "type": "string"
+              },
+              "description": {
+                "default": "",
+                "description": "Optional dataset description.",
+                "type": "string"
+              },
+              "file": {
+                "description": "CSV content (required) — raw CSV text or standard base64-encoded\nCSV, capped at 10 MB after decoding. Server-side file paths are\nnot accepted.",
+                "type": "string"
+              },
+              "name": {
+                "description": "Human-readable dataset name (required).",
+                "type": "string"
+              },
+              "project_id": {
+                "default": "",
+                "description": "Optional project ID to associate this dataset with (new in 1.6.1).",
+                "type": "string"
+              }
+            },
+            "required": ["file", "name"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "properties": {
+              "result": {
+                "type": "string"
+              }
+            },
+            "required": ["result"],
+            "type": "object",
+            "x-fastmcp-wrap-result": true
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "digest": "sha256:b981ca56c790a7b69cc07b437669105950a8fa8578501161d17853a3afc79bb0"
+        },
+        {
+          "name": "create_entities_batch",
+          "title": "Create Entities Batch",
+          "description": "Create multiple entities in one call.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "api_key": {
+                "default": "",
+                "description": "CatchAll API key. Optional if provided via x-api-key header or CATCHALL_API_KEY env var.",
+                "type": "string"
+              },
+              "entities": {
+                "anyOf": [
+                  {
+                    "items": {
+                      "additionalProperties": true,
+                      "type": "object"
+                    },
+                    "type": "array"
+                  },
+                  {
+                    "type": "string"
+                  }
+                ],
+                "description": "A list of entity objects. Each object requires a ``name``\nplus one identifying field for good enrichment: either a top-level\n``\"description\"`` or ``\"additional_attributes\": {\"company_attributes\": {\"domain\": \"...\"}}``.\nAlso accepts optional ``entity_type`` ('company'/'person').\nMay also be passed as a JSON-string array."
+              }
+            },
+            "required": ["entities"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "properties": {
+              "result": {
+                "type": "string"
+              }
+            },
+            "required": ["result"],
+            "type": "object",
+            "x-fastmcp-wrap-result": true
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "digest": "sha256:f3189a43d9d7ade0756feae191d839c3f4aba9b26f8fbf2f411a87b189333411"
+        },
+        {
+          "name": "create_entity",
+          "title": "Create Entity",
+          "description": "Create a single entity (a company or person).\n\n``name`` is required plus at least one identifying\nfield: either ``description`` or ``additional_attributes.company_attributes.domain``.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "additional_attributes": {
+                "anyOf": [
+                  {
+                    "additionalProperties": true,
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Optional structured attributes. For companies, use\n`{\"company_attributes\": {\"alternative_names\": [...], \"domain\": \"...\",\n\"key_persons\": [...], \"description\": \"...\"}}`."
+              },
+              "api_key": {
+                "default": "",
+                "description": "CatchAll API key. Optional if provided via x-api-key header or CATCHALL_API_KEY env var.",
+                "type": "string"
+              },
+              "description": {
+                "default": "",
+                "description": "Optional description of the entity.",
+                "type": "string"
+              },
+              "entity_type": {
+                "default": "",
+                "description": "Optional entity type: 'company' (default) or 'person'.",
+                "type": "string"
+              },
+              "external_entity_id": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Optional customer-supplied identifier linking this entity to\nan external system's record (new in 1.6.3)."
+              },
+              "name": {
+                "description": "Entity name (required).",
+                "type": "string"
+              }
+            },
+            "required": ["name"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "properties": {
+              "result": {
+                "type": "string"
+              }
+            },
+            "required": ["result"],
+            "type": "object",
+            "x-fastmcp-wrap-result": true
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "digest": "sha256:49ab2ee8a4bbf1f5ffb706f92b5b0cd0acb221f87713ddb5c3c6216db6864d6d"
+        },
+        {
+          "name": "create_monitor",
+          "title": "Create Monitor",
+          "description": "Create a recurring monitor from a completed job.\n\nMonitors re-run a job's query on a schedule. Use the explore -> refine -> automate\npattern: submit a job, refine until results match, then create a monitor.\n\nThe schedule is defined in natural language (e.g., 'every day at 9 AM EST').\nAlways include a timezone (in the schedule text or via the `timezone` arg).\nAPI-enforced constraints apply:\n- If `backfill=true`, reference job end_date must be within the last 7 days\n- If `backfill=false`, reference job age does not matter\n- Minimum schedule frequency depends on your plan\n\nWebhooks are now centralized: register them with `create_webhook`, then pass\ntheir IDs here via `webhook_ids` (there is no inline webhook config anymore).",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "api_key": {
+                "default": "",
+                "description": "CatchAll API key. Optional if provided via x-api-key header or CATCHALL_API_KEY env var.",
+                "type": "string"
+              },
+              "backfill": {
+                "default": true,
+                "description": "Optional gap-fill toggle before first run (default true).",
+                "type": "boolean"
+              },
+              "limit": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Optional max records per run (minimum 10). If omitted, API uses plan default."
+              },
+              "project_id": {
+                "default": "",
+                "description": "Optional project ID to associate this monitor with.",
+                "type": "string"
+              },
+              "reference_job_id": {
+                "description": "ID of a completed job to use as the template",
+                "type": "string"
+              },
+              "schedule": {
+                "description": "Natural language schedule (e.g., 'every day at 9 AM EST', 'every Monday at 8 AM UTC', 'every 48 hours')",
+                "type": "string"
+              },
+              "timezone": {
+                "default": "",
+                "description": "Optional IANA timezone for the schedule (e.g. 'America/New_York').\nDefaults to UTC. A timezone written into the schedule text overrides this.",
+                "type": "string"
+              },
+              "webhook_ids": {
+                "anyOf": [
+                  {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Optional list of webhook IDs to notify on each run completion (max 5)."
+              }
+            },
+            "required": ["reference_job_id", "schedule"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "properties": {
+              "result": {
+                "type": "string"
+              }
+            },
+            "required": ["result"],
+            "type": "object",
+            "x-fastmcp-wrap-result": true
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "digest": "sha256:3fae1266641d1e32465179c5b602b1e617c53c3b88bd0e0efc3b7f5f525c5296"
+        },
+        {
+          "name": "create_project",
+          "title": "Create Project",
+          "description": "Create a new project.\n\nProjects group related resources (jobs, monitors, datasets, monitor_groups)\nso you can organize work and filter listings by `project_id`.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "api_key": {
+                "default": "",
+                "description": "CatchAll API key. Optional if provided via x-api-key header or CATCHALL_API_KEY env var.",
+                "type": "string"
+              },
+              "description": {
+                "default": "",
+                "description": "Optional project description.",
+                "type": "string"
+              },
+              "name": {
+                "description": "Human-readable project name (required).",
+                "type": "string"
+              }
+            },
+            "required": ["name"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "properties": {
+              "result": {
+                "type": "string"
+              }
+            },
+            "required": ["result"],
+            "type": "object",
+            "x-fastmcp-wrap-result": true
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "digest": "sha256:92431b38c033fe0fde78128aedf982e9f0686d2ce8390608c7fb1cd2078b6348"
+        },
+        {
+          "name": "create_webhook",
+          "title": "Create Webhook",
+          "description": "Create a new webhook endpoint.\n\nUse when:\n- You want to register a URL to receive job or monitor result deliveries.\n- You need a webhook_id to attach to a monitor (via webhook_ids) or a job submission.\n- You want the webhook associated with a project from the start (pass `project_id`).",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "api_key": {
+                "default": "",
+                "description": "CatchAll API key. Optional if provided via x-api-key header or CATCHALL_API_KEY env var.",
+                "type": "string"
+              },
+              "auth": {
+                "anyOf": [
+                  {
+                    "additionalProperties": true,
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Optional auth object forwarded with each delivery. One of:\n- {\"type\": \"bearer\", \"token\": \"...\"}\n- {\"type\": \"api_key\", \"header\": \"X-API-Key\", \"value\": \"...\"}\n- {\"type\": \"basic\", \"username\": \"...\", \"password\": \"...\"}"
+              },
+              "delivery_mode": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Optional delivery mode: 'full' (default, whole result set in one call)\nor 'per_record' (one call per article)."
+              },
+              "formatter_config": {
+                "anyOf": [
+                  {
+                    "additionalProperties": true,
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Optional custom payload transformation config dict."
+              },
+              "headers": {
+                "anyOf": [
+                  {
+                    "additionalProperties": {
+                      "type": "string"
+                    },
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Optional dict of custom HTTP headers to include in deliveries."
+              },
+              "method": {
+                "default": "POST",
+                "description": "HTTP method for delivery (default 'POST'). One of GET, POST, PUT, PATCH, DELETE.",
+                "type": "string"
+              },
+              "name": {
+                "description": "Human-readable name for the webhook (required).",
+                "type": "string"
+              },
+              "params": {
+                "anyOf": [
+                  {
+                    "additionalProperties": {
+                      "type": "string"
+                    },
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Optional dict of query string parameters appended to the webhook URL."
+              },
+              "project_id": {
+                "default": "",
+                "description": "Optional project ID to associate this webhook with immediately\nupon creation. A webhook can belong to several projects at once; use\n`add_project_resources` (resource_type 'webhook') to attach it to more.",
+                "type": "string"
+              },
+              "type": {
+                "default": "",
+                "description": "Optional webhook target type: 'generic' (default), 'slack', 'teams', or 'custom'.\n'slack'/'teams' send pre-formatted payloads; 'generic'/'custom' send the raw result payload.",
+                "type": "string"
+              },
+              "url": {
+                "description": "Target URL that will receive webhook deliveries (required).",
+                "type": "string"
+              }
+            },
+            "required": ["name", "url"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "properties": {
+              "result": {
+                "type": "string"
+              }
+            },
+            "required": ["result"],
+            "type": "object",
+            "x-fastmcp-wrap-result": true
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "digest": "sha256:7b7788e4a8fc733797572b0ef0c511135bd233cef5b898dde72c7871d5829dca"
+        },
+        {
+          "name": "delete_dataset",
+          "title": "Delete Dataset",
+          "description": "Permanently delete a dataset.\n\nThe entities the dataset referenced are not deleted; only the dataset and its\nentity associations are removed.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "api_key": {
+                "default": "",
+                "description": "CatchAll API key. Optional if provided via x-api-key header or CATCHALL_API_KEY env var.",
+                "type": "string"
+              },
+              "dataset_id": {
+                "description": "The dataset ID to delete.",
+                "type": "string"
+              }
+            },
+            "required": ["dataset_id"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "properties": {
+              "result": {
+                "type": "string"
+              }
+            },
+            "required": ["result"],
+            "type": "object",
+            "x-fastmcp-wrap-result": true
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "digest": "sha256:1ac2d096f702757d454f2b20c01738d1637155f748df38b334072eeaeffd0aa7"
+        },
+        {
+          "name": "delete_entity",
+          "title": "Delete Entity",
+          "description": "Permanently delete an entity.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "api_key": {
+                "default": "",
+                "description": "CatchAll API key. Optional if provided via x-api-key header or CATCHALL_API_KEY env var.",
+                "type": "string"
+              },
+              "entity_id": {
+                "description": "The entity ID to delete.",
+                "type": "string"
+              }
+            },
+            "required": ["entity_id"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "properties": {
+              "result": {
+                "type": "string"
+              }
+            },
+            "required": ["result"],
+            "type": "object",
+            "x-fastmcp-wrap-result": true
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "digest": "sha256:c805b191887e64d6036e75b037b393ebc7b4ba3805262e652204c48845015c8b"
+        },
+        {
+          "name": "delete_job",
+          "title": "Delete Job",
+          "description": "Permanently delete a job and its results.\n\nUse when:\n- You want to remove a job you no longer need from your account.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "api_key": {
+                "default": "",
+                "description": "CatchAll API key. Optional if provided via x-api-key header or CATCHALL_API_KEY env var.",
+                "type": "string"
+              },
+              "job_id": {
+                "description": "The job ID to delete.",
+                "type": "string"
+              }
+            },
+            "required": ["job_id"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "properties": {
+              "result": {
+                "type": "string"
+              }
+            },
+            "required": ["result"],
+            "type": "object",
+            "x-fastmcp-wrap-result": true
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "digest": "sha256:d8fb4fac5782b5d9c6dfdae5d90824536cab0d6a021fffa873e292a7d6d6d733"
+        },
+        {
+          "name": "delete_monitor",
+          "title": "Delete Monitor",
+          "description": "Permanently delete a monitor and stop its scheduled runs.\n\nUse when:\n- You want to remove a monitor entirely (use `disable_monitor` to only pause it).",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "api_key": {
+                "default": "",
+                "description": "CatchAll API key. Optional if provided via x-api-key header or CATCHALL_API_KEY env var.",
+                "type": "string"
+              },
+              "monitor_id": {
+                "description": "The monitor ID to delete.",
+                "type": "string"
+              }
+            },
+            "required": ["monitor_id"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "properties": {
+              "result": {
+                "type": "string"
+              }
+            },
+            "required": ["result"],
+            "type": "object",
+            "x-fastmcp-wrap-result": true
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "digest": "sha256:128c52f6711edeb11750d8018f09817a26e202be2330cdbff21106fc666f3a02"
+        },
+        {
+          "name": "delete_project",
+          "title": "Delete Project",
+          "description": "Delete a project.\n\nBy default the project's resources (jobs, monitors, etc.) are detached but\nkept. Set `delete_resources=true` to also delete the contained jobs,\nmonitors, datasets, and monitor groups. Webhooks are the exception: they\nare never deleted by this operation — an attached webhook is only detached\nfrom the project and keeps working (it may belong to other projects or\nresources independently of this one).",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "api_key": {
+                "default": "",
+                "description": "CatchAll API key. Optional if provided via x-api-key header or CATCHALL_API_KEY env var.",
+                "type": "string"
+              },
+              "delete_resources": {
+                "default": false,
+                "description": "If true, also delete the project's resources except\nwebhooks, which are always detached rather than deleted (default false).",
+                "type": "boolean"
+              },
+              "project_id": {
+                "description": "The project ID to delete.",
+                "type": "string"
+              }
+            },
+            "required": ["project_id"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "properties": {
+              "result": {
+                "type": "string"
+              }
+            },
+            "required": ["result"],
+            "type": "object",
+            "x-fastmcp-wrap-result": true
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "digest": "sha256:8d5d897a3a0cd54014496d7c2ee2870f7ee8ddd7b5a8fb84051bd906ca491b1e"
+        },
+        {
+          "name": "delete_webhook",
+          "title": "Delete Webhook",
+          "description": "Permanently delete a webhook endpoint.\n\nUse when:\n- You want to remove a webhook from your account.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "api_key": {
+                "default": "",
+                "description": "CatchAll API key. Optional if provided via x-api-key header or CATCHALL_API_KEY env var.",
+                "type": "string"
+              },
+              "webhook_id": {
+                "description": "The webhook ID to delete.",
+                "type": "string"
+              }
+            },
+            "required": ["webhook_id"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "properties": {
+              "result": {
+                "type": "string"
+              }
+            },
+            "required": ["result"],
+            "type": "object",
+            "x-fastmcp-wrap-result": true
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "digest": "sha256:3d06da1e9b3881979a54630c6c95238ee3735a3d6f4c0ca1291b0824a632590e"
+        },
+        {
+          "name": "disable_monitor",
+          "title": "Disable Monitor",
+          "description": "Disable a monitor to stop its scheduled runs.\n\nThe monitor can be re-enabled later with enable_monitor.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "api_key": {
+                "default": "",
+                "description": "CatchAll API key. Optional if provided via x-api-key header or CATCHALL_API_KEY env var.",
+                "type": "string"
+              },
+              "monitor_id": {
+                "description": "The monitor ID to disable",
+                "type": "string"
+              }
+            },
+            "required": ["monitor_id"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "properties": {
+              "result": {
+                "type": "string"
+              }
+            },
+            "required": ["result"],
+            "type": "object",
+            "x-fastmcp-wrap-result": true
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "digest": "sha256:baac9be3760980fd003071690d8dba8dad02c7d718a7a4a80e0238aafc118804"
+        },
+        {
+          "name": "enable_monitor",
+          "title": "Enable Monitor",
+          "description": "Enable a previously disabled monitor to resume its scheduled runs.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "api_key": {
+                "default": "",
+                "description": "CatchAll API key. Optional if provided via x-api-key header or CATCHALL_API_KEY env var.",
+                "type": "string"
+              },
+              "backfill": {
+                "anyOf": [
+                  {
+                    "type": "boolean"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Optional backfill behavior for resume."
+              },
+              "monitor_id": {
+                "description": "The monitor ID to enable",
+                "type": "string"
+              }
+            },
+            "required": ["monitor_id"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "properties": {
+              "result": {
+                "type": "string"
+              }
+            },
+            "required": ["result"],
+            "type": "object",
+            "x-fastmcp-wrap-result": true
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "digest": "sha256:86072817b802f441b9cbf432b703501282861ea0cba2f9fbc35093a9e35a59d0"
+        },
+        {
+          "name": "get_dataset",
+          "title": "Get Dataset",
+          "description": "Get a single dataset's details.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "api_key": {
+                "default": "",
+                "description": "CatchAll API key. Optional if provided via x-api-key header or CATCHALL_API_KEY env var.",
+                "type": "string"
+              },
+              "dataset_id": {
+                "description": "The dataset ID to retrieve.",
+                "type": "string"
+              }
+            },
+            "required": ["dataset_id"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "properties": {
+              "result": {
+                "type": "string"
+              }
+            },
+            "required": ["result"],
+            "type": "object",
+            "x-fastmcp-wrap-result": true
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "digest": "sha256:79dc5ea2e11a08d564b20d5435b0ee96b9ce6186c949f86c73e9402c2e4b9876"
+        },
+        {
+          "name": "get_dataset_status",
+          "title": "Get Dataset Status",
+          "description": "Get the status history of a dataset (e.g. its enrichment progress over time).",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "api_key": {
+                "default": "",
+                "description": "CatchAll API key. Optional if provided via x-api-key header or CATCHALL_API_KEY env var.",
+                "type": "string"
+              },
+              "dataset_id": {
+                "description": "The dataset ID to inspect.",
+                "type": "string"
+              }
+            },
+            "required": ["dataset_id"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "properties": {
+              "result": {
+                "type": "string"
+              }
+            },
+            "required": ["result"],
+            "type": "object",
+            "x-fastmcp-wrap-result": true
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "digest": "sha256:53b8162b3c27184fac8c98b32bcb7171217c1d7a29bfd94bc91ef895aac7b173"
+        },
+        {
+          "name": "get_entity",
+          "title": "Get Entity",
+          "description": "Get a single entity's details.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "api_key": {
+                "default": "",
+                "description": "CatchAll API key. Optional if provided via x-api-key header or CATCHALL_API_KEY env var.",
+                "type": "string"
+              },
+              "entity_id": {
+                "description": "The entity ID to retrieve.",
+                "type": "string"
+              }
+            },
+            "required": ["entity_id"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "properties": {
+              "result": {
+                "type": "string"
+              }
+            },
+            "required": ["result"],
+            "type": "object",
+            "x-fastmcp-wrap-result": true
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "digest": "sha256:1d807dbf9b82a7bb837d75285a6e7a344e1bfd441fea386b3ce625669c358ba8"
+        },
+        {
+          "name": "get_job_status",
+          "title": "Get Job Status",
+          "description": "Check the status of a submitted job.\n\nCall this after submit_query to see if your job is ready.\nStatus progression: submitted -> analyzing -> fetching -> clustering -> enriching -> completed/failed\n\nIMPORTANT: Jobs take several minutes to process.\nFirst check after ~1-2 minutes, then poll every 30-60 seconds.\nBroad searches can take 10-30+ minutes; for long jobs, poll every 60-120 seconds.\nDo NOT call this tool in a tight loop.\nStop polling when status is `completed` or `failed`.\nTreat `submitted`, `analyzing`, `fetching`, `clustering`, and `enriching`\nas active states and continue polling.\n\nYou don't need to wait for completion to pull results. Partial results are\navailable during `enriching` — call pull_results after ~2 minutes, then\npoll status every 30-60 seconds and pull again for fresher results.\nDo not stop pulling just because an intermediate pull is empty/unchanged.\nUse `progress_validated` vs `candidate_records` to track whether more\nresults may still appear (`progress_validated < candidate_records`).\nIf transport/session fails, resume using the same `job_id`.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "api_key": {
+                "default": "",
+                "description": "CatchAll API key. Optional if provided via x-api-key header or CATCHALL_API_KEY env var.",
+                "type": "string"
+              },
+              "job_id": {
+                "description": "The job ID returned from submit_query",
+                "type": "string"
+              }
+            },
+            "required": ["job_id"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "properties": {
+              "result": {
+                "type": "string"
+              }
+            },
+            "required": ["result"],
+            "type": "object",
+            "x-fastmcp-wrap-result": true
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "digest": "sha256:d5ebe9466efd2d35e82b50e874e03b6dc72cc700955a113e0a5f68d54770d5c6"
+        },
+        {
+          "name": "get_monitor_status",
+          "title": "Get Monitor Status",
+          "description": "Get the status history of a monitor.\n\nUse when:\n- You want to see the timeline of a monitor's state changes (e.g. active,\n  disabled, errored) and any related details.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "api_key": {
+                "default": "",
+                "description": "CatchAll API key. Optional if provided via x-api-key header or CATCHALL_API_KEY env var.",
+                "type": "string"
+              },
+              "monitor_id": {
+                "description": "The monitor ID to inspect.",
+                "type": "string"
+              }
+            },
+            "required": ["monitor_id"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "properties": {
+              "result": {
+                "type": "string"
+              }
+            },
+            "required": ["result"],
+            "type": "object",
+            "x-fastmcp-wrap-result": true
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "digest": "sha256:e5b4dcf8baae8487a6f05c7901d3b1abec23312396b2bfcf1e2f9893c9eb36cf"
+        },
+        {
+          "name": "get_project",
+          "title": "Get Project",
+          "description": "Get a single project's details.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "api_key": {
+                "default": "",
+                "description": "CatchAll API key. Optional if provided via x-api-key header or CATCHALL_API_KEY env var.",
+                "type": "string"
+              },
+              "project_id": {
+                "description": "The project ID to retrieve.",
+                "type": "string"
+              }
+            },
+            "required": ["project_id"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "properties": {
+              "result": {
+                "type": "string"
+              }
+            },
+            "required": ["result"],
+            "type": "object",
+            "x-fastmcp-wrap-result": true
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "digest": "sha256:1c8c88870d1d52deee945f9ca4e0367e1bf98e9c31f8f36c7218f4e81b5e4b5c"
+        },
+        {
+          "name": "get_project_overview",
+          "title": "Get Project Overview",
+          "description": "Get a project's resource overview (counts grouped by resource type and status).",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "api_key": {
+                "default": "",
+                "description": "CatchAll API key. Optional if provided via x-api-key header or CATCHALL_API_KEY env var.",
+                "type": "string"
+              },
+              "project_id": {
+                "description": "The project ID to summarize.",
+                "type": "string"
+              }
+            },
+            "required": ["project_id"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "properties": {
+              "result": {
+                "type": "string"
+              }
+            },
+            "required": ["result"],
+            "type": "object",
+            "x-fastmcp-wrap-result": true
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "digest": "sha256:8ec6347660929a018c99de926c1d7bce25fd781647526d80eebdc9e2886790ed"
+        },
+        {
+          "name": "get_user_limits",
+          "title": "Get User Limits",
+          "description": "Retrieve plan features and current usage limits for your API key.\n\nUse when:\n- You want to know how many records/jobs/monitors your plan allows.\n- You want to check current usage against plan limits before running a large job.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "api_key": {
+                "default": "",
+                "description": "CatchAll API key. Optional if provided via x-api-key header or CATCHALL_API_KEY env var.",
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "outputSchema": {
+            "properties": {
+              "result": {
+                "type": "string"
+              }
+            },
+            "required": ["result"],
+            "type": "object",
+            "x-fastmcp-wrap-result": true
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "digest": "sha256:775e2f34303a4f0156135cf17336ad5fabfcd821600004e77b6dd8e16a105329"
+        },
+        {
+          "name": "get_version",
+          "title": "Get Version",
+          "description": "Get current API version.\n\nThis tool maps to GET /version and does not require an API key.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "api_key": {
+                "default": "",
+                "description": "Optional CatchAll API key.",
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "outputSchema": {
+            "properties": {
+              "result": {
+                "type": "string"
+              }
+            },
+            "required": ["result"],
+            "type": "object",
+            "x-fastmcp-wrap-result": true
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "digest": "sha256:e01b1ecc8f3b8ff525433f7e6348d2917a38aa6416e211c680320a174acde90b"
+        },
+        {
+          "name": "get_webhook",
+          "title": "Get Webhook",
+          "description": "Retrieve the full configuration of a specific webhook.\n\nUse when:\n- You want to inspect a webhook's URL, method, headers, or status by its ID.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "api_key": {
+                "default": "",
+                "description": "CatchAll API key. Optional if provided via x-api-key header or CATCHALL_API_KEY env var.",
+                "type": "string"
+              },
+              "webhook_id": {
+                "description": "The webhook ID to retrieve.",
+                "type": "string"
+              }
+            },
+            "required": ["webhook_id"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "properties": {
+              "result": {
+                "type": "string"
+              }
+            },
+            "required": ["result"],
+            "type": "object",
+            "x-fastmcp-wrap-result": true
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "digest": "sha256:854f24d0bc9776617ea4273d832d5840fd6321f96d1828eb4a76d3d542c8de17"
+        },
+        {
+          "name": "get_webhook_history",
+          "title": "Get Webhook History",
+          "description": "Get webhook delivery history, either for a resource or for a webhook.\n\nQuery in exactly one of two modes:\n- By resource: pass `resource_type` + `resource_id` to see deliveries made\n  for a specific job/monitor/monitor_group.\n- By webhook: pass `webhook_id` to see every delivery made through one\n  webhook — including manual test deliveries (from `test_webhook`), which\n  are not tied to a job or monitor and only appear in this mode.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "api_key": {
+                "default": "",
+                "description": "CatchAll API key. Optional if provided via x-api-key header or CATCHALL_API_KEY env var.",
+                "type": "string"
+              },
+              "page": {
+                "default": 1,
+                "description": "Page number for pagination (default: 1).",
+                "type": "integer"
+              },
+              "page_size": {
+                "default": 50,
+                "description": "Number of results per page (default: 50, max: 500).",
+                "type": "integer"
+              },
+              "resource_id": {
+                "default": "",
+                "description": "The ID of the job/monitor/monitor_group.",
+                "type": "string"
+              },
+              "resource_type": {
+                "default": "",
+                "description": "Resource type: 'job', 'monitor', or 'monitor_group'.\nRequired together with `resource_id` when `webhook_id` is not given.",
+                "type": "string"
+              },
+              "webhook_id": {
+                "default": "",
+                "description": "Webhook ID to fetch history for. Mutually exclusive with\n`resource_type`/`resource_id`.",
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "outputSchema": {
+            "properties": {
+              "result": {
+                "type": "string"
+              }
+            },
+            "required": ["result"],
+            "type": "object",
+            "x-fastmcp-wrap-result": true
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "digest": "sha256:a506b55089f817e1ceb08dce0d24486bf1777b38b5e308aa984b33191db18e45"
+        },
+        {
+          "name": "initialize_query",
+          "title": "Initialize Query",
+          "description": "Preview suggested validators, enrichments, and date ranges before submitting.\n\nUse when:\n- You want to inspect/edit auto-generated validators/enrichments before submitting.\n- You want to preview date adjustments via `date_modification_message`.\n\nDo not use when:\n- You want to start processing immediately with final inputs (use `submit_query`).\n\nKey behavior:\n- Preview-only endpoint: does not create a job and does not start processing.\n- Suggestions are LLM-generated and not deterministic across calls.\n- To reuse suggestions, pass them explicitly to `submit_query`.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "api_key": {
+                "default": "",
+                "description": "CatchAll API key. Optional if provided via x-api-key header or CATCHALL_API_KEY env var.",
+                "type": "string"
+              },
+              "context": {
+                "default": "",
+                "description": "Optional guidance on what to prioritize so suggested validators,\nenrichments, and dates align with your target data points. If a company\ndataset will be attached in `submit_query`, note that entity-relevance\nvalidators (e.g. `company_is_primary_subject`) will be auto-generated —\ndo not ask for them here. Do not mention things like \"company list will be attached\".\nFocus on the event or topic only.",
+                "type": "string"
+              },
+              "fetch_all_watchlist_news": {
+                "default": false,
+                "description": "When `True`, signals that the subsequent job will\nretrieve all news for connected watchlist entities without topic filtering.\nPass this when you intend to use `fetch_all_watchlist_news=True` in\n`submit_query` so the previewed validators/enrichments are generated\naccordingly. Requires `connected_dataset_ids` to be set in `submit_query`.\nDefault: `False`.",
+                "type": "boolean"
+              },
+              "query": {
+                "description": "Natural language query to preview (required). If you plan to attach a\ncompany dataset via `connected_dataset_ids` in the subsequent `submit_query`,\ndo NOT reference the company list here — entity filtering is applied\nautomatically by the dataset, not by the query text.",
+                "type": "string"
+              }
+            },
+            "required": ["query"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "properties": {
+              "result": {
+                "type": "string"
+              }
+            },
+            "required": ["result"],
+            "type": "object",
+            "x-fastmcp-wrap-result": true
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "digest": "sha256:2b9ba65d633ed94376b76b8fa929d6f99073e14a2c95cbc40afc901415dc782c"
+        },
+        {
+          "name": "list_dataset_entities",
+          "title": "List Dataset Entities",
+          "description": "List the entities contained in a dataset.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "api_key": {
+                "default": "",
+                "description": "CatchAll API key. Optional if provided via x-api-key header or CATCHALL_API_KEY env var.",
+                "type": "string"
+              },
+              "dataset_id": {
+                "description": "The dataset ID whose entities you want.",
+                "type": "string"
+              },
+              "entity_type": {
+                "default": "",
+                "description": "Optional type filter: 'company' or 'person'.",
+                "type": "string"
+              },
+              "page": {
+                "default": 1,
+                "description": "Page number for pagination (default: 1).",
+                "type": "integer"
+              },
+              "page_size": {
+                "default": 100,
+                "description": "Number of results per page (default: 100).",
+                "type": "integer"
+              },
+              "search": {
+                "default": "",
+                "description": "Optional text filter on entity name.",
+                "type": "string"
+              },
+              "sort_by": {
+                "default": "",
+                "description": "Optional sort field: 'created_at', 'name', or 'status'.",
+                "type": "string"
+              },
+              "sort_order": {
+                "default": "",
+                "description": "Optional sort direction: 'asc' or 'desc'.",
+                "type": "string"
+              },
+              "status": {
+                "default": "",
+                "description": "Optional status filter: 'pending', 'enriching', 'ready', or 'failed'.",
+                "type": "string"
+              }
+            },
+            "required": ["dataset_id"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "properties": {
+              "result": {
+                "type": "string"
+              }
+            },
+            "required": ["result"],
+            "type": "object",
+            "x-fastmcp-wrap-result": true
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "digest": "sha256:97936ab9b691df3f3222928d4c56d8896c932924f8507df9d21a9ffc532faadb"
+        },
+        {
+          "name": "list_datasets",
+          "title": "List Datasets",
+          "description": "List your datasets.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "api_key": {
+                "default": "",
+                "description": "CatchAll API key. Optional if provided via x-api-key header or CATCHALL_API_KEY env var.",
+                "type": "string"
+              },
+              "latest_status": {
+                "default": "",
+                "description": "Optional status filter: 'pending', 'enriching', 'ready', or 'failed'.",
+                "type": "string"
+              },
+              "ownership": {
+                "default": "",
+                "description": "Optional ownership filter: 'all', 'own', or 'shared'.",
+                "type": "string"
+              },
+              "page": {
+                "default": 1,
+                "description": "Page number for pagination (default: 1).",
+                "type": "integer"
+              },
+              "page_size": {
+                "default": 100,
+                "description": "Number of results per page (default: 100, max: 1000).",
+                "type": "integer"
+              },
+              "project_id": {
+                "default": "",
+                "description": "Optional filter to datasets belonging to a specific project.",
+                "type": "string"
+              },
+              "search": {
+                "default": "",
+                "description": "Optional text filter on the dataset name.",
+                "type": "string"
+              },
+              "sort_by": {
+                "default": "",
+                "description": "Optional sort field: 'name', 'created_at', or 'status'.",
+                "type": "string"
+              },
+              "sort_order": {
+                "default": "",
+                "description": "Optional sort direction: 'asc' or 'desc'.",
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "outputSchema": {
+            "properties": {
+              "result": {
+                "type": "string"
+              }
+            },
+            "required": ["result"],
+            "type": "object",
+            "x-fastmcp-wrap-result": true
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "digest": "sha256:48d1be77553b1e4e36a5d66a03e181df552319b56ea821770ffa0f5560e5ff29"
+        },
+        {
+          "name": "list_entities",
+          "title": "List Entities",
+          "description": "List your entities.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "api_key": {
+                "default": "",
+                "description": "CatchAll API key. Optional if provided via x-api-key header or CATCHALL_API_KEY env var.",
+                "type": "string"
+              },
+              "entity_type": {
+                "default": "",
+                "description": "Optional type filter: 'company' or 'person'.",
+                "type": "string"
+              },
+              "page": {
+                "default": 1,
+                "description": "Page number for pagination (default: 1).",
+                "type": "integer"
+              },
+              "page_size": {
+                "default": 100,
+                "description": "Number of results per page (default: 100, max: 1000).",
+                "type": "integer"
+              },
+              "project_id": {
+                "default": "",
+                "description": "Optional filter to entities belonging to a specific project.",
+                "type": "string"
+              },
+              "search": {
+                "default": "",
+                "description": "Optional text filter on entity name.",
+                "type": "string"
+              },
+              "sort_by": {
+                "default": "",
+                "description": "Optional sort field: 'created_at', 'name', or 'status'.",
+                "type": "string"
+              },
+              "sort_order": {
+                "default": "",
+                "description": "Optional sort direction: 'asc' or 'desc'.",
+                "type": "string"
+              },
+              "status": {
+                "default": "",
+                "description": "Optional status filter: 'pending', 'enriching', 'ready', or 'failed'.",
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "outputSchema": {
+            "properties": {
+              "result": {
+                "type": "string"
+              }
+            },
+            "required": ["result"],
+            "type": "object",
+            "x-fastmcp-wrap-result": true
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "digest": "sha256:1e810834bc4f6829202727c5ce7a18d1ba01712ba58c9664f1344e8ed415b78f"
+        },
+        {
+          "name": "list_monitor_jobs",
+          "title": "List Monitor Jobs",
+          "description": "List all jobs spawned by a monitor.\n\nReturns the history of scheduled runs for a monitor.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "api_key": {
+                "default": "",
+                "description": "CatchAll API key. Optional if provided via x-api-key header or CATCHALL_API_KEY env var.",
+                "type": "string"
+              },
+              "monitor_id": {
+                "description": "The monitor ID to list jobs for",
+                "type": "string"
+              },
+              "sort": {
+                "default": "asc",
+                "description": "Sort order by start_date: 'asc' (default) or 'desc'",
+                "type": "string"
+              }
+            },
+            "required": ["monitor_id"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "properties": {
+              "result": {
+                "type": "string"
+              }
+            },
+            "required": ["result"],
+            "type": "object",
+            "x-fastmcp-wrap-result": true
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "digest": "sha256:11480a285a9a800f813f8187ba19d1b984469e0abb4a252ecd6efc71829a8038"
+        },
+        {
+          "name": "list_monitors",
+          "title": "List Monitors",
+          "description": "List all your monitors.\n\nReturns all monitors with their schedule, status, reference query, and webhook config.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "api_key": {
+                "default": "",
+                "description": "CatchAll API key. Optional if provided via x-api-key header or CATCHALL_API_KEY env var.",
+                "type": "string"
+              },
+              "ownership": {
+                "default": "",
+                "description": "Optional ownership filter: 'all', 'own', or 'shared'.",
+                "type": "string"
+              },
+              "page": {
+                "default": 1,
+                "description": "Page number for pagination (default: 1).",
+                "type": "integer"
+              },
+              "page_size": {
+                "default": 100,
+                "description": "Number of results per page (default: 100, max: 1000).",
+                "type": "integer"
+              },
+              "project_id": {
+                "default": "",
+                "description": "Optional filter to monitors belonging to a specific project.",
+                "type": "string"
+              },
+              "search": {
+                "default": "",
+                "description": "Optional text filter on the monitor query.",
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "outputSchema": {
+            "properties": {
+              "result": {
+                "type": "string"
+              }
+            },
+            "required": ["result"],
+            "type": "object",
+            "x-fastmcp-wrap-result": true
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "digest": "sha256:e155b7853da61a70c219ce521d7e0eda0ec4e270d0d6ee1eee0d5c6de8234f2c"
+        },
+        {
+          "name": "list_project_resources",
+          "title": "List Project Resources",
+          "description": "List the resources contained in a project.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "api_key": {
+                "default": "",
+                "description": "CatchAll API key. Optional if provided via x-api-key header or CATCHALL_API_KEY env var.",
+                "type": "string"
+              },
+              "page": {
+                "default": 1,
+                "description": "Page number for pagination (default: 1).",
+                "type": "integer"
+              },
+              "page_size": {
+                "default": 100,
+                "description": "Number of results per page (default: 100, max: 1000).",
+                "type": "integer"
+              },
+              "project_id": {
+                "description": "The project ID whose resources you want.",
+                "type": "string"
+              },
+              "resource_type": {
+                "default": "",
+                "description": "Optional filter: 'job', 'monitor', 'dataset', 'monitor_group', or 'webhook'.",
+                "type": "string"
+              }
+            },
+            "required": ["project_id"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "properties": {
+              "result": {
+                "type": "string"
+              }
+            },
+            "required": ["result"],
+            "type": "object",
+            "x-fastmcp-wrap-result": true
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "digest": "sha256:2bacadcb3ae7a6adf99273ae806b4ec108c67c33cde12eb39b291665b75c8288"
+        },
+        {
+          "name": "list_projects",
+          "title": "List Projects",
+          "description": "List your projects.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "api_key": {
+                "default": "",
+                "description": "CatchAll API key. Optional if provided via x-api-key header or CATCHALL_API_KEY env var.",
+                "type": "string"
+              },
+              "ownership": {
+                "default": "",
+                "description": "Optional ownership filter: 'all', 'own', or 'shared'.",
+                "type": "string"
+              },
+              "page": {
+                "default": 1,
+                "description": "Page number for pagination (default: 1).",
+                "type": "integer"
+              },
+              "page_size": {
+                "default": 100,
+                "description": "Number of results per page (default: 100, max: 1000).",
+                "type": "integer"
+              },
+              "search": {
+                "default": "",
+                "description": "Optional text filter on the project name.",
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "outputSchema": {
+            "properties": {
+              "result": {
+                "type": "string"
+              }
+            },
+            "required": ["result"],
+            "type": "object",
+            "x-fastmcp-wrap-result": true
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "digest": "sha256:7eafaed182bd0a867ec36c69828714c14f65ccddf48659c025ad1bca14fd5edd"
+        },
+        {
+          "name": "list_resource_webhooks",
+          "title": "List Resource Webhooks",
+          "description": "List the webhooks mapped to a specific resource (job/monitor/monitor_group).\n\nUse when:\n- You have a job or monitor ID and want to know which webhooks will fire for it.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "api_key": {
+                "default": "",
+                "description": "CatchAll API key. Optional if provided via x-api-key header or CATCHALL_API_KEY env var.",
+                "type": "string"
+              },
+              "is_active": {
+                "anyOf": [
+                  {
+                    "type": "boolean"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Optional filter — only active (true) or inactive (false) webhooks."
+              },
+              "page": {
+                "default": 1,
+                "description": "Page number for pagination (default: 1).",
+                "type": "integer"
+              },
+              "page_size": {
+                "default": 100,
+                "description": "Number of results per page (default: 100, max: 1000).",
+                "type": "integer"
+              },
+              "resource_id": {
+                "description": "The ID of the job/monitor/monitor_group.",
+                "type": "string"
+              },
+              "resource_type": {
+                "description": "Resource type: 'job', 'monitor', or 'monitor_group'.",
+                "type": "string"
+              }
+            },
+            "required": ["resource_id", "resource_type"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "properties": {
+              "result": {
+                "type": "string"
+              }
+            },
+            "required": ["result"],
+            "type": "object",
+            "x-fastmcp-wrap-result": true
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "digest": "sha256:8b9f768631f98ad91f3545d67ff629c9098e2c3545508ff0c02886ce84127998"
+        },
+        {
+          "name": "list_source_groups",
+          "title": "List Source Groups",
+          "description": "List source groups (named domain allowlists).\n\nUse when:\n- You want to discover reusable, named sets of source domains (public groups\n  plus any organization-visibility groups your organization can access).\n- You need a group's `slug` to attach to `submit_query` via `source_groups`\n  to scope fetching to that domain allowlist.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "api_key": {
+                "default": "",
+                "description": "CatchAll API key. Optional if provided via x-api-key header or CATCHALL_API_KEY env var.",
+                "type": "string"
+              },
+              "page": {
+                "default": 1,
+                "description": "Page number for pagination (default: 1).",
+                "type": "integer"
+              },
+              "page_size": {
+                "default": 100,
+                "description": "Number of results per page (default: 100, max: 500).",
+                "type": "integer"
+              }
+            },
+            "type": "object"
+          },
+          "outputSchema": {
+            "properties": {
+              "result": {
+                "type": "string"
+              }
+            },
+            "required": ["result"],
+            "type": "object",
+            "x-fastmcp-wrap-result": true
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "digest": "sha256:ea17e36f6d6a76fd51bc2a6cdb200d79ac34871f6efe5c077f5709a5eeb9edcc"
+        },
+        {
+          "name": "list_user_jobs",
+          "title": "List User Jobs",
+          "description": "List all jobs submitted by you.\n\nReturns your job history with IDs, queries, statuses, and timestamps.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "api_key": {
+                "default": "",
+                "description": "CatchAll API key. Optional if provided via x-api-key header or CATCHALL_API_KEY env var.",
+                "type": "string"
+              },
+              "mode": {
+                "default": "",
+                "description": "Optional filter by job processing mode: 'base' or 'lite'.",
+                "type": "string"
+              },
+              "ownership": {
+                "default": "",
+                "description": "Optional ownership filter: 'all', 'own', or 'shared'.",
+                "type": "string"
+              },
+              "page": {
+                "default": 1,
+                "description": "Page number for pagination (default: 1)",
+                "type": "integer"
+              },
+              "page_size": {
+                "default": 100,
+                "description": "Number of results per page (default: 100, max: 1000)",
+                "type": "integer"
+              },
+              "project_id": {
+                "default": "",
+                "description": "Optional filter to jobs belonging to a specific project.",
+                "type": "string"
+              },
+              "search": {
+                "default": "",
+                "description": "Optional text filter on the job query.",
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "outputSchema": {
+            "properties": {
+              "result": {
+                "type": "string"
+              }
+            },
+            "required": ["result"],
+            "type": "object",
+            "x-fastmcp-wrap-result": true
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "digest": "sha256:44b342ae43bdc9fc3fe84e8468e269a69b0190e7c09b9072a3b3e7780d4af945"
+        },
+        {
+          "name": "list_webhook_resources",
+          "title": "List Webhook Resources",
+          "description": "List the resources mapped to a webhook.\n\nUse when:\n- You want to see which jobs/monitors a webhook is attached to.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "api_key": {
+                "default": "",
+                "description": "CatchAll API key. Optional if provided via x-api-key header or CATCHALL_API_KEY env var.",
+                "type": "string"
+              },
+              "page": {
+                "default": 1,
+                "description": "Page number for pagination (default: 1).",
+                "type": "integer"
+              },
+              "page_size": {
+                "default": 100,
+                "description": "Number of results per page (default: 100, max: 1000).",
+                "type": "integer"
+              },
+              "resource_type": {
+                "default": "",
+                "description": "Optional filter: 'job', 'monitor', or 'monitor_group'.",
+                "type": "string"
+              },
+              "webhook_id": {
+                "description": "The webhook ID whose resource mappings you want.",
+                "type": "string"
+              }
+            },
+            "required": ["webhook_id"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "properties": {
+              "result": {
+                "type": "string"
+              }
+            },
+            "required": ["result"],
+            "type": "object",
+            "x-fastmcp-wrap-result": true
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "digest": "sha256:85288dc7331b0681e40e69b17d13a3c6c6d81a8dadac482cd1dc25d841e172e1"
+        },
+        {
+          "name": "list_webhooks",
+          "title": "List Webhooks",
+          "description": "List all your webhooks.\n\nUse when:\n- You want to see all webhook endpoints configured in your account.\n- You need to find a webhook_id to pass to monitors (via webhook_ids) or jobs.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "api_key": {
+                "default": "",
+                "description": "CatchAll API key. Optional if provided via x-api-key header or CATCHALL_API_KEY env var.",
+                "type": "string"
+              },
+              "page": {
+                "default": 1,
+                "description": "Page number for pagination (default: 1).",
+                "type": "integer"
+              },
+              "page_size": {
+                "default": 100,
+                "description": "Number of results per page (default: 100, max: 1000).",
+                "type": "integer"
+              },
+              "project_id": {
+                "default": "",
+                "description": "Optional filter to webhooks belonging to a specific project.",
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "outputSchema": {
+            "properties": {
+              "result": {
+                "type": "string"
+              }
+            },
+            "required": ["result"],
+            "type": "object",
+            "x-fastmcp-wrap-result": true
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "digest": "sha256:5a8a1a2946fcf6447e8587247bf5375c50ee8a31045f33422f57a1ec01594bb8"
+        },
+        {
+          "name": "pull_job_csv",
+          "title": "Pull Job Csv",
+          "description": "Download a job's results as a CSV file.\n\nUse when:\n- You want the full job output as a CSV for offline analysis or export.\n- Prefer this over `pull_results` when the consumer needs spreadsheet/CSV format.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "api_key": {
+                "default": "",
+                "description": "CatchAll API key. Optional if provided via x-api-key header or CATCHALL_API_KEY env var.",
+                "type": "string"
+              },
+              "job_id": {
+                "description": "The job ID to download as CSV.",
+                "type": "string"
+              }
+            },
+            "required": ["job_id"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "properties": {
+              "result": {
+                "type": "string"
+              }
+            },
+            "required": ["result"],
+            "type": "object",
+            "x-fastmcp-wrap-result": true
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "digest": "sha256:84af9fea6da07397745afe4da7066fa51632e352106d1f48f0d9a94c7b08ab65"
+        },
+        {
+          "name": "pull_monitor_csv",
+          "title": "Pull Monitor Csv",
+          "description": "Download the latest monitor run's results as a CSV file.\n\nUse when:\n- You want the most recent monitor run output as a CSV for offline analysis or export.\n- Prefer this over `pull_monitor_results` when the consumer needs spreadsheet/CSV format.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "api_key": {
+                "default": "",
+                "description": "CatchAll API key. Optional if provided via x-api-key header or CATCHALL_API_KEY env var.",
+                "type": "string"
+              },
+              "monitor_id": {
+                "description": "The monitor ID to download results for.",
+                "type": "string"
+              }
+            },
+            "required": ["monitor_id"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "properties": {
+              "result": {
+                "type": "string"
+              }
+            },
+            "required": ["result"],
+            "type": "object",
+            "x-fastmcp-wrap-result": true
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "digest": "sha256:1d2ecc96d899a39c5977d6e8d1a33e02200c7be2f7319e853c6d3d3107ddd62a"
+        },
+        {
+          "name": "pull_monitor_results",
+          "title": "Pull Monitor Results",
+          "description": "Retrieve the latest results from a monitor.\n\nReturns the most recent run's results including run_info, records, and all_records.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "api_key": {
+                "default": "",
+                "description": "CatchAll API key. Optional if provided via x-api-key header or CATCHALL_API_KEY env var.",
+                "type": "string"
+              },
+              "monitor_id": {
+                "description": "The monitor ID to pull results from",
+                "type": "string"
+              }
+            },
+            "required": ["monitor_id"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "properties": {
+              "result": {
+                "type": "string"
+              }
+            },
+            "required": ["result"],
+            "type": "object",
+            "x-fastmcp-wrap-result": true
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "digest": "sha256:dc758acdad2d3df7b23ef9a484d9182bf5fa5bafee7c720b951c3c7ff68b3c36"
+        },
+        {
+          "name": "pull_results",
+          "title": "Pull Results",
+          "description": "Retrieve the results of a job.\n\nCan be called before completion for partial results, or after completion\nfor the full set. Returns clustered, validated, and enriched web results.\nWhile job status is active, call this repeatedly (typically page=1) to\nrefresh partial output. When job reaches completed, iterate all pages.\nIf job fails, call once more to capture any partial output.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "api_key": {
+                "default": "",
+                "description": "CatchAll API key. Optional if provided via x-api-key header or CATCHALL_API_KEY env var.",
+                "type": "string"
+              },
+              "job_id": {
+                "description": "The job ID returned from submit_query",
+                "type": "string"
+              },
+              "page": {
+                "default": 1,
+                "description": "Page number for pagination (default: 1). Use total_pages from the response to iterate through all results.",
+                "type": "integer"
+              },
+              "page_size": {
+                "default": 100,
+                "description": "Number of records returned per page (default: 100, max: 1000).",
+                "type": "integer"
+              }
+            },
+            "required": ["job_id"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "properties": {
+              "result": {
+                "type": "string"
+              }
+            },
+            "required": ["result"],
+            "type": "object",
+            "x-fastmcp-wrap-result": true
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "digest": "sha256:85d39ed7a0a928d6383ebd9582b0ade1c54d09439a4011de2b2c3c00e510f412"
+        },
+        {
+          "name": "remove_dataset_entities",
+          "title": "Remove Dataset Entities",
+          "description": "Remove entities from a dataset (the entities themselves are not deleted).",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "api_key": {
+                "default": "",
+                "description": "CatchAll API key. Optional if provided via x-api-key header or CATCHALL_API_KEY env var.",
+                "type": "string"
+              },
+              "dataset_id": {
+                "description": "The dataset ID to remove entities from.",
+                "type": "string"
+              },
+              "entity_ids": {
+                "description": "List of entity IDs to remove (required).",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "required": ["dataset_id", "entity_ids"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "properties": {
+              "result": {
+                "type": "string"
+              }
+            },
+            "required": ["result"],
+            "type": "object",
+            "x-fastmcp-wrap-result": true
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "digest": "sha256:7e699e0e0d564e64d0426d5a8763a2149c81927d99dae8ea74f25a2c3d531728"
+        },
+        {
+          "name": "remove_project_resource",
+          "title": "Remove Project Resource",
+          "description": "Remove a single resource from a project.\n\nThis detaches the resource from the project without deleting the resource\nitself (e.g. removing a webhook only ends its membership in this project;\nthe webhook keeps existing and stays attached to any other projects).",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "api_key": {
+                "default": "",
+                "description": "CatchAll API key. Optional if provided via x-api-key header or CATCHALL_API_KEY env var.",
+                "type": "string"
+              },
+              "project_id": {
+                "description": "The project ID to remove the resource from.",
+                "type": "string"
+              },
+              "resource_id": {
+                "description": "The ID of the resource to remove.",
+                "type": "string"
+              },
+              "resource_type": {
+                "description": "Resource type: 'job', 'monitor', 'dataset', 'monitor_group', or 'webhook'.",
+                "type": "string"
+              }
+            },
+            "required": ["project_id", "resource_id", "resource_type"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "properties": {
+              "result": {
+                "type": "string"
+              }
+            },
+            "required": ["result"],
+            "type": "object",
+            "x-fastmcp-wrap-result": true
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "digest": "sha256:0bbaaa44a9b6988d10703efb1f32642ca4a86bfe6174fe13985ae40336db108f"
+        },
+        {
+          "name": "remove_webhook_resource",
+          "title": "Remove Webhook Resource",
+          "description": "Unmap a resource from a webhook.\n\nUse when:\n- You want to stop a webhook from firing for a specific job or monitor.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "api_key": {
+                "default": "",
+                "description": "CatchAll API key. Optional if provided via x-api-key header or CATCHALL_API_KEY env var.",
+                "type": "string"
+              },
+              "resource_id": {
+                "description": "The ID of the mapped job/monitor/monitor_group.",
+                "type": "string"
+              },
+              "resource_type": {
+                "description": "Resource type: 'job', 'monitor', or 'monitor_group'.",
+                "type": "string"
+              },
+              "webhook_id": {
+                "description": "The webhook ID to detach the resource from.",
+                "type": "string"
+              }
+            },
+            "required": ["resource_id", "resource_type", "webhook_id"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "properties": {
+              "result": {
+                "type": "string"
+              }
+            },
+            "required": ["result"],
+            "type": "object",
+            "x-fastmcp-wrap-result": true
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "digest": "sha256:d85ba31046c02732005192a855e65ada091c0819f8b7f703a8d3e0cf2312532b"
+        },
+        {
+          "name": "submit_query",
+          "title": "Submit Query",
+          "description": "Create a new CatchAll processing job from a natural-language query.\n\nUse when:\n- You want to start a new CatchAll web research run from a user query.\n- You want the API to fetch/process sources and then return structured results.\n\nDo not use when:\n- You want status for an existing job (use `get_job_status`).\n- You want records for an existing job (use `pull_results`).\n\nKey rules:\n- `query` is required.\n- You can submit with only `query`; omitted optional fields (`validators`, `enrichments`, `start_date`, `end_date`) are auto-selected/generated by the API.\n- Optional fields are independent: you can pass any subset (for example, custom `validators` but no `enrichments`), and omitted fields are still auto-selected/generated.\n- When `connected_dataset_ids` is set, the `query` must describe the **topic or event type only**\n  (e.g. \"M&A activity\", \"regulatory filings\", \"executive changes\"). Do NOT write things like\n  \"for my companies\", \"for the selected list of companies\", or \"news about my watchlist\" — the\n  entity filtering is applied automatically by the connected dataset. Mentioning companies in\n  the query when a dataset is attached is redundant and degrades retrieval quality.\n- When `connected_dataset_ids` is set, entity-relevance validators (e.g.\n  `company_is_primary_subject`) are generated automatically by the API. Do NOT add them\n  manually to `validators` — they are redundant and may conflict with the auto-generated ones.\n  Only pass validators that describe the **event or topic**, not entity filtering.\n- `start_date` and `end_date` filter by web page discovery date, not event date.\n- Discovery dates and extracted event dates can differ. For event-time accuracy, use event-focused validators/enrichments and verify `event_date` in pulled results.\n- `end_date` must be after `start_date`.\n- Dates outside your plan lookback limits return API 400.\n- `limit` controls processed record count (cost-affecting). Omit it to retrieve everything\n  up to your plan's maximum. If provided, must be >= 10.\n- `validators` / `enrichments` may be passed either as arrays or as JSON-string arrays (for client compatibility).\n- `validators[].type` must be `boolean` (if omitted, it defaults to `boolean`).\n- `enrichments[].type` supported values: text, number, date, option, url, company.\n\nBasic examples:\n- validators:\n  `[{\"name\":\"is_acquisition_event\",\"description\":\"true if page describes an acquisition\",\"type\":\"boolean\"}]`\n- enrichments:\n  `[{\"name\":\"acquiring_company\",\"description\":\"Extract acquiring company\",\"type\":\"company\"},{\"name\":\"deal_value\",\"description\":\"Extract announced deal value\",\"type\":\"number\"}]`\n\nNext step:\n- Save the returned `job_id`.\n- Poll `get_job_status` and call `pull_results` (partial results can appear before completion).",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "api_key": {
+                "default": "",
+                "description": "CatchAll API key. Optional if provided via x-api-key header or CATCHALL_API_KEY env var.",
+                "type": "string"
+              },
+              "connected_dataset_ids": {
+                "anyOf": [
+                  {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Optional list of dataset IDs whose entities narrow the retrieval\nscope. When set: (1) entity filtering is applied automatically — do NOT mention the\ncompany list or watchlist in `query`; (2) entity-relevance validators such as\n`company_is_primary_subject` are generated automatically — do NOT add them to\n`validators`. `ed_score_min` defaults to 2 if not provided."
+              },
+              "context": {
+                "default": "",
+                "description": "Optional guidance on what to prioritize (for example, target entities,\nevent types, and specific data points you want captured in enrichments).\nIf a company dataset will be attached, note that entity-relevance\nvalidators (e.g. `company_is_primary_subject`) will be auto-generated —\ndo not ask for them here. Do not mention things like \"company list will be attached\".",
+                "type": "string"
+              },
+              "ed_association_type": {
+                "default": "",
+                "description": "Optional filter on how strongly a watchlist entity must appear in\neach event. Only relevant when `connected_dataset_ids` is set.\n- `\"event_associated\"`: keep only events where the entity is a **direct actor** (default when connected_dataset_ids is set).\n- `\"mention\"`: keep all even where the entity is **merely referenced**.",
+                "type": "string"
+              },
+              "ed_score_min": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Optional minimum entity-domain relevance score (1-10). Only relevant when\n`connected_dataset_ids` is set."
+              },
+              "end_date": {
+                "default": "",
+                "description": "Optional ISO 8601 UTC end of search window.",
+                "type": "string"
+              },
+              "enrichments": {
+                "anyOf": [
+                  {
+                    "items": {
+                      "description": "Schema for a custom enrichment.",
+                      "properties": {
+                        "description": {
+                          "type": "string"
+                        },
+                        "name": {
+                          "type": "string"
+                        },
+                        "type": {
+                          "enum": ["text", "number", "date", "option", "url", "company"],
+                          "type": "string"
+                        }
+                      },
+                      "required": ["description", "name", "type"],
+                      "type": "object"
+                    },
+                    "type": "array"
+                  },
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Optional custom enrichments (`name`, `description`, `type`), as array or JSON-string array."
+              },
+              "fetch_all_watchlist_news": {
+                "default": false,
+                "description": "When `True`, retrieves **all** news for connected watchlist\nentities without applying topic filtering from `query`. Requires\n`connected_dataset_ids` to be set. Default: `False`.",
+                "type": "boolean"
+              },
+              "limit": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Optional processing cap (minimum 10); affects cost. Omit to retrieve everything\nup to your plan's maximum."
+              },
+              "mode": {
+                "default": "",
+                "description": "Optional job processing mode: `\"lite\"` (faster, lower cost, less detail) or `\"base\"` (default,\nfull extraction). If omitted, the API defaults to `\"base\"`.",
+                "type": "string"
+              },
+              "project_id": {
+                "default": "",
+                "description": "Optional project ID to associate this job with.",
+                "type": "string"
+              },
+              "query": {
+                "description": "Plain text search intent (required).",
+                "type": "string"
+              },
+              "schema": {
+                "default": "",
+                "description": "Optional advanced custom JSON schema string that overrides the default extraction\nschema. Use `initialize_query` to discover a suitable schema.",
+                "type": "string"
+              },
+              "source_groups": {
+                "anyOf": [
+                  {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Optional list of source group slugs (max 20 per job) that scope fetching\nto their domain allowlists. Use `list_source_groups` to discover available slugs.\nThe attached groups (slug, name, description) are echoed back as `source_groups`\nin `get_job_status` / `pull_results`."
+              },
+              "start_date": {
+                "default": "",
+                "description": "Optional ISO 8601 UTC start of search window.",
+                "type": "string"
+              },
+              "validators": {
+                "anyOf": [
+                  {
+                    "items": {
+                      "description": "Schema for a custom validator.",
+                      "properties": {
+                        "description": {
+                          "type": "string"
+                        },
+                        "name": {
+                          "type": "string"
+                        },
+                        "type": {
+                          "const": "boolean",
+                          "type": "string"
+                        }
+                      },
+                      "required": ["description", "name", "type"],
+                      "type": "object"
+                    },
+                    "type": "array"
+                  },
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Optional custom boolean validators (`name`, `description`, `type`), as array or JSON-string array.\nWhen `connected_dataset_ids` is set, do NOT include entity-relevance validators such as\n`company_is_primary_subject` — the API generates those automatically. Only add validators\nthat describe the event or topic (e.g. `is_acquisition_event`)."
+              },
+              "webhook_ids": {
+                "anyOf": [
+                  {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Optional list of webhook IDs to notify when the job completes (max 5 per job).\nUse `list_webhooks` / `create_webhook` to get IDs."
+              }
+            },
+            "required": ["query"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "properties": {
+              "result": {
+                "type": "string"
+              }
+            },
+            "required": ["result"],
+            "type": "object",
+            "x-fastmcp-wrap-result": true
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "digest": "sha256:6b66e47d70fd1af6c1b4c4e4232f33771c1ead8c516c142ed3ccdd30cfaa1f2f"
+        },
+        {
+          "name": "test_webhook",
+          "title": "Test Webhook",
+          "description": "Send a test delivery to a webhook endpoint.\n\nUse when:\n- You want to verify a webhook URL is reachable and correctly configured\n  before attaching it to a monitor or job.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "api_key": {
+                "default": "",
+                "description": "CatchAll API key. Optional if provided via x-api-key header or CATCHALL_API_KEY env var.",
+                "type": "string"
+              },
+              "payload": {
+                "anyOf": [
+                  {
+                    "additionalProperties": true,
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Optional custom JSON object to send as the test body. If omitted,\nthe API sends a default sample payload."
+              },
+              "webhook_id": {
+                "description": "The webhook ID to test.",
+                "type": "string"
+              }
+            },
+            "required": ["webhook_id"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "properties": {
+              "result": {
+                "type": "string"
+              }
+            },
+            "required": ["result"],
+            "type": "object",
+            "x-fastmcp-wrap-result": true
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "digest": "sha256:3320a1de419a14af584b5a64eb4d7c4b58f9bb6403f87855941d4e3267b9f901"
+        },
+        {
+          "name": "trigger_webhook",
+          "title": "Trigger Webhook",
+          "description": "Manually trigger webhook delivery for a resource (job/monitor/monitor_group).\n\nUse when:\n- You want to (re-)send a webhook delivery on demand instead of waiting for\n  the automatic dispatch — e.g. to replay a missed or failed delivery.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "api_key": {
+                "default": "",
+                "description": "CatchAll API key. Optional if provided via x-api-key header or CATCHALL_API_KEY env var.",
+                "type": "string"
+              },
+              "job_id": {
+                "default": "",
+                "description": "Optional job ID whose payload should be delivered (e.g. a specific\nmonitor run's job). If omitted, the API picks the resource's payload itself.",
+                "type": "string"
+              },
+              "resource_id": {
+                "description": "The ID of the job/monitor/monitor_group to trigger delivery for.",
+                "type": "string"
+              },
+              "resource_type": {
+                "description": "Resource type: 'job', 'monitor', or 'monitor_group'.",
+                "type": "string"
+              },
+              "webhook_id": {
+                "description": "The webhook ID to deliver through.",
+                "type": "string"
+              }
+            },
+            "required": ["resource_id", "resource_type", "webhook_id"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "properties": {
+              "result": {
+                "type": "string"
+              }
+            },
+            "required": ["result"],
+            "type": "object",
+            "x-fastmcp-wrap-result": true
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "digest": "sha256:1c8e00334ac22ecefde9332d0e3abc9fcedfb850fc864353defa6aa6b4314f9d"
+        },
+        {
+          "name": "update_dataset",
+          "title": "Update Dataset",
+          "description": "Update a dataset's name and/or description.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "api_key": {
+                "default": "",
+                "description": "CatchAll API key. Optional if provided via x-api-key header or CATCHALL_API_KEY env var.",
+                "type": "string"
+              },
+              "dataset_id": {
+                "description": "The dataset ID to update.",
+                "type": "string"
+              },
+              "description": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Optional new dataset description."
+              },
+              "name": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Optional new dataset name."
+              }
+            },
+            "required": ["dataset_id"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "properties": {
+              "result": {
+                "type": "string"
+              }
+            },
+            "required": ["result"],
+            "type": "object",
+            "x-fastmcp-wrap-result": true
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "digest": "sha256:0f65268a7d78b782c1af5c074efab110f044ad9c544325206cb2b9b2b68cf056"
+        },
+        {
+          "name": "update_entity",
+          "title": "Update Entity",
+          "description": "Update an entity's name, description, external_entity_id, and/or attributes.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "additional_attributes": {
+                "anyOf": [
+                  {
+                    "additionalProperties": true,
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Optional updated structured attributes\n(see `create_entity` for the company_attributes shape)."
+              },
+              "api_key": {
+                "default": "",
+                "description": "CatchAll API key. Optional if provided via x-api-key header or CATCHALL_API_KEY env var.",
+                "type": "string"
+              },
+              "description": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Optional new description."
+              },
+              "entity_id": {
+                "description": "The entity ID to update.",
+                "type": "string"
+              },
+              "external_entity_id": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Optional customer-supplied identifier linking this entity to\nan external system's record (new in 1.6.3)."
+              },
+              "name": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Optional new entity name."
+              }
+            },
+            "required": ["entity_id"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "properties": {
+              "result": {
+                "type": "string"
+              }
+            },
+            "required": ["result"],
+            "type": "object",
+            "x-fastmcp-wrap-result": true
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "digest": "sha256:d4405f4b393211cf91b1ad2b580fd109a0ee6bcb1da994b06b3cad719f2de17e"
+        },
+        {
+          "name": "update_monitor",
+          "title": "Update Monitor",
+          "description": "Update a monitor's schedule, timezone, webhook assignments, and per-run limit.\n\nNote: reference_job_id cannot be modified through this endpoint.\nWebhooks are centralized — pass webhook IDs (from `create_webhook`/`list_webhooks`).",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "api_key": {
+                "default": "",
+                "description": "CatchAll API key. Optional if provided via x-api-key header or CATCHALL_API_KEY env var.",
+                "type": "string"
+              },
+              "limit": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Optional updated maximum records per run (minimum 10)."
+              },
+              "monitor_id": {
+                "description": "The monitor ID to update",
+                "type": "string"
+              },
+              "schedule": {
+                "default": "",
+                "description": "Optional new natural-language schedule to replace the monitor's current\none (e.g. 'every day at 9 AM', 'every Monday at 6 PM EST'). Leave unset to keep\nthe current schedule. The scheduler picks up the new schedule on its next\nreload and the old schedule stops firing.",
+                "type": "string"
+              },
+              "timezone": {
+                "default": "",
+                "description": "Optional IANA timezone for the new schedule (e.g. 'America/New_York').\nDefaults to UTC. Overridden if the schedule text itself contains a timezone.\nIgnored if `schedule` is not set.",
+                "type": "string"
+              },
+              "webhook_ids": {
+                "anyOf": [
+                  {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Optional list of webhook IDs to assign to this monitor.\nPass an empty list `[]` to clear all webhook assignments."
+              }
+            },
+            "required": ["monitor_id"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "properties": {
+              "result": {
+                "type": "string"
+              }
+            },
+            "required": ["result"],
+            "type": "object",
+            "x-fastmcp-wrap-result": true
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "digest": "sha256:613c3348c5d5094047c075b26c65bc9140a5abc6484361630d25dfb5432389c0"
+        },
+        {
+          "name": "update_project",
+          "title": "Update Project",
+          "description": "Update a project's name and/or description.\n\nOnly the fields you provide are changed.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "api_key": {
+                "default": "",
+                "description": "CatchAll API key. Optional if provided via x-api-key header or CATCHALL_API_KEY env var.",
+                "type": "string"
+              },
+              "description": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Optional new project description."
+              },
+              "name": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Optional new project name."
+              },
+              "project_id": {
+                "description": "The project ID to update.",
+                "type": "string"
+              }
+            },
+            "required": ["project_id"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "properties": {
+              "result": {
+                "type": "string"
+              }
+            },
+            "required": ["result"],
+            "type": "object",
+            "x-fastmcp-wrap-result": true
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "digest": "sha256:392b0704f9fef46ce8a3f7bf4285b3611b74a90315c8712495a423097ed851a7"
+        },
+        {
+          "name": "update_webhook",
+          "title": "Update Webhook",
+          "description": "Update an existing webhook's configuration.\n\nUse when:\n- You want to change a webhook's URL, method, headers, or other settings.\n- You want to enable or disable a webhook (set `is_active`).\n- Only the fields you provide are updated; omitted fields remain unchanged.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "api_key": {
+                "default": "",
+                "description": "CatchAll API key. Optional if provided via x-api-key header or CATCHALL_API_KEY env var.",
+                "type": "string"
+              },
+              "auth": {
+                "anyOf": [
+                  {
+                    "additionalProperties": true,
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Updated auth object. One of:\n- {\"type\": \"bearer\", \"token\": \"...\"}\n- {\"type\": \"api_key\", \"header\": \"X-API-Key\", \"value\": \"...\"}\n- {\"type\": \"basic\", \"username\": \"...\", \"password\": \"...\"}"
+              },
+              "delivery_mode": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Updated delivery mode: 'full' or 'per_record'."
+              },
+              "formatter_config": {
+                "anyOf": [
+                  {
+                    "additionalProperties": true,
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Updated formatter configuration dict."
+              },
+              "headers": {
+                "anyOf": [
+                  {
+                    "additionalProperties": {
+                      "type": "string"
+                    },
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Updated dict of custom HTTP headers."
+              },
+              "is_active": {
+                "anyOf": [
+                  {
+                    "type": "boolean"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Set to false to disable the webhook (stop deliveries), true to re-enable it."
+              },
+              "method": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Updated HTTP method: one of GET, POST, PUT, PATCH, DELETE."
+              },
+              "name": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Updated webhook name."
+              },
+              "params": {
+                "anyOf": [
+                  {
+                    "additionalProperties": {
+                      "type": "string"
+                    },
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Updated dict of query string parameters."
+              },
+              "type": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Updated webhook type: 'generic', 'slack', 'teams', or 'custom'."
+              },
+              "url": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Updated target URL."
+              },
+              "webhook_id": {
+                "description": "The webhook ID to update.",
+                "type": "string"
+              }
+            },
+            "required": ["webhook_id"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "properties": {
+              "result": {
+                "type": "string"
+              }
+            },
+            "required": ["result"],
+            "type": "object",
+            "x-fastmcp-wrap-result": true
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "digest": "sha256:1b62e5441fcdf5d3742b7c79432350db06ede3a03105929525a9704d22f27ac0"
+        },
+        {
+          "name": "validate_query",
+          "title": "Validate Query",
+          "description": "Check the quality of a query before submitting a job (\"Check Query Quality\").\n\nUse when:\n- You want quick feedback on whether a query is well-formed for CatchAll\n  before spending credits on a job.\n- You want concrete suggestions to improve a vague or overly broad query.\n\nDo not use when:\n- You want to preview auto-generated validators/enrichments (use `initialize_query`).\n- You want to actually run a search (use `submit_query`).",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "api_key": {
+                "default": "",
+                "description": "CatchAll API key. Optional if provided via x-api-key header or CATCHALL_API_KEY env var.",
+                "type": "string"
+              },
+              "query": {
+                "description": "The natural-language query to assess (required).",
+                "type": "string"
+              }
+            },
+            "required": ["query"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "properties": {
+              "result": {
+                "type": "string"
+              }
+            },
+            "required": ["result"],
+            "type": "object",
+            "x-fastmcp-wrap-result": true
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "digest": "sha256:028a785f937ab0a66ce89e656def8f94257d16b60328b2abf8970f5016692012"
+        }
+      ],
+      "digest": "sha256:915749ebc0d0b6739ebbb3c97f7fe2c2d9324ac3daea41c9da4eaa725972fad8"
+    }
+  }
+}

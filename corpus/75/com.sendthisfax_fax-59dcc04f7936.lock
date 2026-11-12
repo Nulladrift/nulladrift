@@ -1,0 +1,164 @@
+{
+  "lockfileVersion": 2,
+  "subjects": {
+    "com.sendthisfax/fax": {
+      "kind": "mcp-server",
+      "source": {
+        "client": "manual",
+        "file": "registry.modelcontextprotocol.io"
+      },
+      "transport": {
+        "type": "http",
+        "url": "https://www.sendthisfax.com/mcp"
+      },
+      "protocol": {
+        "era": "legacy",
+        "version": "2025-06-18"
+      },
+      "serverInfo": {
+        "name": "SendThisFax",
+        "version": "0.1.0"
+      },
+      "capabilities": {
+        "tools": {}
+      },
+      "instructions": "Send real faxes to institutions (EU-focused). There is no MCP upload tool: the PDF goes up as an HTTP multipart POST to https://www.sendthisfax.com/api/upload (see the send_fax tool description), so you need the file itself and an HTTP client outside MCP. If your environment cannot make that upload, tell the user instead of retrying. Never invent a fax_public_id; use the one the upload returns. Flow: 1) upload the PDF, 2) call send_fax, 3) have the user pay the returned checkout_url, 4) poll get_fax_status until delivered or failed. Failed faxes are auto-refunded. With a prepaid API key on the connection (Authorization: Bearer stf_live_...) step 3 disappears: send_fax debits the credit balance and sends immediately; check_balance reports the remaining credit. With a key and an HTTP client, POST https://www.sendthisfax.com/api/v1/faxes uploads and sends in one multipart request (fields file and recipient_number, same bearer header).\n",
+      "tools": [
+        {
+          "name": "check_balance",
+          "title": "Check credit balance",
+          "description": "Get the prepaid credit balance of the API key used to authenticate this MCP connection. Requires a bearer API key (stf_live_...). Buy or top up credits at https://www.sendthisfax.com/en/credits — credits never expire and failed faxes are re-credited automatically.\n",
+          "inputSchema": {
+            "properties": {},
+            "type": "object"
+          },
+          "annotations": {
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Check credit balance"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:3f747c02784047479d05d8e37479371fe83037ea052054a05dd69e8decb5bb11"
+        },
+        {
+          "name": "get_fax_status",
+          "title": "Get fax status",
+          "description": "Get the current status of a fax. Poll this after send_fax until a terminal state.\n\nFax lifecycle: draft (uploaded, not submitted) -> pending (submitted, awaiting payment) -> sending -> delivered | failed.\nPayment lifecycle: unpaid -> verifying/open (checkout in progress) -> paid | failed | canceled | expired.\nA fax that fails after payment is refunded automatically to the payer.\n",
+          "inputSchema": {
+            "properties": {
+              "fax_id": {
+                "description": "The fax public id (fax_...) returned by the upload",
+                "pattern": "^fax_",
+                "type": "string"
+              }
+            },
+            "required": ["fax_id"],
+            "type": "object"
+          },
+          "annotations": {
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Get fax status"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:374aa21b2fc2f23757f008bd6105ed58f137403a0287f331f15fc3d270a2e2cf"
+        },
+        {
+          "name": "get_price",
+          "title": "Get fax price quote",
+          "description": "Get the price quote in euro cents for sending a fax. Pricing: 5.00 EUR for up to 5 pages, plus 0.50 EUR per extra page, plus VAT based on the payer's billing country (0% VAT outside the EU).\n",
+          "inputSchema": {
+            "properties": {
+              "billing_country": {
+                "description": "ISO 3166-1 alpha-2 country code of the payer (e.g. DE, FR, NL)",
+                "pattern": "^[A-Za-z]{2}$",
+                "type": "string"
+              },
+              "page_count": {
+                "description": "Number of pages in the PDF",
+                "maximum": 1000,
+                "minimum": 1,
+                "type": "integer"
+              }
+            },
+            "required": ["billing_country", "page_count"],
+            "type": "object"
+          },
+          "annotations": {
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Get fax price quote"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:c2cd4e6c648c70a0a10307169cd507413fd14a2c4ff1bc5dae804c9caa627350"
+        },
+        {
+          "name": "send_fax",
+          "title": "Send a fax",
+          "description": "Submit an uploaded PDF for faxing.\n\nStep 1 (before this tool): upload the PDF over plain HTTP multipart, using any HTTP client you have — shell, JavaScript fetch with FormData, Python, etc.:\n  curl -F \"file=@document.pdf\" https://www.sendthisfax.com/api/upload\n  fetch(\"https://www.sendthisfax.com/api/upload\", {method: \"POST\", body: formDataWithFile})\nThe response contains fax_public_id and page_count. PDFs must be unencrypted, at most 50 MB and 1000 pages.\n\nStep 2: call this tool with the fax_public_id and the recipient fax number.\n\nTwo modes:\n- With an API key (Authorization: Bearer stf_live_... on this MCP connection): the fax price is debited from the prepaid credit balance and sending starts immediately — no checkout, no browser. sender_email and billing_country are optional (they default to the key's records). Buy credits at https://www.sendthisfax.com/en/credits.\n- Without an API key: sender_email and billing_country are REQUIRED and the tool returns a checkout_url the USER must pay in a browser; the fax is sent automatically once paid.\n\nIn both modes, poll get_fax_status until status reaches \"delivered\" or \"failed\" (failures after payment are auto-refunded).\n\nFor integration testing, +19898989898 is the designated test recipient number.\n",
+          "inputSchema": {
+            "properties": {
+              "billing_country": {
+                "description": "ISO 3166-1 alpha-2 country of the payer, determines VAT. Required without an API key; fixed by the key's first purchase otherwise.",
+                "pattern": "^[A-Za-z]{2}$",
+                "type": "string"
+              },
+              "fax_public_id": {
+                "description": "The fax public id (fax_...) from the upload step",
+                "pattern": "^fax_",
+                "type": "string"
+              },
+              "locale": {
+                "description": "Language for emails and the checkout page (default: en)",
+                "enum": ["en", "de", "fr", "nl", "es", "it"],
+                "type": "string"
+              },
+              "recipient_number": {
+                "description": "Recipient fax number in E.164 format, e.g. +49301234567",
+                "pattern": "^\\+[1-9][0-9]{6,14}$",
+                "type": "string"
+              },
+              "sender_email": {
+                "description": "Payer email for the receipt and delivery notification. Required without an API key; defaults to the key's email otherwise.",
+                "format": "email",
+                "type": "string"
+              }
+            },
+            "required": ["fax_public_id", "recipient_number"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": false,
+            "openWorldHint": true,
+            "readOnlyHint": false,
+            "title": "Send a fax"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:0821390c35f4e207ddc9bd601af20cc2ab7c861cd07f05716b210aa5cdf8b27c"
+        }
+      ],
+      "digest": "sha256:986283a87b6c2714cef8929aceb550258373b9e5075ba94ec4aa0f746906d767"
+    }
+  }
+}

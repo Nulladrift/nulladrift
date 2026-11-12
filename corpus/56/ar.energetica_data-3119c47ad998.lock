@@ -1,0 +1,2383 @@
+{
+  "lockfileVersion": 2,
+  "subjects": {
+    "ar.energetica/data": {
+      "kind": "mcp-server",
+      "source": {
+        "client": "manual",
+        "file": "registry.modelcontextprotocol.io"
+      },
+      "transport": {
+        "type": "http",
+        "url": "https://energetica.ar/api/mcp"
+      },
+      "protocol": {
+        "era": "modern",
+        "version": "2026-07-28",
+        "supportedVersions": ["2026-07-28"]
+      },
+      "serverInfo": {
+        "name": "energetica-data",
+        "title": "Energética — Argentine oil & gas data",
+        "version": "3.0.0"
+      },
+      "capabilities": {
+        "tools": {
+          "listChanged": true
+        }
+      },
+      "instructions": "Energética: Argentine oil & gas, energy and macro data from official sources, rebuilt daily.\n\nHow to work:\n- Start with describe_data (tables, periods, tool per table, warnings, last complete month). Prefer curated tools; execute_sql for the rest.\n- Entity filters take exact names; close ones are resolved (see notes), ambiguous ones fail with candidates. Join several with \"|\". resolve_entity finds names.\n- Names and values are in Spanish (NEUQUINA, formacion lowercase: 'vaca muerta').\n- Results: CSV plus structuredContent. max_rows (any tool): rows to return (default 200, capped by tier); meta.truncated = rows cut; meta.sql adapts to execute_sql; meta.definitions = rules applied.\n- In SQL, totals without wells: agg_produccion_mensual (1M rows), not produccion_mensual (18M).\n\nDomain rules:\n- produccion_mensual: one row per well and month; prod_petroleo_m3 (m³), prod_gas_miles_m3 (thousand m³). 1 m³ = 6.2898 bbl.\n- Producing well in a month: prod_petroleo_m3 > 0 or prod_gas_miles_m3 > 0. COUNT(DISTINCT idpozo) without that filter counts reporting wells, not producing ones.\n- Active well (by registry state, pozos.tipo_estado): Extracción Efectiva, En Inyección Efectiva, Otras Situación Activo.\n- IP30/IP90/IP180: production is monthly, so these are monthly proxies, not exact daily windows. For each well, its first months with prod_petroleo_m3 > 0: IP30 = oil of the first month / dias_activo; IP90 and IP180 = oil of the first 3 and 6 producing months / their dias_activo (m³/d; ×6.2898 for bbl/d). The well's formation, subtipo and tipo_pozo are those of that first month (shale oil: 'SHALE' and 'Petrolífero'). Precomputed in pozos_metricas.\n- GOR = prod_gas_miles_m3 × 1000 / prod_petroleo_m3 (m³/m³).\n- Water cut = 100 × water / (water + oil), as a ratio of sums over the group, not an average of wells.\n- BOE = oil m³ × 6.2898 + gas thousand m³ × 5.8858 (6,000 ft³ of gas = 1 BOE).\n- Year-on-year growth = BOE of the 12 months to the period end vs the previous 12 (entities under 1,000 BOE in the previous 12 are left out).\n- Last complete production month: the latest with ≥ 95 % of the reporting wells of the busiest of its 6 previous months. describe_data reports it; say it is an estimate.\n- reservas: Horizon: end of useful life. unidad mixes Mm3 (oil, thousand m³) and MMm3 (gas, million m³): never sum across units.\n- fracturas: empresa_informante = operator at the time of the job; pozos.empresa = current operator.\n- cammesa_generacion: Intraday power samples (MW) with gaps, not monthly energy. region 'Total SADI' is the system total: do not add regions.\n- balanza_comercial: periodo is an integer YYYYMM.",
+      "tools": [
+        {
+          "name": "describe_data",
+          "title": "Data catalog",
+          "description": "Start here. Every table and view: description, period, rows, tool to use, warnings, and the last complete production month. With tablas, also their columns. Example: {tablas: ['pozos']}.",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "max_rows": {
+                "minimum": 1,
+                "type": "number"
+              },
+              "tablas": {
+                "description": "Tables or views whose columns you need",
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 6,
+                "minItems": 1,
+                "type": "array"
+              }
+            },
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "additionalProperties": false,
+            "properties": {
+              "columns": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string"
+                    },
+                    "unit": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["name", "type"],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "meta": {
+                "additionalProperties": false,
+                "properties": {
+                  "definitions": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "max_rows": {
+                    "type": "number"
+                  },
+                  "notes": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "query_ms": {
+                    "type": "number"
+                  },
+                  "returned": {
+                    "type": "number"
+                  },
+                  "sources": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "sql": {
+                    "type": "string"
+                  },
+                  "truncated": {
+                    "type": "boolean"
+                  }
+                },
+                "required": ["max_rows", "query_ms", "returned", "sources", "truncated"],
+                "type": "object"
+              },
+              "rows": {
+                "items": {
+                  "items": {},
+                  "type": "array"
+                },
+                "type": "array"
+              },
+              "sections": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "columns": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "name": {
+                            "type": "string"
+                          },
+                          "type": {
+                            "type": "string"
+                          },
+                          "unit": {
+                            "type": "string"
+                          }
+                        },
+                        "required": ["name", "type"],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "rows": {
+                      "items": {
+                        "items": {},
+                        "type": "array"
+                      },
+                      "type": "array"
+                    },
+                    "truncated": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": ["columns", "name", "rows", "truncated"],
+                  "type": "object"
+                },
+                "type": "array"
+              }
+            },
+            "required": ["columns", "meta", "rows"],
+            "type": "object"
+          },
+          "annotations": {
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Data catalog"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:278cfaef4e9968f11d51a8ef1022e276ea1c961c97073c31179c4568f4621860"
+        },
+        {
+          "name": "execute_sql",
+          "title": "Read-only SQL",
+          "description": "Run read-only DuckDB SQL (a single SELECT or WITH) over the catalog tables and views. Prefer the curated tools when they fit; call describe_data first for tables and columns. Column names and values are in Spanish. Example: {sql: \"SELECT anio, SUM(prod_petroleo_m3) FROM agg_produccion_mensual WHERE formacion = 'vaca muerta' GROUP BY 1 ORDER BY 1\"}.",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "max_rows": {
+                "minimum": 1,
+                "type": "number"
+              },
+              "sql": {
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": ["sql"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "additionalProperties": false,
+            "properties": {
+              "columns": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string"
+                    },
+                    "unit": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["name", "type"],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "meta": {
+                "additionalProperties": false,
+                "properties": {
+                  "definitions": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "max_rows": {
+                    "type": "number"
+                  },
+                  "notes": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "query_ms": {
+                    "type": "number"
+                  },
+                  "returned": {
+                    "type": "number"
+                  },
+                  "sources": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "sql": {
+                    "type": "string"
+                  },
+                  "truncated": {
+                    "type": "boolean"
+                  }
+                },
+                "required": ["max_rows", "query_ms", "returned", "sources", "truncated"],
+                "type": "object"
+              },
+              "rows": {
+                "items": {
+                  "items": {},
+                  "type": "array"
+                },
+                "type": "array"
+              },
+              "sections": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "columns": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "name": {
+                            "type": "string"
+                          },
+                          "type": {
+                            "type": "string"
+                          },
+                          "unit": {
+                            "type": "string"
+                          }
+                        },
+                        "required": ["name", "type"],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "rows": {
+                      "items": {
+                        "items": {},
+                        "type": "array"
+                      },
+                      "type": "array"
+                    },
+                    "truncated": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": ["columns", "name", "rows", "truncated"],
+                  "type": "object"
+                },
+                "type": "array"
+              }
+            },
+            "required": ["columns", "meta", "rows"],
+            "type": "object"
+          },
+          "annotations": {
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Read-only SQL"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:f109985aa3e677ac751b678014222b3c3177f22e18149c3140a3618715bfde5b"
+        },
+        {
+          "name": "get_area",
+          "title": "Concession area profile",
+          "description": "One concession area: 12-month production and year-on-year change, operators and shares, wells by type and state, top wells and the last 24 months. Example: {area_concesion: 'LOMA CAMPANA'}.",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "area_concesion": {
+                "description": "Area name; close names are resolved",
+                "minLength": 2,
+                "type": "string"
+              },
+              "max_rows": {
+                "minimum": 1,
+                "type": "number"
+              }
+            },
+            "required": ["area_concesion"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "additionalProperties": false,
+            "properties": {
+              "columns": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string"
+                    },
+                    "unit": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["name", "type"],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "meta": {
+                "additionalProperties": false,
+                "properties": {
+                  "definitions": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "max_rows": {
+                    "type": "number"
+                  },
+                  "notes": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "query_ms": {
+                    "type": "number"
+                  },
+                  "returned": {
+                    "type": "number"
+                  },
+                  "sources": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "sql": {
+                    "type": "string"
+                  },
+                  "truncated": {
+                    "type": "boolean"
+                  }
+                },
+                "required": ["max_rows", "query_ms", "returned", "sources", "truncated"],
+                "type": "object"
+              },
+              "rows": {
+                "items": {
+                  "items": {},
+                  "type": "array"
+                },
+                "type": "array"
+              },
+              "sections": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "columns": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "name": {
+                            "type": "string"
+                          },
+                          "type": {
+                            "type": "string"
+                          },
+                          "unit": {
+                            "type": "string"
+                          }
+                        },
+                        "required": ["name", "type"],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "rows": {
+                      "items": {
+                        "items": {},
+                        "type": "array"
+                      },
+                      "type": "array"
+                    },
+                    "truncated": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": ["columns", "name", "rows", "truncated"],
+                  "type": "object"
+                },
+                "type": "array"
+              }
+            },
+            "required": ["columns", "meta", "rows"],
+            "type": "object"
+          },
+          "annotations": {
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Concession area profile"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:572cc219c2ce35caf64eae5369bf3fe011490105c77c98393fde7a0c140c41cf"
+        },
+        {
+          "name": "get_company",
+          "title": "Company profile",
+          "description": "One operator: 12-month production, national share, year-on-year change, areas, basins, wells, investments, reserves and, if listed, share price and SEC financials. Example: {empresa: 'VISTA ENERGY ARGENTINA SAU'}.",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "empresa": {
+                "description": "Company name; close names are resolved",
+                "minLength": 2,
+                "type": "string"
+              },
+              "max_rows": {
+                "minimum": 1,
+                "type": "number"
+              }
+            },
+            "required": ["empresa"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "additionalProperties": false,
+            "properties": {
+              "columns": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string"
+                    },
+                    "unit": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["name", "type"],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "meta": {
+                "additionalProperties": false,
+                "properties": {
+                  "definitions": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "max_rows": {
+                    "type": "number"
+                  },
+                  "notes": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "query_ms": {
+                    "type": "number"
+                  },
+                  "returned": {
+                    "type": "number"
+                  },
+                  "sources": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "sql": {
+                    "type": "string"
+                  },
+                  "truncated": {
+                    "type": "boolean"
+                  }
+                },
+                "required": ["max_rows", "query_ms", "returned", "sources", "truncated"],
+                "type": "object"
+              },
+              "rows": {
+                "items": {
+                  "items": {},
+                  "type": "array"
+                },
+                "type": "array"
+              },
+              "sections": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "columns": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "name": {
+                            "type": "string"
+                          },
+                          "type": {
+                            "type": "string"
+                          },
+                          "unit": {
+                            "type": "string"
+                          }
+                        },
+                        "required": ["name", "type"],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "rows": {
+                      "items": {
+                        "items": {},
+                        "type": "array"
+                      },
+                      "type": "array"
+                    },
+                    "truncated": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": ["columns", "name", "rows", "truncated"],
+                  "type": "object"
+                },
+                "type": "array"
+              }
+            },
+            "required": ["columns", "meta", "rows"],
+            "type": "object"
+          },
+          "annotations": {
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Company profile"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:94359a587405fca77f8a4df36c872f60d735cf456d1d949b348754f868e3d0d7"
+        },
+        {
+          "name": "get_well",
+          "title": "Well profile",
+          "description": "One well by idpozo or sigla: registry data, IP30/90/180, cumulative volumes, recent GOR and water cut, last 36 months of production, fracture jobs and trajectory. Example: {sigla: 'YPF.Nq.LCa-1001(h)'}.",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "idpozo": {
+                "type": "number"
+              },
+              "max_rows": {
+                "minimum": 1,
+                "type": "number"
+              },
+              "sigla": {
+                "description": "Well code; close codes are resolved",
+                "minLength": 2,
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "additionalProperties": false,
+            "properties": {
+              "columns": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string"
+                    },
+                    "unit": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["name", "type"],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "meta": {
+                "additionalProperties": false,
+                "properties": {
+                  "definitions": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "max_rows": {
+                    "type": "number"
+                  },
+                  "notes": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "query_ms": {
+                    "type": "number"
+                  },
+                  "returned": {
+                    "type": "number"
+                  },
+                  "sources": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "sql": {
+                    "type": "string"
+                  },
+                  "truncated": {
+                    "type": "boolean"
+                  }
+                },
+                "required": ["max_rows", "query_ms", "returned", "sources", "truncated"],
+                "type": "object"
+              },
+              "rows": {
+                "items": {
+                  "items": {},
+                  "type": "array"
+                },
+                "type": "array"
+              },
+              "sections": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "columns": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "name": {
+                            "type": "string"
+                          },
+                          "type": {
+                            "type": "string"
+                          },
+                          "unit": {
+                            "type": "string"
+                          }
+                        },
+                        "required": ["name", "type"],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "rows": {
+                      "items": {
+                        "items": {},
+                        "type": "array"
+                      },
+                      "type": "array"
+                    },
+                    "truncated": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": ["columns", "name", "rows", "truncated"],
+                  "type": "object"
+                },
+                "type": "array"
+              }
+            },
+            "required": ["columns", "meta", "rows"],
+            "type": "object"
+          },
+          "annotations": {
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Well profile"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:b8056764b99ac5c6a5c71aeb375b04b89585dba33cc8490f9648260a9181546c"
+        },
+        {
+          "name": "query_completions",
+          "title": "Fracture jobs (completions)",
+          "description": "Fracture jobs by year, company (the one that reported the job), area, formation or well: wells, stages, stages per well, lateral length, proppant, water. Example: {formacion: 'vaca muerta', fecha_desde: '2025', agrupar_por: ['empresa']}.",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "agrupar_por": {
+                "description": "Default anio",
+                "items": {
+                  "enum": ["anio", "empresa", "area_concesion", "formacion", "subtipo_reservorio", "idpozo"],
+                  "type": "string"
+                },
+                "maxItems": 2,
+                "type": "array"
+              },
+              "area_concesion": {
+                "type": "string"
+              },
+              "cuenca": {
+                "type": "string"
+              },
+              "empresa": {
+                "type": "string"
+              },
+              "fecha_desde": {
+                "description": "Completion (end of fracture) from",
+                "type": "string"
+              },
+              "fecha_hasta": {
+                "type": "string"
+              },
+              "formacion": {
+                "type": "string"
+              },
+              "max_rows": {
+                "minimum": 1,
+                "type": "number"
+              },
+              "subtipo_reservorio": {
+                "enum": ["SHALE", "TIGHT"],
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "additionalProperties": false,
+            "properties": {
+              "columns": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string"
+                    },
+                    "unit": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["name", "type"],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "meta": {
+                "additionalProperties": false,
+                "properties": {
+                  "definitions": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "max_rows": {
+                    "type": "number"
+                  },
+                  "notes": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "query_ms": {
+                    "type": "number"
+                  },
+                  "returned": {
+                    "type": "number"
+                  },
+                  "sources": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "sql": {
+                    "type": "string"
+                  },
+                  "truncated": {
+                    "type": "boolean"
+                  }
+                },
+                "required": ["max_rows", "query_ms", "returned", "sources", "truncated"],
+                "type": "object"
+              },
+              "rows": {
+                "items": {
+                  "items": {},
+                  "type": "array"
+                },
+                "type": "array"
+              },
+              "sections": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "columns": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "name": {
+                            "type": "string"
+                          },
+                          "type": {
+                            "type": "string"
+                          },
+                          "unit": {
+                            "type": "string"
+                          }
+                        },
+                        "required": ["name", "type"],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "rows": {
+                      "items": {
+                        "items": {},
+                        "type": "array"
+                      },
+                      "type": "array"
+                    },
+                    "truncated": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": ["columns", "name", "rows", "truncated"],
+                  "type": "object"
+                },
+                "type": "array"
+              }
+            },
+            "required": ["columns", "meta", "rows"],
+            "type": "object"
+          },
+          "annotations": {
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Fracture jobs (completions)"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:d63d7986bc2ee16f11861de601201ef958d5dda0df0ec7bc5e722a1a9285cb5b"
+        },
+        {
+          "name": "query_investments",
+          "title": "Upstream investments",
+          "description": "Upstream oil & gas investments in Argentina by company, basin, year and concept, in millions of USD (drilling, workovers, pipelines, facilities, seismic…). Example: {cuenca: 'NEUQUINA', anio_desde: 2023, concepto: 'perforacion'}.",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "anio_desde": {
+                "description": "Year of the sworn statement (DDJJ)",
+                "type": "number"
+              },
+              "anio_hasta": {
+                "type": "number"
+              },
+              "concepto": {
+                "description": "Investment concept, partial match ignoring accents (e.g. 'perforacion', 'reparacion de pozos', 'gasoductos', 'sismica')",
+                "type": "string"
+              },
+              "cuenca": {
+                "type": "string"
+              },
+              "empresa": {
+                "type": "string"
+              },
+              "max_rows": {
+                "minimum": 1,
+                "type": "number"
+              }
+            },
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "additionalProperties": false,
+            "properties": {
+              "columns": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string"
+                    },
+                    "unit": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["name", "type"],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "meta": {
+                "additionalProperties": false,
+                "properties": {
+                  "definitions": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "max_rows": {
+                    "type": "number"
+                  },
+                  "notes": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "query_ms": {
+                    "type": "number"
+                  },
+                  "returned": {
+                    "type": "number"
+                  },
+                  "sources": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "sql": {
+                    "type": "string"
+                  },
+                  "truncated": {
+                    "type": "boolean"
+                  }
+                },
+                "required": ["max_rows", "query_ms", "returned", "sources", "truncated"],
+                "type": "object"
+              },
+              "rows": {
+                "items": {
+                  "items": {},
+                  "type": "array"
+                },
+                "type": "array"
+              },
+              "sections": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "columns": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "name": {
+                            "type": "string"
+                          },
+                          "type": {
+                            "type": "string"
+                          },
+                          "unit": {
+                            "type": "string"
+                          }
+                        },
+                        "required": ["name", "type"],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "rows": {
+                      "items": {
+                        "items": {},
+                        "type": "array"
+                      },
+                      "type": "array"
+                    },
+                    "truncated": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": ["columns", "name", "rows", "truncated"],
+                  "type": "object"
+                },
+                "type": "array"
+              }
+            },
+            "required": ["columns", "meta", "rows"],
+            "type": "object"
+          },
+          "annotations": {
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Upstream investments"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:9eeef03ec3ae84ddc61284603601f2039202afbface17a4bd155d26e5d7449ee"
+        },
+        {
+          "name": "query_prices",
+          "title": "Energy prices and exchange rates",
+          "description": "International and local energy prices: WTI, Brent, Henry Hub (daily, USD), Argentine crude price used for royalties by province (monthly, USD/bbl) and ARS/USD exchange rates (daily). Most recent first. Example: {serie: 'BRENT', fecha_desde: '2024', frecuencia: 'mensual'}.",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "fecha_desde": {
+                "type": "string"
+              },
+              "fecha_hasta": {
+                "description": "Inclusive",
+                "type": "string"
+              },
+              "frecuencia": {
+                "description": "Average; CRUDO_LOCAL is monthly",
+                "enum": ["diario", "mensual", "anual"],
+                "type": "string"
+              },
+              "max_rows": {
+                "minimum": 1,
+                "type": "number"
+              },
+              "provincia": {
+                "description": "Only CRUDO_LOCAL; omit for every province",
+                "enum": ["NEUQUEN", "CHUBUT", "MENDOZA", "SANTA CRUZ", "SALTA", "RIO NEGRO", "LA PAMPA", "TIERRA DEL FUEGO", "FORMOSA", "JUJUY", "ESTADO NACIONAL"],
+                "type": "string"
+              },
+              "serie": {
+                "enum": ["WTI", "BRENT", "HENRY_HUB", "CRUDO_LOCAL", "USD_OFICIAL", "USD_MAYORISTA", "USD_BLUE", "USD_MEP", "USD_CCL"],
+                "type": "string"
+              }
+            },
+            "required": ["serie"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "additionalProperties": false,
+            "properties": {
+              "columns": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string"
+                    },
+                    "unit": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["name", "type"],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "meta": {
+                "additionalProperties": false,
+                "properties": {
+                  "definitions": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "max_rows": {
+                    "type": "number"
+                  },
+                  "notes": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "query_ms": {
+                    "type": "number"
+                  },
+                  "returned": {
+                    "type": "number"
+                  },
+                  "sources": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "sql": {
+                    "type": "string"
+                  },
+                  "truncated": {
+                    "type": "boolean"
+                  }
+                },
+                "required": ["max_rows", "query_ms", "returned", "sources", "truncated"],
+                "type": "object"
+              },
+              "rows": {
+                "items": {
+                  "items": {},
+                  "type": "array"
+                },
+                "type": "array"
+              },
+              "sections": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "columns": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "name": {
+                            "type": "string"
+                          },
+                          "type": {
+                            "type": "string"
+                          },
+                          "unit": {
+                            "type": "string"
+                          }
+                        },
+                        "required": ["name", "type"],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "rows": {
+                      "items": {
+                        "items": {},
+                        "type": "array"
+                      },
+                      "type": "array"
+                    },
+                    "truncated": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": ["columns", "name", "rows", "truncated"],
+                  "type": "object"
+                },
+                "type": "array"
+              }
+            },
+            "required": ["columns", "meta", "rows"],
+            "type": "object"
+          },
+          "annotations": {
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Energy prices and exchange rates"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:5f83746b3b768860ff6a2535abf6fc33420f5ac508ceb45081915231e530978e"
+        },
+        {
+          "name": "query_production",
+          "title": "Monthly hydrocarbon production",
+          "description": "Oil, gas and water production (2006–present) by entity and period, grouped by up to 3 dimensions: volumes, BOE, producing/reporting wells, daily rate, GOR, water cut. Example: {area_concesion: \"LOMA CAMPANA\", fecha_desde: \"2025\", agrupar_por: [\"anio\"]}.",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "agrupar_por": {
+                "description": "Up to 3 dimensions; default [mes]",
+                "items": {
+                  "enum": ["mes", "anio", "empresa", "cuenca", "provincia", "area_concesion", "yacimiento", "formacion", "tipo_recurso", "subtipo_recurso", "tipo_pozo", "idpozo"],
+                  "type": "string"
+                },
+                "maxItems": 3,
+                "type": "array"
+              },
+              "area_concesion": {
+                "type": "string"
+              },
+              "cuenca": {
+                "type": "string"
+              },
+              "empresa": {
+                "type": "string"
+              },
+              "fecha_desde": {
+                "type": "string"
+              },
+              "fecha_hasta": {
+                "description": "Inclusive",
+                "type": "string"
+              },
+              "formacion": {
+                "type": "string"
+              },
+              "idpozo": {
+                "items": {
+                  "type": "number"
+                },
+                "maxItems": 50,
+                "type": "array"
+              },
+              "max_rows": {
+                "minimum": 1,
+                "type": "number"
+              },
+              "metricas": {
+                "description": "Default petroleo, gas, agua (+ pozos_productores by mes); caudal_diario = volume / calendar days",
+                "items": {
+                  "enum": ["petroleo", "gas", "agua", "boe", "gor", "water_cut", "pozos_productores", "pozos_informantes", "caudal_diario"],
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "provincia": {
+                "type": "string"
+              },
+              "subtipo_recurso": {
+                "enum": ["SHALE", "TIGHT"],
+                "type": "string"
+              },
+              "tipo_pozo": {
+                "description": "e.g. Petrolífero, Gasífero",
+                "type": "string"
+              },
+              "tipo_recurso": {
+                "enum": ["CONVENCIONAL", "NO CONVENCIONAL", "SIN RESERVORIO", "NO DISCRIMINADO"],
+                "type": "string"
+              },
+              "yacimiento": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "additionalProperties": false,
+            "properties": {
+              "columns": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string"
+                    },
+                    "unit": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["name", "type"],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "meta": {
+                "additionalProperties": false,
+                "properties": {
+                  "definitions": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "max_rows": {
+                    "type": "number"
+                  },
+                  "notes": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "query_ms": {
+                    "type": "number"
+                  },
+                  "returned": {
+                    "type": "number"
+                  },
+                  "sources": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "sql": {
+                    "type": "string"
+                  },
+                  "truncated": {
+                    "type": "boolean"
+                  }
+                },
+                "required": ["max_rows", "query_ms", "returned", "sources", "truncated"],
+                "type": "object"
+              },
+              "rows": {
+                "items": {
+                  "items": {},
+                  "type": "array"
+                },
+                "type": "array"
+              },
+              "sections": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "columns": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "name": {
+                            "type": "string"
+                          },
+                          "type": {
+                            "type": "string"
+                          },
+                          "unit": {
+                            "type": "string"
+                          }
+                        },
+                        "required": ["name", "type"],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "rows": {
+                      "items": {
+                        "items": {},
+                        "type": "array"
+                      },
+                      "type": "array"
+                    },
+                    "truncated": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": ["columns", "name", "rows", "truncated"],
+                  "type": "object"
+                },
+                "type": "array"
+              }
+            },
+            "required": ["columns", "meta", "rows"],
+            "type": "object"
+          },
+          "annotations": {
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Monthly hydrocarbon production"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:86b35da149c1414218965060e5bf2e56bd9351550c318ff1189fe902f1e5acc5"
+        },
+        {
+          "name": "query_reserves",
+          "title": "Hydrocarbon reserves",
+          "description": "P1/P2/P3 oil and gas reserves at Dec 31 by year, basin, company and resource type (end of useful life); oil and gas in separate columns. Default: latest year. Example: {anio: [2024], agrupar_por: ['cuenca'], categorias: ['P1']}.",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "agrupar_por": {
+                "description": "Default anio",
+                "items": {
+                  "enum": ["anio", "cuenca", "empresa", "tipo_recurso"],
+                  "type": "string"
+                },
+                "maxItems": 3,
+                "type": "array"
+              },
+              "anio": {
+                "description": "Years; default the latest",
+                "items": {
+                  "maximum": 9007199254740991,
+                  "minimum": -9007199254740991,
+                  "type": "integer"
+                },
+                "maxItems": 20,
+                "type": "array"
+              },
+              "categorias": {
+                "description": "Default P1, P2, P3",
+                "items": {
+                  "enum": ["P1", "P2", "P3"],
+                  "type": "string"
+                },
+                "minItems": 1,
+                "type": "array"
+              },
+              "cuenca": {
+                "type": "string"
+              },
+              "empresa": {
+                "type": "string"
+              },
+              "max_rows": {
+                "minimum": 1,
+                "type": "number"
+              },
+              "tipo_recurso": {
+                "enum": ["CONVENCIONAL", "NO CONVENCIONAL", "SIN RESERVORIO", "NO DISCRIMINADO"],
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "additionalProperties": false,
+            "properties": {
+              "columns": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string"
+                    },
+                    "unit": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["name", "type"],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "meta": {
+                "additionalProperties": false,
+                "properties": {
+                  "definitions": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "max_rows": {
+                    "type": "number"
+                  },
+                  "notes": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "query_ms": {
+                    "type": "number"
+                  },
+                  "returned": {
+                    "type": "number"
+                  },
+                  "sources": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "sql": {
+                    "type": "string"
+                  },
+                  "truncated": {
+                    "type": "boolean"
+                  }
+                },
+                "required": ["max_rows", "query_ms", "returned", "sources", "truncated"],
+                "type": "object"
+              },
+              "rows": {
+                "items": {
+                  "items": {},
+                  "type": "array"
+                },
+                "type": "array"
+              },
+              "sections": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "columns": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "name": {
+                            "type": "string"
+                          },
+                          "type": {
+                            "type": "string"
+                          },
+                          "unit": {
+                            "type": "string"
+                          }
+                        },
+                        "required": ["name", "type"],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "rows": {
+                      "items": {
+                        "items": {},
+                        "type": "array"
+                      },
+                      "type": "array"
+                    },
+                    "truncated": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": ["columns", "name", "rows", "truncated"],
+                  "type": "object"
+                },
+                "type": "array"
+              }
+            },
+            "required": ["columns", "meta", "rows"],
+            "type": "object"
+          },
+          "annotations": {
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Hydrocarbon reserves"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:a21b9d7649909ed454a73a5f4dadf4e22d8f547691c73fe1e84031b1723b2f5f"
+        },
+        {
+          "name": "query_trade",
+          "title": "Hydrocarbon trade balance",
+          "description": "Argentina hydrocarbon exports and imports by month: crude oil (HS 2709), refined products (HS 2710) and natural gas (HS 2711), FOB USD and kg. Example: {anio: 2025, flow: 'export', producto: 'crude'}.",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "anio": {
+                "type": "number"
+              },
+              "flow": {
+                "description": "Trade flow direction",
+                "enum": ["export", "import"],
+                "type": "string"
+              },
+              "max_rows": {
+                "minimum": 1,
+                "type": "number"
+              },
+              "producto": {
+                "description": "Product category",
+                "enum": ["crude", "refined", "gas"],
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "additionalProperties": false,
+            "properties": {
+              "columns": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string"
+                    },
+                    "unit": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["name", "type"],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "meta": {
+                "additionalProperties": false,
+                "properties": {
+                  "definitions": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "max_rows": {
+                    "type": "number"
+                  },
+                  "notes": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "query_ms": {
+                    "type": "number"
+                  },
+                  "returned": {
+                    "type": "number"
+                  },
+                  "sources": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "sql": {
+                    "type": "string"
+                  },
+                  "truncated": {
+                    "type": "boolean"
+                  }
+                },
+                "required": ["max_rows", "query_ms", "returned", "sources", "truncated"],
+                "type": "object"
+              },
+              "rows": {
+                "items": {
+                  "items": {},
+                  "type": "array"
+                },
+                "type": "array"
+              },
+              "sections": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "columns": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "name": {
+                            "type": "string"
+                          },
+                          "type": {
+                            "type": "string"
+                          },
+                          "unit": {
+                            "type": "string"
+                          }
+                        },
+                        "required": ["name", "type"],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "rows": {
+                      "items": {
+                        "items": {},
+                        "type": "array"
+                      },
+                      "type": "array"
+                    },
+                    "truncated": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": ["columns", "name", "rows", "truncated"],
+                  "type": "object"
+                },
+                "type": "array"
+              }
+            },
+            "required": ["columns", "meta", "rows"],
+            "type": "object"
+          },
+          "annotations": {
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Hydrocarbon trade balance"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:6907f297699733d5c139d760d12653e28e81f0bf3738d69ef279ddf4074e0497"
+        },
+        {
+          "name": "query_wells",
+          "title": "Wells search",
+          "description": "Wells in the registry (~86,000): location, type, current status and operator, cumulative production, first and last month with production, IP30. Example: {provincia: 'Neuquén', subtipo_recurso: 'SHALE', tipo_estado: 'activos'}.",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "area_concesion": {
+                "type": "string"
+              },
+              "con_produccion": {
+                "type": "boolean"
+              },
+              "cuenca": {
+                "type": "string"
+              },
+              "empresa": {
+                "type": "string"
+              },
+              "formacion": {
+                "type": "string"
+              },
+              "max_rows": {
+                "minimum": 1,
+                "type": "number"
+              },
+              "orden": {
+                "enum": ["acumulado", "ip30", "primera_produccion"],
+                "type": "string"
+              },
+              "primera_produccion_desde": {
+                "description": "First month with oil or gas > 0 (or the registry fecha_primera_prod with segun_padron)",
+                "type": "string"
+              },
+              "primera_produccion_hasta": {
+                "type": "string"
+              },
+              "provincia": {
+                "type": "string"
+              },
+              "segun_padron": {
+                "type": "boolean"
+              },
+              "subtipo_recurso": {
+                "enum": ["SHALE", "TIGHT"],
+                "type": "string"
+              },
+              "tipo_estado": {
+                "description": "Exact registry status (e.g. Abandonado, Parado Transitoriamente) or 'activos'",
+                "type": "string"
+              },
+              "tipo_pozo": {
+                "description": "e.g. Petrolífero, Gasífero",
+                "type": "string"
+              },
+              "tipo_recurso": {
+                "enum": ["CONVENCIONAL", "NO CONVENCIONAL", "SIN RESERVORIO", "NO DISCRIMINADO"],
+                "type": "string"
+              },
+              "yacimiento": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "additionalProperties": false,
+            "properties": {
+              "columns": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string"
+                    },
+                    "unit": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["name", "type"],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "meta": {
+                "additionalProperties": false,
+                "properties": {
+                  "definitions": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "max_rows": {
+                    "type": "number"
+                  },
+                  "notes": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "query_ms": {
+                    "type": "number"
+                  },
+                  "returned": {
+                    "type": "number"
+                  },
+                  "sources": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "sql": {
+                    "type": "string"
+                  },
+                  "truncated": {
+                    "type": "boolean"
+                  }
+                },
+                "required": ["max_rows", "query_ms", "returned", "sources", "truncated"],
+                "type": "object"
+              },
+              "rows": {
+                "items": {
+                  "items": {},
+                  "type": "array"
+                },
+                "type": "array"
+              },
+              "sections": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "columns": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "name": {
+                            "type": "string"
+                          },
+                          "type": {
+                            "type": "string"
+                          },
+                          "unit": {
+                            "type": "string"
+                          }
+                        },
+                        "required": ["name", "type"],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "rows": {
+                      "items": {
+                        "items": {},
+                        "type": "array"
+                      },
+                      "type": "array"
+                    },
+                    "truncated": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": ["columns", "name", "rows", "truncated"],
+                  "type": "object"
+                },
+                "type": "array"
+              }
+            },
+            "required": ["columns", "meta", "rows"],
+            "type": "object"
+          },
+          "annotations": {
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Wells search"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:8dcc3b01f2841354c855cb27be6001615bd0e5e7742a46f7b6ad5138d3417c02"
+        },
+        {
+          "name": "rank_entities",
+          "title": "Rankings",
+          "description": "Top N wells, areas, companies, fields, basins or formations by production, BOE, GOR, water cut, growth, new wells or IP30/90/180 (raw, per meter, per stage). Example: {entidad: 'pozo', metrica: 'ip30', subtipo_recurso: 'SHALE', tipo_pozo: 'Petrolífero', fecha_desde: '2025', fecha_hasta: '2025'}.",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "area_concesion": {
+                "type": "string"
+              },
+              "cuenca": {
+                "type": "string"
+              },
+              "empresa": {
+                "type": "string"
+              },
+              "entidad": {
+                "enum": ["pozo", "area", "empresa", "yacimiento", "cuenca", "formacion"],
+                "type": "string"
+              },
+              "fecha_desde": {
+                "description": "Default: 12 months to fecha_hasta",
+                "type": "string"
+              },
+              "fecha_hasta": {
+                "description": "Inclusive; default the last complete month",
+                "type": "string"
+              },
+              "formacion": {
+                "type": "string"
+              },
+              "max_rows": {
+                "minimum": 1,
+                "type": "number"
+              },
+              "metrica": {
+                "description": "ip*: wells of a first-production cohort (or their average per entity); others over the period",
+                "enum": ["ip30", "ip90", "ip180", "ip30_por_metro", "ip30_por_etapa", "petroleo", "gas", "agua", "boe", "gor", "water_cut", "crecimiento_interanual", "pozos_nuevos"],
+                "type": "string"
+              },
+              "n": {
+                "description": "Default 10",
+                "maximum": 50,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "orden": {
+                "enum": ["desc", "asc"],
+                "type": "string"
+              },
+              "provincia": {
+                "type": "string"
+              },
+              "subtipo_recurso": {
+                "enum": ["SHALE", "TIGHT"],
+                "type": "string"
+              },
+              "tipo_pozo": {
+                "description": "e.g. Petrolífero, Gasífero",
+                "type": "string"
+              },
+              "yacimiento": {
+                "type": "string"
+              }
+            },
+            "required": ["entidad", "metrica"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "additionalProperties": false,
+            "properties": {
+              "columns": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string"
+                    },
+                    "unit": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["name", "type"],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "meta": {
+                "additionalProperties": false,
+                "properties": {
+                  "definitions": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "max_rows": {
+                    "type": "number"
+                  },
+                  "notes": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "query_ms": {
+                    "type": "number"
+                  },
+                  "returned": {
+                    "type": "number"
+                  },
+                  "sources": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "sql": {
+                    "type": "string"
+                  },
+                  "truncated": {
+                    "type": "boolean"
+                  }
+                },
+                "required": ["max_rows", "query_ms", "returned", "sources", "truncated"],
+                "type": "object"
+              },
+              "rows": {
+                "items": {
+                  "items": {},
+                  "type": "array"
+                },
+                "type": "array"
+              },
+              "sections": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "columns": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "name": {
+                            "type": "string"
+                          },
+                          "type": {
+                            "type": "string"
+                          },
+                          "unit": {
+                            "type": "string"
+                          }
+                        },
+                        "required": ["name", "type"],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "rows": {
+                      "items": {
+                        "items": {},
+                        "type": "array"
+                      },
+                      "type": "array"
+                    },
+                    "truncated": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": ["columns", "name", "rows", "truncated"],
+                  "type": "object"
+                },
+                "type": "array"
+              }
+            },
+            "required": ["columns", "meta", "rows"],
+            "type": "object"
+          },
+          "annotations": {
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Rankings"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:9e3f06b0972f0a5ad59c79301bcdfe3e8849341c278971b3ca9a0a25033d43d9"
+        },
+        {
+          "name": "resolve_entity",
+          "title": "Find companies, areas, fields and wells",
+          "description": "Free text → exact names for filters (companies, areas, fields, formations, basins, provinces, wells), with context and last month with production. Example: {texto: 'palmar', tipo: 'yacimiento'}.",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "max_rows": {
+                "minimum": 1,
+                "type": "number"
+              },
+              "texto": {
+                "description": "Name or part of it",
+                "minLength": 2,
+                "type": "string"
+              },
+              "tipo": {
+                "enum": ["empresa", "area", "yacimiento", "formacion", "cuenca", "provincia", "pozo"],
+                "type": "string"
+              }
+            },
+            "required": ["texto"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "additionalProperties": false,
+            "properties": {
+              "columns": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string"
+                    },
+                    "unit": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["name", "type"],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "meta": {
+                "additionalProperties": false,
+                "properties": {
+                  "definitions": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "max_rows": {
+                    "type": "number"
+                  },
+                  "notes": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "query_ms": {
+                    "type": "number"
+                  },
+                  "returned": {
+                    "type": "number"
+                  },
+                  "sources": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "sql": {
+                    "type": "string"
+                  },
+                  "truncated": {
+                    "type": "boolean"
+                  }
+                },
+                "required": ["max_rows", "query_ms", "returned", "sources", "truncated"],
+                "type": "object"
+              },
+              "rows": {
+                "items": {
+                  "items": {},
+                  "type": "array"
+                },
+                "type": "array"
+              },
+              "sections": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "columns": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "name": {
+                            "type": "string"
+                          },
+                          "type": {
+                            "type": "string"
+                          },
+                          "unit": {
+                            "type": "string"
+                          }
+                        },
+                        "required": ["name", "type"],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "rows": {
+                      "items": {
+                        "items": {},
+                        "type": "array"
+                      },
+                      "type": "array"
+                    },
+                    "truncated": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": ["columns", "name", "rows", "truncated"],
+                  "type": "object"
+                },
+                "type": "array"
+              }
+            },
+            "required": ["columns", "meta", "rows"],
+            "type": "object"
+          },
+          "annotations": {
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Find companies, areas, fields and wells"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:e3b36f9586f40bf6f1472138ac4bdf939e6d51c1978ffbdb39bbdf1088da3894"
+        }
+      ],
+      "digest": "sha256:464d20cfd89ca9215f5e77749fc14b416113e3ce25fdf7f6e143f081563d91c1"
+    }
+  }
+}

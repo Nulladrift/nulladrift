@@ -1,0 +1,282 @@
+{
+  "lockfileVersion": 2,
+  "subjects": {
+    "com.cleartracedata/cleartrace": {
+      "kind": "mcp-server",
+      "source": {
+        "client": "manual",
+        "file": "registry.modelcontextprotocol.io"
+      },
+      "transport": {
+        "type": "http",
+        "url": "https://cleartracedata.com/mcp"
+      },
+      "protocol": {
+        "era": "modern",
+        "version": "2026-07-28",
+        "supportedVersions": ["2026-07-28"]
+      },
+      "serverInfo": {
+        "name": "cleartrace",
+        "title": "ClearTrace",
+        "version": "",
+        "websiteUrl": "https://cleartracedata.com"
+      },
+      "capabilities": {
+        "prompts": {
+          "listChanged": true
+        },
+        "resources": {
+          "listChanged": true,
+          "subscribe": true
+        },
+        "tools": {
+          "listChanged": true
+        }
+      },
+      "instructions": "ClearTrace measures how DEX trades actually executed on-chain,\nacross Ethereum, Base, Arbitrum and Optimism.\n\nWhat it is good for: comparing execution quality between venues, attributing\ntrade volume to the frontend or router that originated it (including unnamed\nones), and explaining what a specific transaction did and who routed it.\n\nThree things to carry into any answer built on these tools:\n\n1. This is a batch pipeline, not a live feed. Attribution volumes refresh weekly\n   and are dated to the Monday of their window; quoting one as \"today's\" volume\n   is wrong.\n2. The metrics are deliberately separate. Slippage, revert rate and MEV exposure\n   are three different measurements and are never combined into one \"best\n   execution\" score, because the combination would hide which one moved.\n3. Coverage is partial and says so. A contract with no label is reported as\n   unlabeled rather than guessed at, and that is a real answer about a real\n   anonymous router, not a gap to paper over.\n\nEvery figure is public and free. An API key changes rate limits only.",
+      "tools": [
+        {
+          "name": "attribution",
+          "title": "Cross-frontend volume attribution",
+          "description": "Which frontend, router or interface originated on-chain DEX volume, aggregated per contract per chain. This is the dataset ClearTrace exists for: it names the venue behind volume that block explorers leave as an anonymous contract.\n\nTHE VOLUME COLUMNS ARE TWO DIFFERENT KINDS AND MUST NOT BE SUMMED TOGETHER. `direct_volume_usd`, `aggregator_volume_usd`, `proxy_volume_usd` and `aggregator_partner_volume_usd` partition `total_volume_usd` between them. `calldata_suffix_volume_usd` and `erc20_fee_volume_usd` are OVERLAYS: they re-describe dollars already counted in the first group, seen through a different attribution vector. A suffix figure larger than the total is therefore correct and is not a bug. Adding an overlay to a partition column double-counts.\n\nVolumes refresh weekly and are dated to the Monday of their window, so present them as a week's volume and never as today's.",
+          "inputSchema": {
+            "properties": {
+              "chain": {
+                "default": null,
+                "description": "One of: ethereum, base, arbitrum, optimism. Omit for all four; an unrecognised value is not an error and falls back rather than failing, so pass one of the four or nothing.",
+                "title": "Chain",
+                "type": "string"
+              },
+              "limit": {
+                "default": 20,
+                "description": "Rows to return, 1-100, default 20. Values outside that range are clamped, not rejected. The ceiling is deliberately low because results land in a context window, where a large page evicts the conversation.",
+                "title": "Limit",
+                "type": "integer"
+              },
+              "project": {
+                "default": null,
+                "description": "Frontend or router key to filter to, e.g. 'uniswap', 'oneinch'. Omit for every attributed venue. This is the machine key, not a display name.",
+                "title": "Project",
+                "type": "string"
+              }
+            },
+            "title": "attributionArguments",
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:b8655ee3eeeff1839fb26122051eb1daa3d6a6472dc60df7b1ff9428860268c9"
+        },
+        {
+          "name": "contract_attribution",
+          "title": "Attribution and label for one address",
+          "description": "What ClearTrace knows about a single contract or wallet address: its per-chain volume split across the four attribution vectors, plus any label resolved for it.\n\nMost useful on the ANONYMOUS routers and proxies that aggregate views leave unnamed -- that is the differentiated question this answers. Known, named protocol contracts are often keyed by name rather than address upstream and may return nothing here, so an empty result for a famous router is not evidence the address is obscure.\n\nAn address that resolves to no label is reported with a null label. Report that as 'not identified', which is what it means: these are genuinely anonymous deployments, and guessing an operator from volume or deployer alone has been wrong before.",
+          "inputSchema": {
+            "properties": {
+              "address": {
+                "description": "A single contract or wallet address, 0x-prefixed hex. Case-insensitive; checksummed or lowercase both work. One address per call.",
+                "title": "Address",
+                "type": "string"
+              },
+              "chain": {
+                "default": null,
+                "description": "One of: ethereum, base, arbitrum, optimism. Omit to return the address's split across all four, which is usually what you want, since the same deployment often appears on several.",
+                "title": "Chain",
+                "type": "string"
+              }
+            },
+            "required": ["address"],
+            "title": "contract_attributionArguments",
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:e8c6f6ea93cfc710aa27aaf893b442153fba495b4b4f4ebc451aab3f7d9ad6a9"
+        },
+        {
+          "name": "execution_benchmarks",
+          "title": "DEX and aggregator execution benchmark",
+          "description": "Rank DEXs and aggregators by realized execution quality: median slippage against a minute-level off-chain reference price (Dune prices.usd, an interpolated 5-minute exchange-aggregate feed and not a VWAP), expressed as a score of 0-100 (higher means less slippage).\n\nThis score measures SLIPPAGE ONLY. Revert rates and MEV exposure are tracked as separate metrics and are deliberately not folded in, so do not present this as an overall 'best execution' ranking -- a venue can score well here and fail often, and the caller has to ask `revert_rates` to find that out.\n\nExecution quality is not uniform across chains: pass a chain for a single-chain ranking, or 'all' for the blended cross-chain rollup, and do not describe the blend as if it were one chain's result.",
+          "inputSchema": {
+            "properties": {
+              "chain": {
+                "default": "all",
+                "description": "One of: ethereum, base, arbitrum, optimism, or 'all' (the default) for the blended cross-chain rollup. Do not describe the blend as one chain's result.",
+                "title": "Chain",
+                "type": "string"
+              },
+              "limit": {
+                "default": 20,
+                "description": "Rows to return, 1-100, default 20. Values outside that range are clamped, not rejected. The ceiling is deliberately low because results land in a context window, where a large page evicts the conversation.",
+                "title": "Limit",
+                "type": "integer"
+              }
+            },
+            "title": "execution_benchmarksArguments",
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:c4ec514f08c465c4c53e6553a22cf7e3cb201e6f397feebb4a73d31d13510fcb"
+        },
+        {
+          "name": "explain_transaction",
+          "title": "Explain one transaction's routing and origin",
+          "description": "Classify a single transaction against the attribution engine: which frontend or router originated the trade and by which evidence, the pools it touched, any fee recipients, and whether it was sandwiched.\n\nConfidence is per-vector and is reported per result -- a calldata suffix is strong evidence a specific frontend tagged the swap, while a fee recipient is indirect evidence and is never rated high. Pass that qualification through instead of stating the frontend flatly.\n\n`estimated_volume_usd` (only with price=true) is a best-effort spot price on the dominant leg. It is an approximation for orientation and must never be quoted as a settlement figure. Fee amounts are exact raw token integers with no decimals or pricing applied. deep=true costs more upstream credits; leave it off unless a shallow classification came back unattributed.",
+          "inputSchema": {
+            "properties": {
+              "chain": {
+                "default": "ethereum",
+                "description": "One of: ethereum, base, arbitrum, optimism. Defaults to ethereum, and an unrecognised value falls back to ethereum rather than failing, so pass the transaction's actual chain explicitly.",
+                "title": "Chain",
+                "type": "string"
+              },
+              "deep": {
+                "default": false,
+                "description": "Run the deeper classification pass. Slower. Worth setting only when the default pass came back unattributed.",
+                "title": "Deep",
+                "type": "boolean"
+              },
+              "price": {
+                "default": false,
+                "description": "Include price and value context alongside the routing classification.",
+                "title": "Price",
+                "type": "boolean"
+              },
+              "tx_hash": {
+                "description": "The transaction hash, 0x-prefixed hex. Must exist on `chain`: this does not search the other chains, so a hash from the wrong chain returns nothing rather than an error.",
+                "title": "Tx Hash",
+                "type": "string"
+              }
+            },
+            "required": ["tx_hash"],
+            "title": "explain_transactionArguments",
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:ff041bff27a1311a1c260118316392a46bc5cacd829b72f485fb527feba07881"
+        },
+        {
+          "name": "gas_prices",
+          "title": "Live gas prices per chain",
+          "description": "Current gas price on each supported chain, from RPC.\n\nOn the L2s (Base, Arbitrum, Optimism) this is the EXECUTION gas price only and excludes the L1 data availability fee, which is a real and sometimes dominant part of an L2 transaction's cost. Any cost estimate built from this figure on an L2 is a lower bound and should be labelled as one; comparing an L2 'cost' against Ethereum's on this basis overstates the L2's advantage.",
+          "inputSchema": {
+            "properties": {},
+            "title": "gas_pricesArguments",
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:ed16d1cd087f7f8d4b5a0cef06f2aa763035ab65aa76f1630f4bb1dfacb85219"
+        },
+        {
+          "name": "request_api_key",
+          "title": "Get a free ClearTrace API key",
+          "description": "Mint a free API key that multiplies this server's rate limits by 10x. Requires an email address.\n\nThe key changes LIMITS ONLY. Every figure served here is public and identical with or without one, there is no paid tier, and no data is gated behind it -- so present this as raising a ceiling, never as unlocking content. Ask the user before submitting their email; do not invent an address to satisfy the argument. The key is returned once and cannot be shown again, so surface it to the user verbatim.",
+          "inputSchema": {
+            "properties": {
+              "company": {
+                "default": null,
+                "description": "Optional. Where they work.",
+                "title": "Company",
+                "type": "string"
+              },
+              "email": {
+                "description": "The user's own email address. ASK THEM FOR IT; never invent one to satisfy this argument. The key is mailed nowhere and returned once in the response, so this is a lead record, not a delivery channel.",
+                "title": "Email",
+                "type": "string"
+              },
+              "name": {
+                "default": null,
+                "description": "Optional. The user's name.",
+                "title": "Name",
+                "type": "string"
+              },
+              "use_case": {
+                "default": null,
+                "description": "Optional, one line on what they are building. The single most useful field here.",
+                "title": "Use Case",
+                "type": "string"
+              }
+            },
+            "required": ["email"],
+            "title": "request_api_keyArguments",
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:d0095b9669a61e6ad77c80776ae19f3ffc419a7688a6214f6d7e882640247e82"
+        },
+        {
+          "name": "revert_rates",
+          "title": "On-chain transaction revert rates",
+          "description": "The share of a venue's routing transactions that fail on-chain, per chain. Reported separately from slippage because reliability and price are different questions.\n\nDO NOT RANK ACROSS EXECUTION MODELS. A revert rate measures reliability only where the failing transaction is the user's own -- a 'router' venue, where the user signs and submits the swap. On a batch-auction or intent venue a solver settles, and an order that cannot be filled never becomes a transaction at all, so its on-chain revert rate is structurally near zero no matter how well or badly it fills. Sorting every venue by revert rate puts those at the top and means nothing. `comparable_only` (the default) returns only the rows that may legitimately be ranked against each other.\n\nRead `user_revert_rate_pct` when present: the headline rate on some cells stays inflated by address-rotating spam senders that no per-sender filter separates cleanly, and the user-only figure is the measured genuine-user experience. Each row carries its `execution_model` and a `revert_comparable` flag; quote them.",
+          "inputSchema": {
+            "properties": {
+              "chain": {
+                "default": null,
+                "description": "One of: ethereum, base, arbitrum, optimism. Omit for all four; an unrecognised value is not an error and falls back rather than failing, so pass one of the four or nothing.",
+                "title": "Chain",
+                "type": "string"
+              },
+              "comparable_only": {
+                "default": true,
+                "description": "Default true, and leave it true unless you know why not. It restricts rows to venues whose execution model makes a revert rate comparable at all. Setting it false returns batch-auction and intent venues whose near-zero on-chain revert rate is structural, not a reliability signal, and ranking those against routers is the error this flag exists to prevent.",
+                "title": "Comparable Only",
+                "type": "boolean"
+              },
+              "limit": {
+                "default": 20,
+                "description": "Rows to return, 1-100, default 20. Values outside that range are clamped, not rejected. The ceiling is deliberately low because results land in a context window, where a large page evicts the conversation.",
+                "title": "Limit",
+                "type": "integer"
+              },
+              "project": {
+                "default": null,
+                "description": "Venue key to filter to, e.g. 'uniswap', 'oneinch'. Omit for every venue. Match the `project` value returned by this or `attribution`; it is not a display name.",
+                "title": "Project",
+                "type": "string"
+              }
+            },
+            "title": "revert_ratesArguments",
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:076d0bb2037d45a7c6d5500f652b5b3b15edf55e4524927402c710f05224d4e3"
+        }
+      ],
+      "digest": "sha256:2cba80879ee9e3985f036d623bf99defb30f43367c24dc0dac3d41a755a45257"
+    }
+  }
+}

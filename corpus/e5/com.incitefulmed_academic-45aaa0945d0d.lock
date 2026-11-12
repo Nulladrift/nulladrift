@@ -1,0 +1,1562 @@
+{
+  "lockfileVersion": 2,
+  "subjects": {
+    "com.incitefulmed/academic": {
+      "kind": "mcp-server",
+      "source": {
+        "client": "manual",
+        "file": "registry.modelcontextprotocol.io"
+      },
+      "transport": {
+        "type": "http",
+        "url": "https://incitefulmed.com/academic/mcp"
+      },
+      "protocol": {
+        "era": "modern",
+        "version": "2026-07-28",
+        "supportedVersions": ["2026-07-28"]
+      },
+      "serverInfo": {
+        "name": "inciteful-academic",
+        "version": "0.1.0"
+      },
+      "capabilities": {
+        "prompts": {
+          "listChanged": true
+        },
+        "tools": {
+          "listChanged": true
+        }
+      },
+      "instructions": "Inciteful's citation graph is what sets it apart from keyword search tools. Keyword search finds papers that use the query's words; the graph finds the papers a field cites and builds on, including work worded differently, and ranks them by their place in the network. Use search_literature to find seed papers, then always run the graph tools (find_similar_papers, explore_citation_network) before you answer. If the user names a paper, DOI or PMID, go straight to the graph.\n\nInciteful covers the OpenAlex citation graph (all fields; CC0 metadata; open-access full text from PubMed Central). Use it for literature searches, related work, key or review papers on a topic, citation chasing (references and citing papers), how two papers connect, and BibTeX/RIS export. It is not a systematic search.\n\nTypical flow:\n1. Seeds: use the papers the user names. Otherwise run search_literature, pick 10 or more well-cited, on-topic papers yourself (more seeds give better graph results), and tell the user which you used (title, year, DOI) so they can swap any. A keyword result list is a seed list, not an answer.\n2. find_similar_papers on the seeds (seconds).\n3. explore_citation_network for important papers, reviews and recent work around the seeds, plus their references and citations. A new graph can take about a minute; if a call says it is still working, repeat the same call, which joins the running build.\n4. connect_papers to show how two papers or lines of work relate; query_citation_graph for your own SQL.\n5. Snowball: show the user each round's new candidates and add as seeds just the papers they confirm as relevant. Stop when a round turns up no new relevant papers, or after 3 rounds, then ask before going further. Say how many rounds you ran and why you stopped.\n6. get_papers before citing: read the abstracts, check is_retracted and preprint vs published (graph rows carry no retraction flag), and merge duplicate versions of one work.\nIn the answer, point out relevant papers the graph found that keyword search did not.\n\nHonesty:\n- Cite no paper that a tool has not returned in this session; cite by DOI (OpenAlex ID if there is none). Never cite from memory or fill in metadata.\n- Don't attribute a finding to a paper unless you read its abstract or text; otherwise say the claim rests on the title or the network.\n- Title filters match titles only (stemmed), never abstracts or full text. Never claim a topic, study-design, language or other filter the tools do not have.\n- Relay every diagnostics advisory (few seeds, unexpanded highly cited papers, unresolved seeds, truncated results) before drawing conclusions.\n- references and citations return at most 100 papers sorted by global citation count; report the count against provenance.total when present and never call the list complete.\n- Rankings are network signals (PageRank, co-citation, coupling), not quality, and they favour highly cited work.\n- Coverage is OpenAlex: little grey literature, no trial registries, and abstracts are missing for some publishers. New papers with a Crossref DOI join the graph nightly; other new papers are looked up live only when named (provenance.coverage_note gives the dates).\n\nReporting: keep a log of each call (tool, query, seeds or SQL, filters, retrieved_at, graph_snapshot, counts) and offer it at the end. Graph results carry most of these fields in provenance; search_literature has no provenance, so log its query and filters yourself. For a methods section, map the log to PRISMA-S and TARCiS items and say which steps the user confirmed. Reruns can differ because the graph updates nightly and search_literature is live, so give the dates. For a systematic, scoping or guideline review, recommend searching multiple databases, trial registries and grey literature with a librarian or expert searcher.\n\nLimits: about 60 requests per minute per caller (hosted Claude and ChatGPT users share one larger bucket per vendor); on a rate-limit error, wait the time it gives. Long results are cut (truncated: true); lower limit or add title or year filters.",
+      "tools": [
+        {
+          "name": "connect_papers",
+          "title": "Connect two papers",
+          "description": "Find citation paths between two papers (DOI, OpenAlex ID or PMID), treating each citation as a link in either direction. Returns the paths, the citation edges (citing → cited), the papers on the paths, and each path's hop count in provenance.hops. extended: true also returns longer paths, aiming for at least 5. It shows how two lines of work relate.",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "extended": {
+                "default": false,
+                "description": "Also return longer paths.",
+                "type": "boolean"
+              },
+              "from": {
+                "description": "DOI, OpenAlex ID or PMID.",
+                "maxLength": 300,
+                "minLength": 1,
+                "type": "string"
+              },
+              "to": {
+                "description": "DOI, OpenAlex ID or PMID.",
+                "maxLength": 300,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": ["from", "to"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "additionalProperties": false,
+            "properties": {
+              "diagnostics": {
+                "additionalProperties": false,
+                "properties": {
+                  "advisories": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "unresolved_seeds": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "input": {
+                          "type": "string"
+                        },
+                        "reason": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["input", "reason"],
+                      "type": "object"
+                    },
+                    "type": "array"
+                  }
+                },
+                "required": ["advisories"],
+                "type": "object"
+              },
+              "edges": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "cited": {
+                      "type": "string"
+                    },
+                    "citing": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["cited", "citing"],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "inciteful_url": {
+                "type": ["string", "null"]
+              },
+              "paths": {
+                "items": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                "type": "array"
+              },
+              "provenance": {
+                "additionalProperties": false,
+                "properties": {
+                  "coverage_note": {
+                    "type": "string"
+                  },
+                  "data_source": {
+                    "type": "string"
+                  },
+                  "effective_limit": {
+                    "type": ["number", "null"]
+                  },
+                  "filters": {
+                    "additionalProperties": {},
+                    "propertyNames": {
+                      "type": "string"
+                    },
+                    "type": "object"
+                  },
+                  "graph": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "citations": {
+                        "type": ["number", "null"]
+                      },
+                      "depth": {
+                        "type": ["number", "null"]
+                      },
+                      "highly_cited_not_expanded": {
+                        "type": ["number", "null"]
+                      },
+                      "note": {
+                        "type": "string"
+                      },
+                      "papers": {
+                        "type": ["number", "null"]
+                      },
+                      "prune_threshold": {
+                        "type": ["number", "null"]
+                      },
+                      "seeds_not_expanded": {
+                        "type": ["number", "null"]
+                      }
+                    },
+                    "required": ["citations", "depth", "highly_cited_not_expanded", "papers", "prune_threshold", "seeds_not_expanded"],
+                    "type": "object"
+                  },
+                  "graph_snapshot": {
+                    "type": ["string", "null"]
+                  },
+                  "hops": {
+                    "items": {
+                      "type": "number"
+                    },
+                    "type": "array"
+                  },
+                  "method": {
+                    "type": "string"
+                  },
+                  "papers_searched": {
+                    "type": "number"
+                  },
+                  "recent_tier": {
+                    "type": ["string", "null"]
+                  },
+                  "retrieved_at": {
+                    "type": "string"
+                  },
+                  "seeds": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "input": {
+                          "type": "string"
+                        },
+                        "openalex_id": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["input", "openalex_id"],
+                      "type": "object"
+                    },
+                    "type": "array"
+                  },
+                  "server_version": {
+                    "type": "string"
+                  },
+                  "sql_executed": {
+                    "type": ["string", "null"]
+                  },
+                  "tool": {
+                    "type": "string"
+                  },
+                  "total": {
+                    "type": ["number", "null"]
+                  }
+                },
+                "required": ["coverage_note", "data_source", "effective_limit", "filters", "graph", "graph_snapshot", "method", "recent_tier", "retrieved_at", "seeds", "server_version", "sql_executed", "tool"],
+                "type": "object"
+              },
+              "rows": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "authors": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "doi": {
+                      "type": ["string", "null"]
+                    },
+                    "inciteful_url": {
+                      "type": "string"
+                    },
+                    "journal": {
+                      "type": ["string", "null"]
+                    },
+                    "num_cited_by": {
+                      "type": ["number", "null"]
+                    },
+                    "num_citing": {
+                      "type": ["number", "null"]
+                    },
+                    "paper_id": {
+                      "type": "string"
+                    },
+                    "published_year": {
+                      "type": ["number", "null"]
+                    },
+                    "title": {
+                      "type": ["string", "null"]
+                    }
+                  },
+                  "required": ["authors", "doi", "inciteful_url", "journal", "num_cited_by", "num_citing", "paper_id", "published_year", "title"],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "truncated": {
+                "type": "boolean"
+              }
+            },
+            "required": ["edges", "inciteful_url", "paths", "provenance", "rows", "truncated"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": true,
+            "title": "Connect two papers"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:3a0bdd197501f539595f9c1b3629720c2e116d3c56844de8e5950ea7db9c0686"
+        },
+        {
+          "name": "explore_citation_network",
+          "title": "Explore a citation network",
+          "description": "Map a field by its citations rather than its keywords: rank papers, authors, journals or institutions in the depth-2 citation graph Inciteful builds around 1–500 seed papers. analysis: similar (shared references and co-citation with the seeds), important (local PageRank), reviews (papers citing many others in the graph), recent (PageRank among papers from the last 3 years), authors, journals, institutions; or references / citations: the seeds' reference lists or citing papers from OpenAlex, sorted by global cited_by_count, with the total count. A graph that is not cached yet can take a minute to build. title_all / title_any / title_none filter by words in paper titles. They match titles only (not abstracts or full text), with Porter stemming. year_from / year_to filter by publication year. Title and year filters apply to the graph analyses, not to references or citations. limit is at most 100. Results carry provenance (method, graph size and depth, the SQL run) and diagnostics.",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "analysis": {
+                "enum": ["similar", "important", "reviews", "recent", "authors", "journals", "institutions", "references", "citations"],
+                "type": "string"
+              },
+              "limit": {
+                "default": 25,
+                "maximum": 100,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "seeds": {
+                "description": "1–500 seed papers: DOIs, OpenAlex IDs (W…) or PMIDs. Duplicates count once.",
+                "items": {
+                  "maxLength": 300,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "maxItems": 500,
+                "minItems": 1,
+                "type": "array"
+              },
+              "title_all": {
+                "description": "Every term must be in the title.",
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 20,
+                "type": "array"
+              },
+              "title_any": {
+                "description": "At least one term must be in the title.",
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 20,
+                "type": "array"
+              },
+              "title_none": {
+                "description": "No term may be in the title; needs title_all or title_any.",
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 20,
+                "type": "array"
+              },
+              "year_from": {
+                "maximum": 9007199254740991,
+                "minimum": -9007199254740991,
+                "type": "integer"
+              },
+              "year_to": {
+                "maximum": 9007199254740991,
+                "minimum": -9007199254740991,
+                "type": "integer"
+              }
+            },
+            "required": ["analysis", "seeds"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "additionalProperties": false,
+            "properties": {
+              "analysis": {
+                "type": "string"
+              },
+              "diagnostics": {
+                "additionalProperties": false,
+                "properties": {
+                  "advisories": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "unresolved_seeds": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "input": {
+                          "type": "string"
+                        },
+                        "reason": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["input", "reason"],
+                      "type": "object"
+                    },
+                    "type": "array"
+                  }
+                },
+                "required": ["advisories"],
+                "type": "object"
+              },
+              "inciteful_url": {
+                "type": ["string", "null"]
+              },
+              "provenance": {
+                "additionalProperties": false,
+                "properties": {
+                  "coverage_note": {
+                    "type": "string"
+                  },
+                  "data_source": {
+                    "type": "string"
+                  },
+                  "effective_limit": {
+                    "type": ["number", "null"]
+                  },
+                  "filters": {
+                    "additionalProperties": {},
+                    "propertyNames": {
+                      "type": "string"
+                    },
+                    "type": "object"
+                  },
+                  "graph": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "citations": {
+                        "type": ["number", "null"]
+                      },
+                      "depth": {
+                        "type": ["number", "null"]
+                      },
+                      "highly_cited_not_expanded": {
+                        "type": ["number", "null"]
+                      },
+                      "note": {
+                        "type": "string"
+                      },
+                      "papers": {
+                        "type": ["number", "null"]
+                      },
+                      "prune_threshold": {
+                        "type": ["number", "null"]
+                      },
+                      "seeds_not_expanded": {
+                        "type": ["number", "null"]
+                      }
+                    },
+                    "required": ["citations", "depth", "highly_cited_not_expanded", "papers", "prune_threshold", "seeds_not_expanded"],
+                    "type": "object"
+                  },
+                  "graph_snapshot": {
+                    "type": ["string", "null"]
+                  },
+                  "hops": {
+                    "items": {
+                      "type": "number"
+                    },
+                    "type": "array"
+                  },
+                  "method": {
+                    "type": "string"
+                  },
+                  "papers_searched": {
+                    "type": "number"
+                  },
+                  "recent_tier": {
+                    "type": ["string", "null"]
+                  },
+                  "retrieved_at": {
+                    "type": "string"
+                  },
+                  "seeds": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "input": {
+                          "type": "string"
+                        },
+                        "openalex_id": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["input", "openalex_id"],
+                      "type": "object"
+                    },
+                    "type": "array"
+                  },
+                  "server_version": {
+                    "type": "string"
+                  },
+                  "sql_executed": {
+                    "type": ["string", "null"]
+                  },
+                  "tool": {
+                    "type": "string"
+                  },
+                  "total": {
+                    "type": ["number", "null"]
+                  }
+                },
+                "required": ["coverage_note", "data_source", "effective_limit", "filters", "graph", "graph_snapshot", "method", "recent_tier", "retrieved_at", "seeds", "server_version", "sql_executed", "tool"],
+                "type": "object"
+              },
+              "rows": {
+                "items": {
+                  "additionalProperties": {},
+                  "propertyNames": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "truncated": {
+                "type": "boolean"
+              }
+            },
+            "required": ["analysis", "inciteful_url", "provenance", "rows", "truncated"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": true,
+            "title": "Explore a citation network"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:fc1acd08709afcf3b39cee5a2ea5df93d7f73d5dc7565e23ba3b3e3151dd900d"
+        },
+        {
+          "name": "export_citations",
+          "title": "Export citations",
+          "description": "Build BibTeX or RIS citations for up to 100 papers (DOI, OpenAlex ID, PMID or PMCID) from their OpenAlex records, with entry types, years, volume, issue, pages and escaping. Each row holds one entry; join the entries with a blank line to make a .bib or .ris file. Inputs it cannot match are listed in unresolved.",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "format": {
+                "enum": ["bibtex", "ris"],
+                "type": "string"
+              },
+              "ids": {
+                "description": "1–100 DOIs, OpenAlex IDs, PMIDs or PMCIDs.",
+                "items": {
+                  "maxLength": 300,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "maxItems": 100,
+                "minItems": 1,
+                "type": "array"
+              }
+            },
+            "required": ["format", "ids"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "additionalProperties": false,
+            "properties": {
+              "diagnostics": {
+                "additionalProperties": false,
+                "properties": {
+                  "advisories": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "unresolved_seeds": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "input": {
+                          "type": "string"
+                        },
+                        "reason": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["input", "reason"],
+                      "type": "object"
+                    },
+                    "type": "array"
+                  }
+                },
+                "required": ["advisories"],
+                "type": "object"
+              },
+              "format": {
+                "enum": ["bibtex", "ris"],
+                "type": "string"
+              },
+              "rows": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "doi": {
+                      "type": ["string", "null"]
+                    },
+                    "entry": {
+                      "type": "string"
+                    },
+                    "openalex_id": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["doi", "entry", "openalex_id"],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "truncated": {
+                "type": "boolean"
+              },
+              "unresolved": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "input": {
+                      "type": "string"
+                    },
+                    "reason": {
+                      "enum": ["not_found", "unavailable"],
+                      "type": "string"
+                    }
+                  },
+                  "required": ["input", "reason"],
+                  "type": "object"
+                },
+                "type": "array"
+              }
+            },
+            "required": ["format", "rows", "truncated", "unresolved"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": true,
+            "title": "Export citations"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:c7c9e7398516f5d0fbe666e26c98e8f34ca7e7434f14af32cb77c0befd2b7c8c"
+        },
+        {
+          "name": "find_similar_papers",
+          "title": "Find similar papers",
+          "description": "Ranks papers by their citation links to the seeds, which surfaces related work that keyword search misses. Give 1–500 seed papers (DOIs, OpenAlex IDs or PMIDs); returns the papers most similar to them by citation links, sorted by score. Method: fast similarity, Adamic/Adar plus Salton co-citation on a depth-1 citation graph. With 2–15 seeds, each seed is ranked separately and the rankings are merged by reciprocal rank, so papers that rank well for several seeds come out on top; above 15, it uses Adamic/Adar against a synthetic paper that cites all the seeds. Seeds are left out of the results, and scores rank within one result set. limit is at most 100. Unresolved seeds are listed in diagnostics.",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "limit": {
+                "default": 25,
+                "maximum": 100,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "seeds": {
+                "description": "1–500 seed papers: DOIs, OpenAlex IDs (W…) or PMIDs. Duplicates count once.",
+                "items": {
+                  "maxLength": 300,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "maxItems": 500,
+                "minItems": 1,
+                "type": "array"
+              }
+            },
+            "required": ["seeds"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "additionalProperties": false,
+            "properties": {
+              "diagnostics": {
+                "additionalProperties": false,
+                "properties": {
+                  "advisories": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "unresolved_seeds": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "input": {
+                          "type": "string"
+                        },
+                        "reason": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["input", "reason"],
+                      "type": "object"
+                    },
+                    "type": "array"
+                  }
+                },
+                "required": ["advisories"],
+                "type": "object"
+              },
+              "inciteful_url": {
+                "type": ["string", "null"]
+              },
+              "provenance": {
+                "additionalProperties": false,
+                "properties": {
+                  "coverage_note": {
+                    "type": "string"
+                  },
+                  "data_source": {
+                    "type": "string"
+                  },
+                  "effective_limit": {
+                    "type": ["number", "null"]
+                  },
+                  "filters": {
+                    "additionalProperties": {},
+                    "propertyNames": {
+                      "type": "string"
+                    },
+                    "type": "object"
+                  },
+                  "graph": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "citations": {
+                        "type": ["number", "null"]
+                      },
+                      "depth": {
+                        "type": ["number", "null"]
+                      },
+                      "highly_cited_not_expanded": {
+                        "type": ["number", "null"]
+                      },
+                      "note": {
+                        "type": "string"
+                      },
+                      "papers": {
+                        "type": ["number", "null"]
+                      },
+                      "prune_threshold": {
+                        "type": ["number", "null"]
+                      },
+                      "seeds_not_expanded": {
+                        "type": ["number", "null"]
+                      }
+                    },
+                    "required": ["citations", "depth", "highly_cited_not_expanded", "papers", "prune_threshold", "seeds_not_expanded"],
+                    "type": "object"
+                  },
+                  "graph_snapshot": {
+                    "type": ["string", "null"]
+                  },
+                  "hops": {
+                    "items": {
+                      "type": "number"
+                    },
+                    "type": "array"
+                  },
+                  "method": {
+                    "type": "string"
+                  },
+                  "papers_searched": {
+                    "type": "number"
+                  },
+                  "recent_tier": {
+                    "type": ["string", "null"]
+                  },
+                  "retrieved_at": {
+                    "type": "string"
+                  },
+                  "seeds": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "input": {
+                          "type": "string"
+                        },
+                        "openalex_id": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["input", "openalex_id"],
+                      "type": "object"
+                    },
+                    "type": "array"
+                  },
+                  "server_version": {
+                    "type": "string"
+                  },
+                  "sql_executed": {
+                    "type": ["string", "null"]
+                  },
+                  "tool": {
+                    "type": "string"
+                  },
+                  "total": {
+                    "type": ["number", "null"]
+                  }
+                },
+                "required": ["coverage_note", "data_source", "effective_limit", "filters", "graph", "graph_snapshot", "method", "recent_tier", "retrieved_at", "seeds", "server_version", "sql_executed", "tool"],
+                "type": "object"
+              },
+              "rows": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "authors": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "doi": {
+                      "type": ["string", "null"]
+                    },
+                    "inciteful_url": {
+                      "type": "string"
+                    },
+                    "journal": {
+                      "type": ["string", "null"]
+                    },
+                    "num_cited_by": {
+                      "type": ["number", "null"]
+                    },
+                    "num_citing": {
+                      "type": ["number", "null"]
+                    },
+                    "paper_id": {
+                      "type": "string"
+                    },
+                    "published_year": {
+                      "type": ["number", "null"]
+                    },
+                    "score": {
+                      "type": "number"
+                    },
+                    "title": {
+                      "type": ["string", "null"]
+                    }
+                  },
+                  "required": ["authors", "doi", "inciteful_url", "journal", "num_cited_by", "num_citing", "paper_id", "published_year", "score", "title"],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "truncated": {
+                "type": "boolean"
+              }
+            },
+            "required": ["inciteful_url", "provenance", "rows", "truncated"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": true,
+            "title": "Find similar papers"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:e64d9c74c012d2c825ad99d7705585d2168cf96e6910b4804ff8e005aa731945"
+        },
+        {
+          "name": "get_papers",
+          "title": "Get paper details",
+          "description": "Fetch OpenAlex records for up to 100 papers by DOI, OpenAlex ID (W…), PMID or PMCID: abstract, authors, venue, type and version, is_retracted, PMID/PMCID and the best open-access link with its licence. It does not use the citation graph. Inputs it cannot match come back in unresolved with a reason.",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "ids": {
+                "description": "1–100 DOIs, OpenAlex IDs, PMIDs or PMCIDs.",
+                "items": {
+                  "maxLength": 300,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "maxItems": 100,
+                "minItems": 1,
+                "type": "array"
+              }
+            },
+            "required": ["ids"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "additionalProperties": false,
+            "properties": {
+              "diagnostics": {
+                "additionalProperties": false,
+                "properties": {
+                  "advisories": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "unresolved_seeds": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "input": {
+                          "type": "string"
+                        },
+                        "reason": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["input", "reason"],
+                      "type": "object"
+                    },
+                    "type": "array"
+                  }
+                },
+                "required": ["advisories"],
+                "type": "object"
+              },
+              "rows": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "abstract": {
+                      "type": ["string", "null"]
+                    },
+                    "author_count": {
+                      "type": "number"
+                    },
+                    "authors": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "best_oa": {
+                      "anyOf": [
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "license": {
+                              "type": ["string", "null"]
+                            },
+                            "source": {
+                              "type": ["string", "null"]
+                            },
+                            "url": {
+                              "type": ["string", "null"]
+                            },
+                            "version": {
+                              "type": ["string", "null"]
+                            }
+                          },
+                          "required": ["license", "source", "url", "version"],
+                          "type": "object"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "cited_by_count": {
+                      "type": ["number", "null"]
+                    },
+                    "doi": {
+                      "type": ["string", "null"]
+                    },
+                    "inciteful_url": {
+                      "type": "string"
+                    },
+                    "is_retracted": {
+                      "type": ["boolean", "null"]
+                    },
+                    "openalex_id": {
+                      "type": "string"
+                    },
+                    "pmcid": {
+                      "type": ["string", "null"]
+                    },
+                    "pmid": {
+                      "type": ["string", "null"]
+                    },
+                    "title": {
+                      "type": ["string", "null"]
+                    },
+                    "type": {
+                      "type": ["string", "null"]
+                    },
+                    "venue": {
+                      "type": ["string", "null"]
+                    },
+                    "version": {
+                      "type": ["string", "null"]
+                    },
+                    "year": {
+                      "type": ["number", "null"]
+                    }
+                  },
+                  "required": ["abstract", "author_count", "authors", "best_oa", "cited_by_count", "doi", "inciteful_url", "is_retracted", "openalex_id", "pmcid", "pmid", "title", "type", "venue", "version", "year"],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "truncated": {
+                "type": "boolean"
+              },
+              "unresolved": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "input": {
+                      "type": "string"
+                    },
+                    "reason": {
+                      "enum": ["not_found", "unavailable"],
+                      "type": "string"
+                    }
+                  },
+                  "required": ["input", "reason"],
+                  "type": "object"
+                },
+                "type": "array"
+              }
+            },
+            "required": ["rows", "truncated", "unresolved"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": true,
+            "title": "Get paper details"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:0d12b948a82dd9b19db1b059b181c8a6c3a8e9b2753ffc1b225fa7de5209a5e4"
+        },
+        {
+          "name": "query_citation_graph",
+          "title": "Query a citation graph with SQL",
+          "description": "Run your own read-only SQLite query on the citation graph Inciteful builds around 1–500 seed papers (depth 2). It queries the Inciteful citation graph API; schema: https://incitefulmed.com/academic/help/power-users#database-schema Rules: a single SELECT statement. Rows returned: the limit argument if given, else the query's trailing LIMIT, else 100; at most 500. OFFSET (and LIMIT a, b) is rejected; page with a narrower WHERE or an ORDER BY instead. \n\nSchema: \n- papers(paper_id TEXT: OpenAlex ID (W…); doi TEXT without the https://doi.org/ prefix; authors TEXT: JSON array of {author_id, name, sequence, position, institution {id, name, ror}}; num_authors INTEGER; title TEXT; published_year INTEGER; journal TEXT; num_citing INTEGER; num_cited_by INTEGER; distance INTEGER; page_rank REAL; adamic_adar REAL; cocite REAL). num_citing and num_cited_by are in-graph counts (citations between papers in this graph), not global citation counts. \n- authors(author_id TEXT: OpenAlex author ID without the A prefix; paper_id TEXT; name TEXT; sequence INTEGER, from 0; affiliation TEXT; affiliation_id TEXT: OpenAlex institution ID without the I prefix; ror TEXT: ROR URL; published_year INTEGER; partial_page_rank REAL: the author's share of the paper's page_rank) \n- metadata(name TEXT, value TEXT): one row each for graph_depth, graph_snapshot, prune_threshold, highly_cited_not_expanded, seeds_not_expanded, paper_count, citation_count. value is TEXT; use CAST(value AS INTEGER) to compare numbers. \n- title_search(paper_id, search_text): an FTS5 index of the titles with Porter stemming; search_text holds the titles (paper IDs are indexed too). Query it as a table function, starting the match text with the column filter: SELECT paper_id FROM title_search('search_text: vagus AND nerve'). AND, OR, NOT and parentheses work; bm25(title_search) ranks matches, smaller is better. \n- title_terms(term, doc_count): the stemmed title terms and the number of papers each appears in, leaving out a few common words. \n- The Research Organization Registry (active organizations), attached as ror; join on authors.ror = ror.organizations.ror_url: organizations(ror_id, ror_url, display_name, status, established, types, country_code, country_name, city, latitude, longitude), names(ror_id, name, name_types, language), external_ids(ror_id, id_type, preferred_id, external_id), relationships(ror_id, related_ror_id, related_name, relationship_type). \n\nWhat the schema cannot tell you: \n- There is no edge table, so SQL cannot tell which papers cite which. \n- Papers with no citation inside the graph have NULL num_citing, num_cited_by, distance, page_rank, adamic_adar and cocite. \n- With one seed, the seed is at distance 0, its citing and cited papers at 1 and their neighbours at 2, so distance > 0 leaves the seed out. With several seeds a synthetic paper W0 (\"Temp Paper\", year 1900) cites every seed: W0 is at distance 0, the seeds at 1 and their neighbours at 2, so distance > 1 leaves out W0 and the seeds; otherwise add paper_id <> 'W0'. Then cocite is NULL in every row (nothing cites W0) and adamic_adar is measured against W0. \n\nExamples: \n1. One seed: the highest-PageRank papers since 2020 with \"stimulation\" in the title: SELECT paper_id, title, published_year, page_rank FROM papers WHERE distance > 0 AND published_year >= 2020 AND paper_id IN (SELECT paper_id FROM title_search('search_text: stimulation')) ORDER BY page_rank DESC LIMIT 20 \n2. Authors ranked by their share of PageRank: SELECT author_id, name, COUNT(*) AS papers, SUM(partial_page_rank) AS influence FROM authors GROUP BY author_id, name ORDER BY influence DESC LIMIT 20",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "limit": {
+                "description": "Rows to return, at most 500. Default: the query's trailing LIMIT (capped at 500), else 100.",
+                "maximum": 500,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "seeds": {
+                "description": "1–500 seed papers: DOIs, OpenAlex IDs (W…) or PMIDs. Duplicates count once.",
+                "items": {
+                  "maxLength": 300,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "maxItems": 500,
+                "minItems": 1,
+                "type": "array"
+              },
+              "sql": {
+                "description": "A single SQLite SELECT statement.",
+                "maxLength": 10000,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": ["seeds", "sql"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "additionalProperties": false,
+            "properties": {
+              "diagnostics": {
+                "additionalProperties": false,
+                "properties": {
+                  "advisories": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "unresolved_seeds": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "input": {
+                          "type": "string"
+                        },
+                        "reason": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["input", "reason"],
+                      "type": "object"
+                    },
+                    "type": "array"
+                  }
+                },
+                "required": ["advisories"],
+                "type": "object"
+              },
+              "inciteful_url": {
+                "type": ["string", "null"]
+              },
+              "provenance": {
+                "additionalProperties": false,
+                "properties": {
+                  "coverage_note": {
+                    "type": "string"
+                  },
+                  "data_source": {
+                    "type": "string"
+                  },
+                  "effective_limit": {
+                    "type": ["number", "null"]
+                  },
+                  "filters": {
+                    "additionalProperties": {},
+                    "propertyNames": {
+                      "type": "string"
+                    },
+                    "type": "object"
+                  },
+                  "graph": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "citations": {
+                        "type": ["number", "null"]
+                      },
+                      "depth": {
+                        "type": ["number", "null"]
+                      },
+                      "highly_cited_not_expanded": {
+                        "type": ["number", "null"]
+                      },
+                      "note": {
+                        "type": "string"
+                      },
+                      "papers": {
+                        "type": ["number", "null"]
+                      },
+                      "prune_threshold": {
+                        "type": ["number", "null"]
+                      },
+                      "seeds_not_expanded": {
+                        "type": ["number", "null"]
+                      }
+                    },
+                    "required": ["citations", "depth", "highly_cited_not_expanded", "papers", "prune_threshold", "seeds_not_expanded"],
+                    "type": "object"
+                  },
+                  "graph_snapshot": {
+                    "type": ["string", "null"]
+                  },
+                  "hops": {
+                    "items": {
+                      "type": "number"
+                    },
+                    "type": "array"
+                  },
+                  "method": {
+                    "type": "string"
+                  },
+                  "papers_searched": {
+                    "type": "number"
+                  },
+                  "recent_tier": {
+                    "type": ["string", "null"]
+                  },
+                  "retrieved_at": {
+                    "type": "string"
+                  },
+                  "seeds": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "input": {
+                          "type": "string"
+                        },
+                        "openalex_id": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["input", "openalex_id"],
+                      "type": "object"
+                    },
+                    "type": "array"
+                  },
+                  "server_version": {
+                    "type": "string"
+                  },
+                  "sql_executed": {
+                    "type": ["string", "null"]
+                  },
+                  "tool": {
+                    "type": "string"
+                  },
+                  "total": {
+                    "type": ["number", "null"]
+                  }
+                },
+                "required": ["coverage_note", "data_source", "effective_limit", "filters", "graph", "graph_snapshot", "method", "recent_tier", "retrieved_at", "seeds", "server_version", "sql_executed", "tool"],
+                "type": "object"
+              },
+              "rows": {
+                "items": {
+                  "additionalProperties": {},
+                  "propertyNames": {
+                    "type": "string"
+                  },
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "truncated": {
+                "type": "boolean"
+              }
+            },
+            "required": ["inciteful_url", "provenance", "rows", "truncated"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": true,
+            "title": "Query a citation graph with SQL"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:69d7fac30d97129842f2476006c60de117ebb3a80d08587a57ba4b3a77fb79fc"
+        },
+        {
+          "name": "read_paper",
+          "title": "Read a paper",
+          "description": "Read the full text of an open-access paper from PubMed Central (PMC BioC) in chunks: pass offset (0 to start) and max_chars (up to 40000), then continue from next_offset until it is null. Returns the article's licence and a sha256 of the whole text. When PMC has no text for the paper, returns candidate open-access links (publisher or repository) in rows instead. Accepts a DOI, OpenAlex ID, PMID or PMCID.",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "id": {
+                "description": "DOI, OpenAlex ID, PMID or PMCID.",
+                "maxLength": 300,
+                "minLength": 1,
+                "type": "string"
+              },
+              "max_chars": {
+                "default": 15000,
+                "maximum": 40000,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "offset": {
+                "default": 0,
+                "description": "Character offset; 0 to start, then next_offset.",
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": ["id"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "additionalProperties": false,
+            "properties": {
+              "diagnostics": {
+                "additionalProperties": false,
+                "properties": {
+                  "advisories": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "unresolved_seeds": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "input": {
+                          "type": "string"
+                        },
+                        "reason": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["input", "reason"],
+                      "type": "object"
+                    },
+                    "type": "array"
+                  }
+                },
+                "required": ["advisories"],
+                "type": "object"
+              },
+              "doi": {
+                "type": ["string", "null"]
+              },
+              "inciteful_url": {
+                "type": "string"
+              },
+              "license": {
+                "type": ["string", "null"]
+              },
+              "next_offset": {
+                "type": ["number", "null"]
+              },
+              "offset": {
+                "type": "number"
+              },
+              "openalex_id": {
+                "type": "string"
+              },
+              "pmcid": {
+                "type": ["string", "null"]
+              },
+              "rows": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "format": {
+                      "enum": ["pdf", "landing_page"],
+                      "type": "string"
+                    },
+                    "is_oa": {
+                      "type": ["boolean", "null"]
+                    },
+                    "license": {
+                      "type": ["string", "null"]
+                    },
+                    "source": {
+                      "type": "string"
+                    },
+                    "url": {
+                      "type": "string"
+                    },
+                    "version": {
+                      "type": ["string", "null"]
+                    }
+                  },
+                  "required": ["format", "is_oa", "license", "source", "url", "version"],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "sha256": {
+                "type": ["string", "null"]
+              },
+              "text": {
+                "type": ["string", "null"]
+              },
+              "title": {
+                "type": ["string", "null"]
+              },
+              "truncated": {
+                "type": "boolean"
+              }
+            },
+            "required": ["doi", "inciteful_url", "license", "next_offset", "offset", "openalex_id", "pmcid", "rows", "sha256", "text", "title", "truncated"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": true,
+            "title": "Read a paper"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:6839df36e535e7197ffe7245deb302c6d7ac0ee4c6ed5d705de08b9b21448f1e"
+        },
+        {
+          "name": "search_literature",
+          "title": "Search the literature",
+          "description": "A live keyword search of OpenAlex (CC0 metadata), not of the citation graph snapshot. It matches titles, abstracts and full text where OpenAlex has it, ranked by relevance. Use it to find seed papers when you have a topic but no DOIs yet. Keyword matches miss related work that uses different words, which the citation graph finds. It is not a systematic search. Returns OpenAlex ID, DOI, title, year, venue, global cited_by_count, type, is_retracted and has_abstract; page with next_cursor. limit is at most 50. Rows carry no abstracts or authors.",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "cursor": {
+                "description": "next_cursor from the previous page.",
+                "minLength": 1,
+                "type": "string"
+              },
+              "limit": {
+                "default": 10,
+                "maximum": 50,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "open_access": {
+                "description": "true keeps open-access papers.",
+                "type": "boolean"
+              },
+              "query": {
+                "description": "Keywords, a title or a phrase.",
+                "maxLength": 1000,
+                "minLength": 1,
+                "type": "string"
+              },
+              "year_from": {
+                "maximum": 9007199254740991,
+                "minimum": -9007199254740991,
+                "type": "integer"
+              },
+              "year_to": {
+                "maximum": 9007199254740991,
+                "minimum": -9007199254740991,
+                "type": "integer"
+              }
+            },
+            "required": ["query"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "additionalProperties": false,
+            "properties": {
+              "diagnostics": {
+                "additionalProperties": false,
+                "properties": {
+                  "advisories": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "unresolved_seeds": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "input": {
+                          "type": "string"
+                        },
+                        "reason": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["input", "reason"],
+                      "type": "object"
+                    },
+                    "type": "array"
+                  }
+                },
+                "required": ["advisories"],
+                "type": "object"
+              },
+              "next_cursor": {
+                "type": ["string", "null"]
+              },
+              "next_step": {
+                "type": "string"
+              },
+              "rows": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "cited_by_count": {
+                      "type": ["number", "null"]
+                    },
+                    "doi": {
+                      "type": ["string", "null"]
+                    },
+                    "has_abstract": {
+                      "type": "boolean"
+                    },
+                    "inciteful_url": {
+                      "type": "string"
+                    },
+                    "is_retracted": {
+                      "type": ["boolean", "null"]
+                    },
+                    "openalex_id": {
+                      "type": "string"
+                    },
+                    "title": {
+                      "type": ["string", "null"]
+                    },
+                    "type": {
+                      "type": ["string", "null"]
+                    },
+                    "venue": {
+                      "type": ["string", "null"]
+                    },
+                    "year": {
+                      "type": ["number", "null"]
+                    }
+                  },
+                  "required": ["cited_by_count", "doi", "has_abstract", "inciteful_url", "is_retracted", "openalex_id", "title", "type", "venue", "year"],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "truncated": {
+                "type": "boolean"
+              }
+            },
+            "required": ["next_cursor", "next_step", "rows", "truncated"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": true,
+            "title": "Search the literature"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:deb72d6b94eaad9e13008240de607340185eae4c894d19dde7d7a859d6751bf4"
+        }
+      ],
+      "prompts": [
+        {
+          "name": "literature_review",
+          "title": "Literature review",
+          "description": "A guided literature review on a topic or around seed papers: find related work, confirm the seeds with you, rank the field and snowball, check the abstracts and retractions, then write with DOI citations, provenance and a search log.",
+          "arguments": [
+            {
+              "name": "topic",
+              "description": "The research question or topic.",
+              "required": false
+            },
+            {
+              "name": "seeds",
+              "description": "Seed papers (DOIs, OpenAlex IDs or PMIDs), separated by commas or new lines.",
+              "required": false
+            }
+          ],
+          "digest": "sha256:030780057d7f44140014b55d148e40f50ff4236bd0d5dc0365a54398e9ee997b"
+        }
+      ],
+      "digest": "sha256:2bd97b9ff10e4b14f5a21646bbf74dd76c8cd57da054638a51dc4a095c94951c"
+    }
+  }
+}

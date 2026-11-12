@@ -1,0 +1,3144 @@
+{
+  "lockfileVersion": 2,
+  "subjects": {
+    "com.appskyline/appskyline": {
+      "kind": "mcp-server",
+      "source": {
+        "client": "manual",
+        "file": "registry.modelcontextprotocol.io"
+      },
+      "transport": {
+        "type": "http",
+        "url": "https://mcp.appskyline.com/mcp"
+      },
+      "protocol": {
+        "era": "modern",
+        "version": "2026-07-28",
+        "supportedVersions": ["2026-07-28"]
+      },
+      "serverInfo": {
+        "name": "appskyline-mcp",
+        "title": "Appskyline",
+        "version": "0.2.4"
+      },
+      "capabilities": {
+        "extensions": {
+          "io.modelcontextprotocol/skills": {}
+        },
+        "resources": {
+          "listChanged": false
+        },
+        "tools": {
+          "listChanged": false
+        }
+      },
+      "instructions": "# ASO research with AppSkyline\n\nThis guide drives the AppSkyline MCP connector. Every tool below is provided by\nthat connector, so the user must have connected AppSkyline and be signed in to\nan account with access to at least one tracked app. If a tool call fails with an\nauthorization error, tell the user to connect AppSkyline rather than retrying.\n\n## Interactive workspace\n\nUse `open_appskyline` with no arguments when the user wants to open the product\nand browse visually. It is a read-only sidebar entrypoint with up to 100 items,\nusing the same tenant authorization as the other tools. Selection shares bounded\nentity context with the host; subsequent writes still require their normal approval.\n\n## Stores\n\nFour stores are supported everywhere a `store` parameter appears. Use these\nexact values:\n\n`ios-app-store` · `macos-app-store` · `google-play` · `microsoft-store`\n\nAn app only has data for the stores it is registered on. When a tool returns\n`store-not-configured`, the app has no id set for that store — say so and move\non rather than retrying with different parameters.\n\n## Identifiers: two different things\n\nGetting these confused is the most common source of empty results.\n\n- **`appId`** is the AppSkyline app id (a uuid). Every tool that reads _your_\n  data takes this: `get_app`, `list_keywords`, `get_keyword_rank`,\n  `get_keyword_history`, `get_store_metadata`, `get_app_engagement_summary`,\n  `list_google_play_reviews`, `add_keyword`.\n- **`storeId`** is the store-native identifier: a numeric Apple id, a Google\n  Play package name like `com.example.app`, or a Microsoft Store product id\n  like `9wXXXXXXXX`. Only `get_store_listing` takes this, because it reads\n  public listings for apps that need not be tracked in AppSkyline at all.\n\nStart from `list_apps` when you do not yet have an `appId`. It returns each\napp's id, name, default locale, and per-store ids.\n\n## Available tools\n\nReading your own data:\n\n| Tool                         | Use it when someone asks…                                                                 |\n| ---------------------------- | ----------------------------------------------------------------------------------------- |\n| `list_apps`                  | which apps they track; also resolves the app id the other tools need                      |\n| `get_app`                    | about one app's store ids, locales and timestamps                                         |\n| `list_keywords`              | which keywords they track: id, term, language, country, bid                               |\n| `get_keyword_rank`           | where their app ranks right now for one term in one store and country                     |\n| `get_keyword_history`        | how that rank changed over time, one row per stored search snapshot                       |\n| `get_store_metadata`         | to audit their synced listing text per locale, or whether the latest version is in review |\n| `suggest_store_metadata`     | which keywords to put in a title, subtitle, keyword field or short description, per app   |\n| `get_app_engagement_summary` | how many downloads, installs, uninstalls or crashes over a period, plus top countries     |\n| `list_google_play_reviews`   | what Google Play users said in the last 7 days: stars, text, version, reply state         |\n| `show_app_overview`          | for a one-card overview of one app, its stores and up to 50 tracked keywords              |\n\nReading public or shared data:\n\n| Tool                   | Use it when someone asks…                                                        |\n| ---------------------- | -------------------------------------------------------------------------------- |\n| `search_store_results` | which apps rank for a term right now — the competitive field                     |\n| `get_keyword_overview` | how popular terms are: Google web-search volume, difficulty, CPC, up to 50 terms |\n| `get_store_listing`    | about any app's public listing by store-native id — competitor research          |\n\nWriting:\n\n| Tool             | Use it when someone asks…                                        |\n| ---------------- | ---------------------------------------------------------------- |\n| `add_keyword`    | to start tracking a term, with a country. Non-idempotent — below |\n| `delete_keyword` | to stop tracking a term, by keyword id. Idempotent               |\n\n## Batch `get_keyword_overview`; never loop it\n\nThis tool accepts up to 50 terms per call and is the one place where careless\nusage costs real money. Terms missing or stale in AppSkyline's shared cache\ntrigger a live billable upstream lookup. Calling it once per keyword turns one\ncheap request into dozens of billable ones.\n\nAlways collect the full candidate list first, then make a single call per\ncountry. Note that `country` is required here and must be exactly two letters,\nunlike most other tools where it is optional.\n\nThe volume is Google web-search demand in that country: a proxy for interest\nin a term, not a count of App Store, Google Play or Microsoft Store searches.\nSay so when you report it.\n\n## Writes need the user's intent, not just their question\n\n`add_keyword` and `delete_keyword` change the user's tracked set.\n\n`add_keyword` is **not idempotent** — adding the same term twice creates two\nrows. Before adding, call `list_keywords` and check the term is not already\ntracked for that language and country. Pass a `country` with every new\nkeyword: the weekly rank check skips keywords that have none. When adding\nseveral keywords, show the list and get agreement first; do not infer a batch\nadd from a research question.\n\n`delete_keyword` stops future snapshots but leaves historical search data\nintact, so it is recoverable in the sense that past rows survive — but the\ntracking gap it creates is not backfillable. Confirm before deleting, and use\n`list_keywords` to map a term the user named to its keyword id rather than\nguessing.\n\n## Suggesting title, subtitle and keywords\n\nWhen someone asks which keywords to put in their title or subtitle, what to\nchange in a listing, or how to improve their metadata, call\n`suggest_store_metadata` before answering, and answer with concrete text for\neach app rather than a method. Without `appId` one call covers every app,\neach in its main market, so it also answers \"for each app\". Each result\ncompares the listing with the app's tracked keywords in that market: the\ncurrent fields, drafts that already fit the store limits (App Store app name,\nsubtitle and keyword field; Google Play title, plus the phrases its short\ndescription should mention; Microsoft Store search terms), how many tracked\nkeywords are covered now and after the drafts, the top opportunities with\ntheir stored rank and cached Google demand, and issues.\n\nThe drafts place words; they are not finished copy. Rewrite a draft that\nreads like a list into natural text in the listing's language and keep the\nbrand, then call `suggest_store_metadata` again with `appId`, `store` and\nyour proposed `title`, `subtitle`, `keywords` or `shortDescription`: the check\nreports the tracked keywords gained and lost and any limit it breaks. Show\nonly wording that passes.\n\n- On the App Store a word counts once across the app name, subtitle and\n  keyword field. Never repeat one, and separate keywords with bare commas.\n- On Google Play, work the phrases into a readable short description; never\n  stuff keywords.\n- `competitorWords` are words other apps put in their titles. Suggest one only\n  when it describes the user's app, and never a brand or another app's name.\n- Demand comes from the shared cache. When the top opportunities have none,\n  call `get_keyword_overview` once for those terms in that market, then\n  suggest again.\n- Status `listing-unavailable` means the app is not live in that storefront,\n  `no-tracked-keywords` means the app needs tracked keywords first, and\n  `deferred` means ask again for that app alone.\n\n## Reading rank results correctly\n\n`get_keyword_rank` returns a `status` that must drive your wording:\n\n- `ranked` — the app appears; `rank` is its position and `resultsScanned` is how\n  deep the scan went. \"#6 of 10 scanned\" is honest; \"#6\" alone implies a\n  ranking universe that was not measured.\n- `not-ranked` — the app is genuinely absent from the scanned window. Say \"not\n  in the top N\", not \"rank unknown\". Widening `num` (up to 200) can find an app\n  ranked deeper.\n- `app-not-found` — the `appId` is wrong. Re-check with `list_apps`.\n- `store-not-configured` — the app has no id for that store.\n\nA single rank is a point sample of a noisy series. Before calling a change a\nregression or a win, pull `get_keyword_history` for the same term and country\nand look at the trend. Ranks move on their own day to day. History has one row\nper stored search snapshot: tracked keywords are re-checked weekly, plus any\nday the term was searched in AppSkyline, so gaps between rows are normal.\n\n## A standard ASO report\n\nWhen asked for an ASO report on an app, work in this order:\n\n1. `list_apps` → resolve the app and see which stores it is registered on.\n2. `list_keywords` → the tracked set, which is the report's spine.\n3. `get_keyword_rank` per important term and market, for the stores that are\n   configured. Prefer the markets the user cares about over an exhaustive sweep.\n4. `get_keyword_history` for terms whose current rank looks notably good or bad,\n   to separate a real move from daily noise.\n5. `get_keyword_overview` — **one batched call** per country over every term\n   from steps 2–4 plus any candidates you are considering, to learn which terms\n   are worth the effort at all.\n6. `suggest_store_metadata` → audit titles, subtitles and the keyword field\n   against the tracked keywords and get drafts within each store's limits;\n   `get_store_metadata` adds every other synced locale. On Apple, unused\n   keyword-field characters are wasted ranking surface.\n7. `search_store_results` on the top few terms → who actually occupies the\n   results, and `get_store_listing` on any competitor worth understanding.\n\nThen report: where the app stands, which terms have volume the app is not\ncompetitive on, which metadata fields are underused, and what you would change.\nRank without volume is vanity — a #1 for a term nobody searches is not a win,\nand `get_keyword_overview` is what tells you the difference.\n\n## Interactive cards\n\n`get_keyword_rank` renders an interactive rank card, and the connector also\nprovides an app-overview card, in hosts that support MCP Apps. When a card\nrenders, do not restate its full contents in prose. Add what the card cannot\nshow: the trend behind the number, and what to do about it.\n",
+      "tools": [
+        {
+          "name": "add_keyword",
+          "title": "Track a new keyword",
+          "description": "Use this when someone asks to start tracking a keyword for their app in a given language and country. Returns the new keyword; adding the same term twice creates two rows. Keywords without a country are skipped by the weekly rank check. Not for a one-off rank lookup.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "appId": {
+                "description": "AppSkyline app id (uuid)",
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              },
+              "country": {
+                "description": "Two-letter store country code such as US; without one the weekly rank check skips this keyword",
+                "maxLength": 10,
+                "type": "string"
+              },
+              "language": {
+                "description": "Two-letter language code such as en",
+                "maxLength": 32,
+                "type": "string"
+              },
+              "searchTerms": {
+                "description": "Keyword phrase to track, as users type it in the store, 1 to 200 characters",
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": ["appId", "searchTerms"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "keyword": {
+                "additionalProperties": false,
+                "properties": {
+                  "appId": {
+                    "maxLength": 200,
+                    "minLength": 1,
+                    "type": "string"
+                  },
+                  "country": {
+                    "anyOf": [
+                      {
+                        "maxLength": 10,
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "id": {
+                    "anyOf": [
+                      {
+                        "maxLength": 200,
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "language": {
+                    "anyOf": [
+                      {
+                        "maxLength": 32,
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "term": {
+                    "maxLength": 200,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": ["appId", "country", "id", "language", "term"],
+                "type": "object"
+              },
+              "status": {
+                "const": "added",
+                "type": "string"
+              }
+            },
+            "required": ["keyword", "status"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": true,
+            "idempotentHint": false,
+            "openWorldHint": false,
+            "readOnlyHint": false,
+            "title": "Track a new keyword"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": false,
+            "readOnly": false
+          },
+          "meta": {
+            "securitySchemes": [
+              {
+                "scopes": ["appskyline:write"],
+                "type": "oauth2"
+              }
+            ]
+          },
+          "digest": "sha256:5d779aded6e7445895e192e397ccd236e799b09e379045f86bb65f25a0ebd289"
+        },
+        {
+          "name": "delete_keyword",
+          "title": "Stop tracking a keyword",
+          "description": "Use this when someone asks to stop tracking one of their keywords. Returns deleted, or not-found for an unknown id or one outside the account. Weekly rank checks stop and past snapshots stay, leaving a gap if it is tracked again later. Not for pausing tracking temporarily.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "description": "Keyword id",
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": ["id"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "keywordId": {
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              },
+              "status": {
+                "enum": ["deleted", "not-found"],
+                "type": "string"
+              }
+            },
+            "required": ["keywordId", "status"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": true,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": false,
+            "title": "Stop tracking a keyword"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": false
+          },
+          "meta": {
+            "securitySchemes": [
+              {
+                "scopes": ["appskyline:write"],
+                "type": "oauth2"
+              }
+            ]
+          },
+          "digest": "sha256:55274a9265172319f9b94d5f775d3724a9b8d9194a12179ffb564f97c129c0ba"
+        },
+        {
+          "name": "get_app",
+          "title": "Get app details",
+          "description": "Use this when someone asks about one of their AppSkyline apps, such as which stores it is on or which languages it supports. Returns the app's name, default and supported locales, App Store, Mac App Store, Google Play and Microsoft Store ids, and creation and edit times. Not for the live public store page or ratings.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "appId": {
+                "description": "AppSkyline app id (uuid)",
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": ["appId"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "app": {
+                "anyOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "creationTime": {
+                        "anyOf": [
+                          {
+                            "maxLength": 64,
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "defaultLocale": {
+                        "anyOf": [
+                          {
+                            "maxLength": 32,
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "googlePlayStorePackage": {
+                        "$ref": "#/properties/app/anyOf/0/properties/name"
+                      },
+                      "id": {
+                        "maxLength": 200,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "iosAppStoreId": {
+                        "$ref": "#/properties/app/anyOf/0/properties/name"
+                      },
+                      "lastEditTime": {
+                        "anyOf": [
+                          {
+                            "maxLength": 64,
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "locales": {
+                        "items": {
+                          "maxLength": 32,
+                          "type": "string"
+                        },
+                        "maxItems": 100,
+                        "type": "array"
+                      },
+                      "macosAppStoreId": {
+                        "$ref": "#/properties/app/anyOf/0/properties/name"
+                      },
+                      "name": {
+                        "anyOf": [
+                          {
+                            "maxLength": 200,
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "windowsStoreProductId": {
+                        "$ref": "#/properties/app/anyOf/0/properties/name"
+                      }
+                    },
+                    "required": ["creationTime", "defaultLocale", "googlePlayStorePackage", "id", "iosAppStoreId", "lastEditTime", "locales", "macosAppStoreId", "name", "windowsStoreProductId"],
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Null when the app is not in the signed-in account"
+              },
+              "status": {
+                "enum": ["found", "not-found"],
+                "type": "string"
+              }
+            },
+            "required": ["app", "status"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Get app details"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "securitySchemes": [
+              {
+                "scopes": ["appskyline:read"],
+                "type": "oauth2"
+              }
+            ]
+          },
+          "digest": "sha256:88ee1078b6373b942987a81154f5551b3376cef7242d59b30dbe8821bc2aa77a"
+        },
+        {
+          "name": "get_app_engagement_summary",
+          "title": "Get downloads and installs",
+          "description": "Use this when someone asks how many downloads, installs, uninstalls or crashes their app had over a period. Returns store-reported totals, the latest 30 daily rows and top countries for one app and store; metric names differ by store. Not for keyword rankings.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "appId": {
+                "description": "AppSkyline app id (uuid)",
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              },
+              "days": {
+                "description": "Rolling window of the last 1 to 365 days, used when no dates are given; omit dates and days for every synced day",
+                "exclusiveMinimum": 0,
+                "maximum": 365,
+                "type": "integer"
+              },
+              "endDate": {
+                "description": "Last day of the window as YYYY-MM-DD; applies only together with startDate",
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+                "type": "string"
+              },
+              "startDate": {
+                "description": "First day of the window as YYYY-MM-DD; applies only together with endDate",
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+                "type": "string"
+              },
+              "store": {
+                "description": "Store to summarize: ios-app-store, macos-app-store, google-play or microsoft-store",
+                "enum": ["ios-app-store", "macos-app-store", "google-play", "microsoft-store"],
+                "type": "string"
+              }
+            },
+            "required": ["appId", "store"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "appId": {
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              },
+              "dailySeries": {
+                "anyOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "name": {
+                        "maxLength": 100,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "rows": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "date": {
+                              "anyOf": [
+                                {
+                                  "maxLength": 32,
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "metrics": {
+                              "items": {
+                                "$ref": "#/properties/totals/items"
+                              },
+                              "maxItems": 6,
+                              "type": "array"
+                            }
+                          },
+                          "required": ["date", "metrics"],
+                          "type": "object"
+                        },
+                        "maxItems": 30,
+                        "type": "array"
+                      },
+                      "totalRows": {
+                        "maximum": 1000000,
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "totalRowsIsLowerBound": {
+                        "type": "boolean"
+                      },
+                      "truncated": {
+                        "type": "boolean"
+                      }
+                    },
+                    "required": ["name", "rows", "totalRows", "totalRowsIsLowerBound", "truncated"],
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "The most recent 30 days of one daily metric series"
+              },
+              "dataThrough": {
+                "anyOf": [
+                  {
+                    "maxLength": 64,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "lastSyncedAt": {
+                "anyOf": [
+                  {
+                    "maxLength": 64,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "status": {
+                "enum": ["found", "empty"],
+                "type": "string"
+              },
+              "store": {
+                "enum": ["ios-app-store", "macos-app-store", "google-play", "microsoft-store"],
+                "type": "string"
+              },
+              "topTerritories": {
+                "description": "Up to 8 leading countries or territories by downloads or installs",
+                "items": {
+                  "maxLength": 100,
+                  "type": "string"
+                },
+                "maxItems": 8,
+                "type": "array"
+              },
+              "totals": {
+                "description": "Store-reported totals for the window; metric names differ by store",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "name": {
+                      "maxLength": 100,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "value": {
+                      "maximum": 1000000000000000,
+                      "minimum": -1000000000000000,
+                      "type": "number"
+                    }
+                  },
+                  "required": ["name", "value"],
+                  "type": "object"
+                },
+                "maxItems": 30,
+                "type": "array"
+              },
+              "totalsTruncated": {
+                "type": "boolean"
+              }
+            },
+            "required": ["appId", "dailySeries", "dataThrough", "lastSyncedAt", "status", "store", "topTerritories", "totals", "totalsTruncated"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Get downloads and installs"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "securitySchemes": [
+              {
+                "scopes": ["appskyline:read"],
+                "type": "oauth2"
+              }
+            ]
+          },
+          "digest": "sha256:fb0eeb8f81ec2a122d753cfa210030daed5de309ebe06e7e99f4da547e93c60d"
+        },
+        {
+          "name": "get_keyword_history",
+          "title": "Show keyword rank history",
+          "description": "Use this when someone asks how their app's ranking for a keyword has changed over time in one store and country. Returns the app's rank on each date AppSkyline stored a search snapshot, newest first, up to 365 rows; tracked keywords are re-checked weekly. Not for today's live rank.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "appId": {
+                "description": "AppSkyline app id (uuid)",
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              },
+              "country": {
+                "description": "Two-letter store country code such as US or IT (required)",
+                "maxLength": 10,
+                "minLength": 1,
+                "type": "string"
+              },
+              "limit": {
+                "description": "Snapshots to return, newest first, from 1 to 365; defaults to 365",
+                "exclusiveMinimum": 0,
+                "maximum": 365,
+                "type": "integer"
+              },
+              "store": {
+                "description": "Store to read: ios-app-store, macos-app-store, google-play or microsoft-store; the app needs an id on that store",
+                "enum": ["ios-app-store", "macos-app-store", "google-play", "microsoft-store"],
+                "type": "string"
+              },
+              "term": {
+                "description": "Search term to read history for, 1 to 200 characters",
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": ["appId", "country", "store", "term"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "app": {
+                "anyOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "id": {
+                        "maxLength": 200,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "name": {
+                        "maxLength": 200,
+                        "minLength": 1,
+                        "type": "string"
+                      }
+                    },
+                    "required": ["id", "name"],
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "country": {
+                "anyOf": [
+                  {
+                    "maxLength": 10,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "returned": {
+                "maximum": 365,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "snapshots": {
+                "description": "One row per stored search snapshot, newest first; rank is null when the app was not in that snapshot",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "date": {
+                      "anyOf": [
+                        {
+                          "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "rank": {
+                      "anyOf": [
+                        {
+                          "exclusiveMinimum": 0,
+                          "maximum": 200,
+                          "type": "integer"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "resultsScanned": {
+                      "maximum": 200,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "resultsTruncated": {
+                      "type": "boolean"
+                    }
+                  },
+                  "required": ["date", "rank", "resultsScanned", "resultsTruncated"],
+                  "type": "object"
+                },
+                "maxItems": 365,
+                "type": "array"
+              },
+              "status": {
+                "enum": ["found", "app-not-found", "store-not-configured", "no-history"],
+                "type": "string"
+              },
+              "store": {
+                "enum": ["ios-app-store", "macos-app-store", "google-play", "microsoft-store"],
+                "type": "string"
+              },
+              "term": {
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              },
+              "totalSnapshots": {
+                "maximum": 1000000,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "totalSnapshotsIsLowerBound": {
+                "type": "boolean"
+              },
+              "truncated": {
+                "type": "boolean"
+              }
+            },
+            "required": ["app", "country", "returned", "snapshots", "status", "store", "term", "totalSnapshots", "totalSnapshotsIsLowerBound", "truncated"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Show keyword rank history"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "securitySchemes": [
+              {
+                "scopes": ["appskyline:read"],
+                "type": "oauth2"
+              }
+            ]
+          },
+          "digest": "sha256:d083e4f03437a41a663d81082efa2bdaf746f6a6c84e0630a424759c835f3aa4"
+        },
+        {
+          "name": "get_keyword_overview",
+          "title": "Look up keyword search volume",
+          "description": "Use this when someone asks how popular a keyword is or which keyword ideas are worth targeting. Returns monthly Google web-search volume (a demand proxy, not app-store search counts), difficulty, CPC and competition for up to 50 terms in one country. Terms missing from the 30-day cache trigger a billable lookup. Not for rankings.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "country": {
+                "description": "Two-letter country code such as US or IT (required)",
+                "maxLength": 2,
+                "minLength": 2,
+                "pattern": "^[A-Za-z]{2}$",
+                "type": "string"
+              },
+              "lang": {
+                "description": "Two-letter language code such as en or it; optional",
+                "maxLength": 32,
+                "type": "string"
+              },
+              "terms": {
+                "description": "Keyword ideas to look up in one batch, 1 to 50 terms of up to 200 characters, none containing a comma",
+                "items": {
+                  "maxLength": 200,
+                  "minLength": 1,
+                  "pattern": "^[^,]+$",
+                  "type": "string"
+                },
+                "maxItems": 50,
+                "minItems": 1,
+                "type": "array"
+              }
+            },
+            "required": ["country", "terms"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "country": {
+                "maxLength": 2,
+                "minLength": 2,
+                "type": "string"
+              },
+              "keywords": {
+                "description": "Google web-search demand per term from the shared 30-day cache, highest volume first; a proxy for interest, not app-store search counts",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "competition": {
+                      "anyOf": [
+                        {
+                          "maxLength": 50,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "cpc": {
+                      "anyOf": [
+                        {
+                          "maximum": 1000000,
+                          "minimum": 0,
+                          "type": "number"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "fetchedAt": {
+                      "anyOf": [
+                        {
+                          "maxLength": 64,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "keyword": {
+                      "maxLength": 200,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "keywordDifficulty": {
+                      "anyOf": [
+                        {
+                          "maximum": 100,
+                          "minimum": 0,
+                          "type": "number"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "searchVolume": {
+                      "anyOf": [
+                        {
+                          "maximum": 1000000000,
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": ["competition", "cpc", "fetchedAt", "keyword", "keywordDifficulty", "searchVolume"],
+                  "type": "object"
+                },
+                "maxItems": 50,
+                "type": "array"
+              },
+              "lang": {
+                "anyOf": [
+                  {
+                    "maxLength": 32,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "returned": {
+                "maximum": 50,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "status": {
+                "enum": ["found", "empty"],
+                "type": "string"
+              },
+              "truncated": {
+                "type": "boolean"
+              }
+            },
+            "required": ["country", "keywords", "lang", "returned", "status", "truncated"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": false,
+            "openWorldHint": true,
+            "readOnlyHint": false,
+            "title": "Look up keyword search volume"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "meta": {
+            "securitySchemes": [
+              {
+                "scopes": ["appskyline:read"],
+                "type": "oauth2"
+              }
+            ]
+          },
+          "digest": "sha256:03a9e334fa63b2b4037a29de28d8318f8a0b6564075e9380d5359ee0b104f752"
+        },
+        {
+          "name": "get_keyword_rank",
+          "title": "Check an app's keyword rank",
+          "description": "Use this when someone asks where their app ranks for a keyword right now in one store and country. Returns the app's live position, or not-ranked, after scanning the top 50 results by default and up to 200, and renders a rank card. Not for how a rank changed over time.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "appId": {
+                "description": "AppSkyline app id (uuid)",
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              },
+              "country": {
+                "description": "Two-letter store country code such as US or IT; defaults to US",
+                "maxLength": 10,
+                "type": "string"
+              },
+              "lang": {
+                "description": "Two-letter language code such as en or it; defaults to en except on Google Play, which uses the store default",
+                "maxLength": 32,
+                "type": "string"
+              },
+              "num": {
+                "default": 50,
+                "description": "How many search results to scan for the app, from 1 to 200; defaults to 50",
+                "exclusiveMinimum": 0,
+                "maximum": 200,
+                "type": "integer"
+              },
+              "store": {
+                "description": "Store to check: ios-app-store, macos-app-store, google-play or microsoft-store; the app needs an id on that store",
+                "enum": ["ios-app-store", "macos-app-store", "google-play", "microsoft-store"],
+                "type": "string"
+              },
+              "term": {
+                "description": "Search term to check, 1 to 200 characters",
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": ["appId", "store", "term"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "app": {
+                "anyOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "id": {
+                        "maxLength": 200,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "name": {
+                        "maxLength": 200,
+                        "minLength": 1,
+                        "type": "string"
+                      }
+                    },
+                    "required": ["id", "name"],
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "country": {
+                "anyOf": [
+                  {
+                    "maxLength": 10,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "lang": {
+                "anyOf": [
+                  {
+                    "maxLength": 32,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "rank": {
+                "anyOf": [
+                  {
+                    "exclusiveMinimum": 0,
+                    "maximum": 200,
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "1-based position; null unless status is ranked"
+              },
+              "resultsScanned": {
+                "description": "How many results were scanned; report a rank as #N of this",
+                "maximum": 200,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "status": {
+                "enum": ["ranked", "not-ranked", "app-not-found", "store-not-configured"],
+                "type": "string"
+              },
+              "store": {
+                "enum": ["ios-app-store", "macos-app-store", "google-play", "microsoft-store"],
+                "type": "string"
+              },
+              "term": {
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": ["app", "country", "lang", "rank", "resultsScanned", "status", "store", "term"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": true,
+            "title": "Check an app's keyword rank"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "meta": {
+            "securitySchemes": [
+              {
+                "scopes": ["appskyline:read"],
+                "type": "oauth2"
+              }
+            ],
+            "ui": {
+              "resourceUri": "ui://appskyline/keyword-rank-v6.html"
+            },
+            "ui/resourceUri": "ui://appskyline/keyword-rank-v6.html"
+          },
+          "digest": "sha256:d0cf78a92c23055d42ca57c68676b3daea6c8416443c60f35d4e9ebe3a627a7e"
+        },
+        {
+          "name": "get_store_listing",
+          "title": "Read any app's store listing",
+          "description": "Use this when someone asks about a competitor's or any app's public store page, such as its rating, number of ratings, price, version or last update. Returns the live listing for one store id, with description and release notes cut to 600 characters. Not for your own app's synced text per language.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "country": {
+                "description": "Two-letter store country code such as US or IT; defaults to the store's own default",
+                "maxLength": 10,
+                "type": "string"
+              },
+              "lang": {
+                "description": "Two-letter language code such as en or it; defaults to the store's own default",
+                "maxLength": 32,
+                "type": "string"
+              },
+              "store": {
+                "description": "Store to read: ios-app-store, macos-app-store, google-play or microsoft-store",
+                "enum": ["ios-app-store", "macos-app-store", "google-play", "microsoft-store"],
+                "type": "string"
+              },
+              "storeId": {
+                "description": "The app's id in that store: numeric Apple id, Google Play package name such as com.example.app, or Microsoft Store product id",
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": ["store", "storeId"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "country": {
+                "anyOf": [
+                  {
+                    "maxLength": 10,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "lang": {
+                "anyOf": [
+                  {
+                    "maxLength": 32,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "listing": {
+                "anyOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "currency": {
+                        "anyOf": [
+                          {
+                            "maxLength": 32,
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "description": {
+                        "anyOf": [
+                          {
+                            "maxLength": 600,
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "developer": {
+                        "anyOf": [
+                          {
+                            "maxLength": 300,
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "developerId": {
+                        "anyOf": [
+                          {
+                            "maxLength": 300,
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "free": {
+                        "type": ["boolean", "null"]
+                      },
+                      "genres": {
+                        "items": {
+                          "maxLength": 100,
+                          "type": "string"
+                        },
+                        "maxItems": 20,
+                        "type": "array"
+                      },
+                      "id": {
+                        "anyOf": [
+                          {
+                            "maxLength": 300,
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "price": {
+                        "anyOf": [
+                          {
+                            "maxLength": 100,
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "ratings": {
+                        "anyOf": [
+                          {
+                            "maximum": 1000000000000,
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "releaseNotes": {
+                        "anyOf": [
+                          {
+                            "maxLength": 600,
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "released": {
+                        "anyOf": [
+                          {
+                            "maxLength": 64,
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "requiredOsVersion": {
+                        "anyOf": [
+                          {
+                            "maxLength": 100,
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "score": {
+                        "anyOf": [
+                          {
+                            "maximum": 1000000,
+                            "minimum": 0,
+                            "type": "number"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ],
+                        "description": "Average rating as the store reports it"
+                      },
+                      "screenshotCount": {
+                        "maximum": 10000,
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "title": {
+                        "anyOf": [
+                          {
+                            "maxLength": 300,
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "updated": {
+                        "anyOf": [
+                          {
+                            "maxLength": 64,
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "version": {
+                        "anyOf": [
+                          {
+                            "maxLength": 100,
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      }
+                    },
+                    "required": ["currency", "description", "developer", "developerId", "free", "genres", "id", "price", "ratings", "releaseNotes", "released", "requiredOsVersion", "score", "screenshotCount", "title", "updated", "version"],
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "The live public listing; description and release notes are cut to 600 characters. Null when the store has no app with that id."
+              },
+              "status": {
+                "enum": ["found", "not-found"],
+                "type": "string"
+              },
+              "store": {
+                "enum": ["ios-app-store", "macos-app-store", "google-play", "microsoft-store"],
+                "type": "string"
+              },
+              "storeId": {
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": ["country", "lang", "listing", "status", "store", "storeId"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": true,
+            "title": "Read any app's store listing"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "meta": {
+            "securitySchemes": [
+              {
+                "scopes": ["appskyline:read"],
+                "type": "oauth2"
+              }
+            ]
+          },
+          "digest": "sha256:262e3188e314aa22c01fb39bceca22662da462f5d26fbe4e2cd6a4d819b5ab15"
+        },
+        {
+          "name": "get_store_metadata",
+          "title": "Check your store listing and review status",
+          "description": "Use this when someone asks about their own app's listing text per language, such as the title, subtitle, keywords or release notes, or whether the latest version is still in review or approved. Returns the metadata AppSkyline last synced for each locale, with the version, its review state and the keyword field's length against Apple's 100-character limit; longer texts are cut to 600 characters. Not for a live competitor listing.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "appId": {
+                "description": "AppSkyline app id (uuid)",
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              },
+              "locale": {
+                "description": "Only this locale, written as in the listing such as en-US or it; every synced locale when absent",
+                "maxLength": 32,
+                "type": "string"
+              },
+              "store": {
+                "description": "Store listing to read: ios-app-store, macos-app-store, google-play or microsoft-store",
+                "enum": ["ios-app-store", "macos-app-store", "google-play", "microsoft-store"],
+                "type": "string"
+              }
+            },
+            "required": ["appId", "store"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "appId": {
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              },
+              "listings": {
+                "description": "Metadata as last synced into AppSkyline, one row per locale; it may differ from what the store shows now. Long texts are cut to 600 characters.",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "description": {
+                      "anyOf": [
+                        {
+                          "maxLength": 600,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "keywordCharacters": {
+                      "anyOf": [
+                        {
+                          "maximum": 200,
+                          "minimum": 0,
+                          "type": "integer"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "keywords": {
+                      "anyOf": [
+                        {
+                          "maxLength": 200,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "lastSyncedAt": {
+                      "anyOf": [
+                        {
+                          "maxLength": 64,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "locale": {
+                      "maxLength": 32,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "name": {
+                      "anyOf": [
+                        {
+                          "maxLength": 200,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "promotionalText": {
+                      "anyOf": [
+                        {
+                          "maxLength": 600,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "state": {
+                      "anyOf": [
+                        {
+                          "maxLength": 100,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "subtitle": {
+                      "anyOf": [
+                        {
+                          "maxLength": 300,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "version": {
+                      "anyOf": [
+                        {
+                          "maxLength": 100,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "whatsNew": {
+                      "anyOf": [
+                        {
+                          "maxLength": 600,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": ["description", "keywordCharacters", "keywords", "lastSyncedAt", "locale", "name", "promotionalText", "state", "subtitle", "version", "whatsNew"],
+                  "type": "object"
+                },
+                "maxItems": 100,
+                "type": "array"
+              },
+              "localeFilter": {
+                "anyOf": [
+                  {
+                    "maxLength": 32,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "returned": {
+                "maximum": 100,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "status": {
+                "enum": ["found", "empty"],
+                "type": "string"
+              },
+              "store": {
+                "enum": ["ios-app-store", "macos-app-store", "google-play", "microsoft-store"],
+                "type": "string"
+              },
+              "truncated": {
+                "type": "boolean"
+              }
+            },
+            "required": ["appId", "listings", "localeFilter", "returned", "status", "store", "truncated"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Check your store listing and review status"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "securitySchemes": [
+              {
+                "scopes": ["appskyline:read"],
+                "type": "oauth2"
+              }
+            ]
+          },
+          "digest": "sha256:618a4b9ec1bc8e03b7851144a406ae5b910b97873081aedab5ad34de2ceb0ce2"
+        },
+        {
+          "name": "list_apps",
+          "title": "List your AppSkyline apps",
+          "description": "Use this when someone asks which apps they track in AppSkyline, or an app's id is needed. Returns each app's id, name, default locale and its App Store, Mac App Store, Google Play and Microsoft Store ids, up to 100 apps. Not for finding other apps in a store.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {},
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "apps": {
+                "description": "Apps the signed-in account can access, at most 100",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "defaultLocale": {
+                      "anyOf": [
+                        {
+                          "maxLength": 32,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "googlePlayStorePackage": {
+                      "$ref": "#/properties/apps/items/properties/id"
+                    },
+                    "id": {
+                      "anyOf": [
+                        {
+                          "maxLength": 200,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "iosAppStoreId": {
+                      "$ref": "#/properties/apps/items/properties/id"
+                    },
+                    "macosAppStoreId": {
+                      "$ref": "#/properties/apps/items/properties/id"
+                    },
+                    "name": {
+                      "$ref": "#/properties/apps/items/properties/id"
+                    },
+                    "windowsStoreProductId": {
+                      "$ref": "#/properties/apps/items/properties/id"
+                    }
+                  },
+                  "required": ["defaultLocale", "googlePlayStorePackage", "id", "iosAppStoreId", "macosAppStoreId", "name", "windowsStoreProductId"],
+                  "type": "object"
+                },
+                "maxItems": 100,
+                "type": "array"
+              },
+              "status": {
+                "enum": ["found", "empty"],
+                "type": "string"
+              },
+              "truncated": {
+                "description": "True when the account has more than 100 apps",
+                "type": "boolean"
+              }
+            },
+            "required": ["apps", "status", "truncated"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "List your AppSkyline apps"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "securitySchemes": [
+              {
+                "scopes": ["appskyline:read"],
+                "type": "oauth2"
+              }
+            ]
+          },
+          "digest": "sha256:041e9e63d01b8f8f3f7bc804ff9be135f588060d97f4efb72cfd27aa36c17ca4"
+        },
+        {
+          "name": "list_google_play_reviews",
+          "title": "Read recent Google Play reviews",
+          "description": "Use this when someone asks what users say about their Android app on Google Play, or about recent ratings and complaints. Returns reviews with stars, text cut to 300 characters, app version, device, language and whether the developer replied, up to 100 per page. Google Play only returns reviews from the last 7 days. Not for App Store reviews.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "appId": {
+                "description": "AppSkyline app id (uuid); the app needs a Google Play service account in AppSkyline",
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              },
+              "maxResults": {
+                "description": "Reviews to return per page, from 1 to 100",
+                "exclusiveMinimum": 0,
+                "maximum": 100,
+                "type": "integer"
+              },
+              "token": {
+                "description": "nextPageToken from the previous page; absent for the first page",
+                "maxLength": 2000,
+                "type": "string"
+              },
+              "translationLanguage": {
+                "description": "Translate review text into this language, such as en; omit to keep the original language",
+                "maxLength": 32,
+                "type": "string"
+              }
+            },
+            "required": ["appId"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "appId": {
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              },
+              "nextPageToken": {
+                "anyOf": [
+                  {
+                    "maxLength": 2000,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Pass as token to get the next page; null on the last page"
+              },
+              "returned": {
+                "maximum": 100,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "reviews": {
+                "description": "Reviews created or edited in the last 7 days, as the Google Play API returns them; review text is cut to 300 characters",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "author": {
+                      "anyOf": [
+                        {
+                          "maxLength": 200,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "date": {
+                      "anyOf": [
+                        {
+                          "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "device": {
+                      "anyOf": [
+                        {
+                          "maxLength": 200,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "language": {
+                      "anyOf": [
+                        {
+                          "maxLength": 32,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "replied": {
+                      "type": "boolean"
+                    },
+                    "reviewId": {
+                      "anyOf": [
+                        {
+                          "maxLength": 300,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "stars": {
+                      "anyOf": [
+                        {
+                          "maximum": 5,
+                          "minimum": 1,
+                          "type": "integer"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "text": {
+                      "anyOf": [
+                        {
+                          "maxLength": 300,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "version": {
+                      "anyOf": [
+                        {
+                          "maxLength": 100,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": ["author", "date", "device", "language", "replied", "reviewId", "stars", "text", "version"],
+                  "type": "object"
+                },
+                "maxItems": 100,
+                "type": "array"
+              },
+              "status": {
+                "enum": ["available", "empty", "not-configured"],
+                "type": "string"
+              },
+              "truncated": {
+                "type": "boolean"
+              }
+            },
+            "required": ["appId", "nextPageToken", "returned", "reviews", "status", "truncated"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": true,
+            "title": "Read recent Google Play reviews"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "meta": {
+            "securitySchemes": [
+              {
+                "scopes": ["appskyline:read"],
+                "type": "oauth2"
+              }
+            ]
+          },
+          "digest": "sha256:a37be98c6c785b8777959947b25c9b125d4e47caffc694d81ecc5f353666b389"
+        },
+        {
+          "name": "list_keywords",
+          "title": "List tracked keywords",
+          "description": "Use this when someone asks which keywords they track for an app, or before adding or deleting one. Returns each tracked keyword's id, search term, language, country and bid, up to 500 per call. Not for current rankings or search volume.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "appId": {
+                "description": "AppSkyline app id (uuid)",
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              },
+              "limit": {
+                "description": "Keywords to return, from 1 to 500; omit for all tracked keywords, capped at 500",
+                "exclusiveMinimum": 0,
+                "maximum": 500,
+                "type": "integer"
+              },
+              "skip": {
+                "description": "Keywords to skip before the first one returned, for paging; defaults to 0",
+                "maximum": 1000000,
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": ["appId"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "keywords": {
+                "description": "Tracked keywords for the app, at most 500 per call",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "bid": {
+                      "anyOf": [
+                        {
+                          "maximum": 1000000000000,
+                          "minimum": 0,
+                          "type": "number"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "Bid amount stored for the keyword; null when none is set"
+                    },
+                    "country": {
+                      "anyOf": [
+                        {
+                          "maxLength": 10,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "id": {
+                      "anyOf": [
+                        {
+                          "maxLength": 200,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "language": {
+                      "anyOf": [
+                        {
+                          "maxLength": 32,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "term": {
+                      "$ref": "#/properties/keywords/items/properties/id"
+                    }
+                  },
+                  "required": ["bid", "country", "id", "language", "term"],
+                  "type": "object"
+                },
+                "maxItems": 500,
+                "type": "array"
+              },
+              "offset": {
+                "maximum": 1000000,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "returned": {
+                "maximum": 500,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "status": {
+                "enum": ["found", "empty"],
+                "type": "string"
+              },
+              "truncated": {
+                "description": "True when more than 500 keywords matched; page with skip",
+                "type": "boolean"
+              }
+            },
+            "required": ["keywords", "offset", "returned", "status", "truncated"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "List tracked keywords"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "securitySchemes": [
+              {
+                "scopes": ["appskyline:read"],
+                "type": "oauth2"
+              }
+            ]
+          },
+          "digest": "sha256:4174448619652a2b293213e66b6c1cfea5a5b5151a49e9bc353f56fdf5b1f36f"
+        },
+        {
+          "name": "open_appskyline",
+          "title": "AppSkyline",
+          "description": "Use this when someone wants to open AppSkyline and browse their workspace interactively. Apps, connected stores and tracked keywords. Starts with up to 100 items. Not for changing data.",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {},
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "additionalProperties": false,
+            "properties": {
+              "items": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "defaultLocale": {
+                      "anyOf": [
+                        {
+                          "maxLength": 32,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "id": {
+                      "anyOf": [
+                        {
+                          "maxLength": 200,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "locales": {
+                      "items": {
+                        "maxLength": 32,
+                        "type": "string"
+                      },
+                      "maxItems": 100,
+                      "type": "array"
+                    },
+                    "logoUrl": {
+                      "anyOf": [
+                        {
+                          "maxLength": 2048,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "name": {
+                      "maxLength": 200,
+                      "type": "string"
+                    },
+                    "subtitle": {
+                      "maxLength": 300,
+                      "type": "string"
+                    }
+                  },
+                  "required": ["defaultLocale", "id", "locales", "logoUrl", "name", "subtitle"],
+                  "type": "object"
+                },
+                "maxItems": 100,
+                "type": "array"
+              },
+              "truncated": {
+                "type": "boolean"
+              }
+            },
+            "required": ["items", "truncated"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "icons": [
+            {
+              "src": "data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20width%3D%2220%22%20height%3D%2220%22%20viewBox%3D%2250%2045%20405%20365%22%3E%3Cg%20fill%3D%22currentColor%22%3E%3Cpath%20d%3D%22M135.03897%2C361.1169c.0028.11886-27.93916%2C8.231-27.8079%2C8.34684-5.50465%2C2.85461-11.08059%2C5.6075-16.72782%2C8.25866l-.47636-.31277c-.25977-.43047-.6787-.66328-1.08864-.92678-4.00376-2.57345-7.25745-5.70143-10.02248-9.56476-4.75723-6.64686-7.78324-14.26768-7.81812-22.57259-.03132-7.45811%2C1.87114-14.70276%2C5.5714-21.17943l17.15122-30.02025%2C11.19338-19.66561%2C44.99045-78.70583%2C18.75232-32.86525%2C24.9042-43.78835%2C7.19609-12.67904%2C9.38393-16.76905c7.53105-13.45796%2C22.55208-22.26746%2C37.98258-22.92223%2C9.12015-.38699%2C17.71805%2C1.7347%2C25.53711%2C6.32367%2C6.82568%2C4.00597%2C12.49117%2C9.41999%2C16.39945%2C16.38903l14.40993%2C25.69505%2C46.07792%2C82.2651%2C12.39689%2C22.15448%2C39.1081%2C69.4087%2C11.24474%2C19.83199%2C9.32383%2C16.58823c1.81574%2C3.23042%2C3.08341%2C6.59676%2C4.01608%2C10.16473%2C2.12809%2C8.14102%2C1.36184%2C16.46647-2.01522%2C24.11154-1.57903%2C3.57465-3.48794%2C6.69769-6.04254%2C9.63356-.14671.16861-.30571.23555-.47863.24503l-.41215.34197c-7.92642-3.99996-44.68056-16.68808-53.34214-19.69882l-68.8706-130.28846c-9.71018-16.89381-19.36043-33.93886-28.95077-51.13514-8.73777-13.41003-27.33234-11.45669-34.36555%2C2.61955-25.23911%2C45.28991-50.28786%2C90.21864-75.14624%2C134.78622l-1.09775.98508-20.97671%2C54.94491Z%22%2F%3E%3Cpath%20d%3D%22M106%20365v-28h22v28zm34-11v-53h26v53zm59-9v-73h27v73zm50-4V237h38v104zm45%200V196h29v145zm57%2012v-83h19v83z%22%2F%3E%3Cpath%20d%3D%22M70%20377q182-68%20368%200v18q-183-61-368%200z%22%2F%3E%3C%2Fg%3E%3C%2Fsvg%3E",
+              "mimeType": "image/svg+xml"
+            }
+          ],
+          "meta": {
+            "openai/outputTemplate": "ui://appskyline/workspace-v3.html",
+            "openai/ui": {
+              "entrypoints": [
+                {
+                  "type": "global"
+                }
+              ]
+            },
+            "openai/widgetAccessible": true,
+            "securitySchemes": [
+              {
+                "scopes": ["appskyline:read"],
+                "type": "oauth2"
+              }
+            ],
+            "ui": {
+              "resourceUri": "ui://appskyline/workspace-v3.html"
+            }
+          },
+          "digest": "sha256:20037d0f47fb73b116e9ce32f938c06488443b9448d7aa074be6ccd12399d4ee"
+        },
+        {
+          "name": "search_store_results",
+          "title": "Search an app store",
+          "description": "Use this when someone asks which apps show up for a search term, or who their competitors are for a keyword, on the App Store, Mac App Store, Google Play or Microsoft Store. Returns the live results in rank order with store id, title, rating and developer (10 by default, up to 200). Not for one app's own position.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "country": {
+                "description": "Two-letter store country code such as US or IT; defaults to US",
+                "maxLength": 10,
+                "type": "string"
+              },
+              "lang": {
+                "description": "Two-letter language code such as en or it; defaults to en except on Google Play, which uses the store default",
+                "maxLength": 32,
+                "type": "string"
+              },
+              "num": {
+                "description": "Number of results to return, from 1 to 200; defaults to 10",
+                "exclusiveMinimum": 0,
+                "maximum": 200,
+                "type": "integer"
+              },
+              "store": {
+                "description": "Store to search: ios-app-store, macos-app-store, google-play or microsoft-store",
+                "enum": ["ios-app-store", "macos-app-store", "google-play", "microsoft-store"],
+                "type": "string"
+              },
+              "term": {
+                "description": "Search term as a user would type it in the store, 1 to 200 characters",
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": ["store", "term"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "country": {
+                "anyOf": [
+                  {
+                    "maxLength": 10,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "lang": {
+                "anyOf": [
+                  {
+                    "maxLength": 32,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "results": {
+                "description": "Live search results in store rank order; nothing is stored in AppSkyline",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "developer": {
+                      "$ref": "#/properties/results/items/properties/id"
+                    },
+                    "id": {
+                      "anyOf": [
+                        {
+                          "maxLength": 300,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "rank": {
+                      "exclusiveMinimum": 0,
+                      "maximum": 200,
+                      "type": "integer"
+                    },
+                    "score": {
+                      "anyOf": [
+                        {
+                          "maximum": 1000000,
+                          "minimum": 0,
+                          "type": "number"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "Rating score as the store reports it"
+                    },
+                    "title": {
+                      "$ref": "#/properties/results/items/properties/id"
+                    }
+                  },
+                  "required": ["developer", "id", "rank", "score", "title"],
+                  "type": "object"
+                },
+                "maxItems": 200,
+                "type": "array"
+              },
+              "status": {
+                "enum": ["found", "empty"],
+                "type": "string"
+              },
+              "store": {
+                "enum": ["ios-app-store", "macos-app-store", "google-play", "microsoft-store"],
+                "type": "string"
+              },
+              "term": {
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              },
+              "truncated": {
+                "description": "True when the store returned more than 200 results",
+                "type": "boolean"
+              }
+            },
+            "required": ["country", "lang", "results", "status", "store", "term", "truncated"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": true,
+            "title": "Search an app store"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "meta": {
+            "securitySchemes": [
+              {
+                "scopes": ["appskyline:read"],
+                "type": "oauth2"
+              }
+            ]
+          },
+          "digest": "sha256:c4330ad8be8b13251b4b00c22e3da884e8519523f109a9ba3d2b493b5094af5b"
+        },
+        {
+          "name": "show_app_overview",
+          "title": "Show app overview",
+          "description": "Use this when someone wants a quick overview of one of the apps they track in AppSkyline. Returns an overview card with the app's connected stores, locales and up to 50 tracked keywords. Not for keyword rankings.",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "appId": {
+                "description": "AppSkyline app id (uuid)",
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": ["appId"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "additionalProperties": false,
+            "properties": {
+              "app": {
+                "anyOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "defaultLocale": {
+                        "anyOf": [
+                          {
+                            "maxLength": 32,
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "googlePlayId": {
+                        "anyOf": [
+                          {
+                            "maxLength": 200,
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "id": {
+                        "maxLength": 200,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "iosAppStoreId": {
+                        "anyOf": [
+                          {
+                            "maxLength": 200,
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "locales": {
+                        "items": {
+                          "maxLength": 32,
+                          "type": "string"
+                        },
+                        "maxItems": 100,
+                        "type": "array"
+                      },
+                      "macosAppStoreId": {
+                        "anyOf": [
+                          {
+                            "maxLength": 200,
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "microsoftStoreId": {
+                        "anyOf": [
+                          {
+                            "maxLength": 200,
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "name": {
+                        "maxLength": 200,
+                        "minLength": 1,
+                        "type": "string"
+                      }
+                    },
+                    "required": ["defaultLocale", "googlePlayId", "id", "iosAppStoreId", "locales", "macosAppStoreId", "microsoftStoreId", "name"],
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "keywordCount": {
+                "maximum": 1000000,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "keywords": {
+                "description": "The first 50 tracked keywords; keywordCount has the total",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "country": {
+                      "anyOf": [
+                        {
+                          "maxLength": 10,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "id": {
+                      "anyOf": [
+                        {
+                          "maxLength": 200,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "language": {
+                      "anyOf": [
+                        {
+                          "maxLength": 32,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "term": {
+                      "anyOf": [
+                        {
+                          "maxLength": 200,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": ["country", "id", "language", "term"],
+                  "type": "object"
+                },
+                "maxItems": 50,
+                "type": "array"
+              },
+              "storeCount": {
+                "maximum": 4,
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": ["app", "keywordCount", "keywords", "storeCount"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Show app overview"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "openai/outputTemplate": "ui://appskyline/app-overview-v13.html",
+            "openai/toolInvocation/invoked": "Appskyline overview ready.",
+            "openai/toolInvocation/invoking": "Loading Appskyline overview…",
+            "securitySchemes": [
+              {
+                "scopes": ["appskyline:read"],
+                "type": "oauth2"
+              }
+            ],
+            "ui": {
+              "resourceUri": "ui://appskyline/app-overview-v13.html"
+            },
+            "ui/resourceUri": "ui://appskyline/app-overview-v13.html"
+          },
+          "digest": "sha256:4540e9966a8b9c80a09eb67beb21fa6bf6e731d60aa77010dc4d607a87f05884"
+        },
+        {
+          "name": "suggest_store_metadata",
+          "title": "Suggest title, subtitle and keywords",
+          "description": "Use this when someone asks which keywords to put in their app's title, subtitle, keyword field or short description, or how to improve their store listing's ASO. Without appId it covers every app in its main market, so one call answers 'for each app'. Compares each listing (synced metadata, or the live public listing in that country) with the app's tracked keywords, their latest stored rank and cached Google demand, and returns drafts that already fit each store's limits, the coverage they reach, the top opportunities and issues. Pass appId, store and a proposed title, subtitle, keywords or shortDescription to check your own wording. Read-only; never changes a store listing.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "appId": {
+                "description": "AppSkyline app id (uuid); omit to cover every app",
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              },
+              "country": {
+                "description": "Two-letter market such as ES; defaults to the country with most tracked keywords",
+                "maxLength": 2,
+                "minLength": 2,
+                "type": "string"
+              },
+              "keywords": {
+                "description": "Proposed App Store keyword field, or Microsoft Store search terms one per line, to check",
+                "maxLength": 400,
+                "minLength": 1,
+                "type": "string"
+              },
+              "language": {
+                "description": "Listing language such as es; defaults to the market's keywords",
+                "maxLength": 10,
+                "minLength": 2,
+                "type": "string"
+              },
+              "shortDescription": {
+                "description": "Proposed Google Play short description to check",
+                "maxLength": 400,
+                "minLength": 1,
+                "type": "string"
+              },
+              "store": {
+                "description": "Only this store; every configured store when absent",
+                "enum": ["ios-app-store", "macos-app-store", "google-play", "microsoft-store"],
+                "type": "string"
+              },
+              "subtitle": {
+                "description": "Proposed App Store subtitle to check; needs appId and store",
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              },
+              "title": {
+                "description": "Proposed title to check; needs appId and store",
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "results": {
+                "description": "One entry per app and store. Drafts already fit the store limits; competitorWords are unvetted words from competitor titles.",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "appId": {
+                      "maxLength": 200,
+                      "type": "string"
+                    },
+                    "appName": {
+                      "anyOf": [
+                        {
+                          "maxLength": 300,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "competitorWords": {
+                      "$ref": "#/properties/results/items/properties/suggested/anyOf/0/properties/title/anyOf/0/properties/covers"
+                    },
+                    "coverage": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "coveredAfter": {
+                          "$ref": "#/properties/totalApps"
+                        },
+                        "coveredNow": {
+                          "$ref": "#/properties/totalApps"
+                        },
+                        "tracked": {
+                          "$ref": "#/properties/totalApps"
+                        }
+                      },
+                      "required": ["coveredAfter", "coveredNow", "tracked"],
+                      "type": "object"
+                    },
+                    "current": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "keywords": {
+                          "anyOf": [
+                            {
+                              "maxLength": 600,
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "shortDescription": {
+                          "anyOf": [
+                            {
+                              "maxLength": 600,
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "subtitle": {
+                          "anyOf": [
+                            {
+                              "maxLength": 600,
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "title": {
+                          "anyOf": [
+                            {
+                              "maxLength": 600,
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      },
+                      "required": ["keywords", "shortDescription", "subtitle", "title"],
+                      "type": "object"
+                    },
+                    "issues": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "code": {
+                            "maxLength": 100,
+                            "type": "string"
+                          },
+                          "message": {
+                            "maxLength": 600,
+                            "type": "string"
+                          },
+                          "severity": {
+                            "maxLength": 20,
+                            "type": "string"
+                          },
+                          "words": {
+                            "$ref": "#/properties/results/items/properties/suggested/anyOf/0/properties/title/anyOf/0/properties/covers"
+                          }
+                        },
+                        "required": ["code", "message", "severity", "words"],
+                        "type": "object"
+                      },
+                      "maxItems": 6,
+                      "type": "array"
+                    },
+                    "market": {
+                      "anyOf": [
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "country": {
+                              "maxLength": 10,
+                              "type": "string"
+                            },
+                            "language": {
+                              "anyOf": [
+                                {
+                                  "maxLength": 32,
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            }
+                          },
+                          "required": ["country", "language"],
+                          "type": "object"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "opportunities": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "coverage": {
+                            "maxLength": 40,
+                            "type": "string"
+                          },
+                          "missingWords": {
+                            "$ref": "#/properties/results/items/properties/suggested/anyOf/0/properties/title/anyOf/0/properties/covers"
+                          },
+                          "priority": {
+                            "$ref": "#/properties/totalApps"
+                          },
+                          "rank": {
+                            "$ref": "#/properties/totalApps"
+                          },
+                          "reasons": {
+                            "$ref": "#/properties/results/items/properties/suggested/anyOf/0/properties/title/anyOf/0/properties/covers"
+                          },
+                          "scanned": {
+                            "$ref": "#/properties/totalApps"
+                          },
+                          "searchVolume": {
+                            "$ref": "#/properties/totalApps"
+                          },
+                          "term": {
+                            "maxLength": 200,
+                            "type": "string"
+                          }
+                        },
+                        "required": ["coverage", "missingWords", "priority", "rank", "reasons", "scanned", "searchVolume", "term"],
+                        "type": "object"
+                      },
+                      "maxItems": 8,
+                      "type": "array"
+                    },
+                    "otherMarkets": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "country": {
+                            "$ref": "#/properties/results/items/properties/market/anyOf/0/properties/country"
+                          },
+                          "keywords": {
+                            "$ref": "#/properties/totalApps"
+                          },
+                          "language": {
+                            "$ref": "#/properties/results/items/properties/market/anyOf/0/properties/language"
+                          }
+                        },
+                        "required": ["country", "keywords", "language"],
+                        "type": "object"
+                      },
+                      "maxItems": 50,
+                      "type": "array"
+                    },
+                    "proposal": {
+                      "anyOf": [
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "covered": {
+                              "$ref": "#/properties/totalApps"
+                            },
+                            "gained": {
+                              "items": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "from": {
+                                    "maxLength": 40,
+                                    "type": "string"
+                                  },
+                                  "term": {
+                                    "maxLength": 200,
+                                    "type": "string"
+                                  },
+                                  "to": {
+                                    "maxLength": 40,
+                                    "type": "string"
+                                  }
+                                },
+                                "required": ["from", "term", "to"],
+                                "type": "object"
+                              },
+                              "maxItems": 60,
+                              "type": "array"
+                            },
+                            "issues": {
+                              "items": {
+                                "$ref": "#/properties/results/items/properties/issues/items"
+                              },
+                              "maxItems": 20,
+                              "type": "array"
+                            },
+                            "lost": {
+                              "items": {
+                                "$ref": "#/properties/results/items/properties/proposal/anyOf/0/properties/gained/items"
+                              },
+                              "maxItems": 60,
+                              "type": "array"
+                            },
+                            "tracked": {
+                              "$ref": "#/properties/totalApps"
+                            }
+                          },
+                          "required": ["covered", "gained", "issues", "lost", "tracked"],
+                          "type": "object"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "source": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "kind": {
+                          "maxLength": 20,
+                          "type": "string"
+                        },
+                        "lastSyncedAt": {
+                          "anyOf": [
+                            {
+                              "maxLength": 64,
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "locale": {
+                          "anyOf": [
+                            {
+                              "maxLength": 32,
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      },
+                      "required": ["kind", "lastSyncedAt", "locale"],
+                      "type": "object"
+                    },
+                    "status": {
+                      "maxLength": 40,
+                      "type": "string"
+                    },
+                    "store": {
+                      "anyOf": [
+                        {
+                          "maxLength": 40,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "suggested": {
+                      "anyOf": [
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "descriptionMentions": {
+                              "$ref": "#/properties/results/items/properties/suggested/anyOf/0/properties/title/anyOf/0/properties/covers"
+                            },
+                            "keywords": {
+                              "anyOf": [
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "changed": {
+                                      "type": "boolean"
+                                    },
+                                    "dropped": {
+                                      "$ref": "#/properties/results/items/properties/suggested/anyOf/0/properties/title/anyOf/0/properties/covers"
+                                    },
+                                    "length": {
+                                      "$ref": "#/properties/totalApps"
+                                    },
+                                    "limit": {
+                                      "$ref": "#/properties/totalApps"
+                                    },
+                                    "unused": {
+                                      "$ref": "#/properties/totalApps"
+                                    },
+                                    "value": {
+                                      "anyOf": [
+                                        {
+                                          "maxLength": 600,
+                                          "type": "string"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    }
+                                  },
+                                  "required": ["changed", "dropped", "length", "limit", "unused", "value"],
+                                  "type": "object"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "searchTerms": {
+                              "anyOf": [
+                                {
+                                  "$ref": "#/properties/results/items/properties/suggested/anyOf/0/properties/title/anyOf/0/properties/covers"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "shortDescriptionPhrases": {
+                              "$ref": "#/properties/results/items/properties/suggested/anyOf/0/properties/title/anyOf/0/properties/covers"
+                            },
+                            "subtitle": {
+                              "$ref": "#/properties/results/items/properties/suggested/anyOf/0/properties/title"
+                            },
+                            "title": {
+                              "anyOf": [
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "changed": {
+                                      "type": "boolean"
+                                    },
+                                    "covers": {
+                                      "items": {
+                                        "maxLength": 200,
+                                        "type": "string"
+                                      },
+                                      "maxItems": 20,
+                                      "type": "array"
+                                    },
+                                    "length": {
+                                      "$ref": "#/properties/totalApps"
+                                    },
+                                    "limit": {
+                                      "$ref": "#/properties/totalApps"
+                                    },
+                                    "value": {
+                                      "anyOf": [
+                                        {
+                                          "maxLength": 600,
+                                          "type": "string"
+                                        },
+                                        {
+                                          "type": "null"
+                                        }
+                                      ]
+                                    }
+                                  },
+                                  "required": ["changed", "covers", "length", "limit", "value"],
+                                  "type": "object"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            }
+                          },
+                          "required": ["descriptionMentions", "keywords", "searchTerms", "shortDescriptionPhrases", "subtitle", "title"],
+                          "type": "object"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": ["appId", "appName", "market", "otherMarkets", "status", "store"],
+                  "type": "object"
+                },
+                "maxItems": 40,
+                "type": "array"
+              },
+              "scope": {
+                "enum": ["app", "organization"],
+                "type": "string"
+              },
+              "status": {
+                "enum": ["complete", "partial"],
+                "type": "string"
+              },
+              "totalApps": {
+                "anyOf": [
+                  {
+                    "maximum": 1000000000,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "truncated": {
+                "type": "boolean"
+              }
+            },
+            "required": ["results", "scope", "status", "totalApps", "truncated"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": true,
+            "title": "Suggest title, subtitle and keywords"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "meta": {
+            "securitySchemes": [
+              {
+                "scopes": ["appskyline:read"],
+                "type": "oauth2"
+              }
+            ]
+          },
+          "digest": "sha256:3cd589831a635d330c7f715c69297371f2a747d426439785ca0fecb780e8e06f"
+        }
+      ],
+      "resources": [
+        {
+          "uri": "skill://appskyline/appskyline/SKILL.md",
+          "name": "appskyline",
+          "title": "appskyline skill",
+          "description": "Query and manage App Store Optimization data with the `appskyline` CLI — check where an app ranks for a keyword on the iOS App Store, macOS App Store, Google Play or Microsoft Store, list live top-N search results, track keywords, look up monthly search volume and difficulty for keyword ideas, get suggested titles, subtitles and keyword fields built from the tracked keywords, audit and upload App Store Connect listing metadata, and pull Google Play reviews and install reports. Use when asked about app store rankings, keyword research, ASO reports, store-listing metadata, or anything involving the `appskyline` command or app.appskyline.com data.",
+          "mimeType": "text/markdown",
+          "digest": "sha256:025a21afa86e7fb44336f441d7054675c4f4addd5cf57457d5a53308511767e2"
+        },
+        {
+          "uri": "ui://appskyline/app-overview-v13.html",
+          "name": "appskyline-app-overview",
+          "mimeType": "text/html;profile=mcp-app",
+          "digest": "sha256:881b743c67289fb414cb4342122e5f9f8fe2745a79b0971c14ed7dedaf32454b"
+        },
+        {
+          "uri": "ui://appskyline/app-overview-v10.html",
+          "name": "appskyline-app-overview-v10",
+          "mimeType": "text/html;profile=mcp-app",
+          "digest": "sha256:9d5a91ffdf6ef4509e14cbe3eb495f053a574e43d065ec74693a62aa3df4bd4f"
+        },
+        {
+          "uri": "ui://appskyline/app-overview-v11.html",
+          "name": "appskyline-app-overview-v11",
+          "mimeType": "text/html;profile=mcp-app",
+          "digest": "sha256:2f56576a3aa6ea24bbaca79e016fa7b8ed474658c2d768cfd23992c07757fb00"
+        },
+        {
+          "uri": "ui://appskyline/app-overview-v12.html",
+          "name": "appskyline-app-overview-v12",
+          "mimeType": "text/html;profile=mcp-app",
+          "digest": "sha256:128fc1a6b47f0b334b8a7dc7e0f5919d5e47ce9e41ea6080e4013f4da3f0c701"
+        },
+        {
+          "uri": "ui://appskyline/app-overview-v8.html",
+          "name": "appskyline-app-overview-v8",
+          "mimeType": "text/html;profile=mcp-app",
+          "digest": "sha256:5f99d584b1b637904b6478a19a9c30490b9a77a7384ae678a745d7e588eba3bc"
+        },
+        {
+          "uri": "ui://appskyline/app-overview-v9.html",
+          "name": "appskyline-app-overview-v9",
+          "mimeType": "text/html;profile=mcp-app",
+          "digest": "sha256:d298ac4124383a464115de3267fe437f627226e0b8ba59f7da2a9b98b8dfd468"
+        },
+        {
+          "uri": "ui://appskyline/keyword-rank-v6.html",
+          "name": "appskyline-keyword-rank",
+          "description": "An inline Appskyline view that presents a keyword rank in a store.",
+          "mimeType": "text/html;profile=mcp-app",
+          "digest": "sha256:7ff96161770b240e1720bf2a3681bb3a7d8881235697ae592e5b404eb5a70044"
+        },
+        {
+          "uri": "ui://appskyline/keyword-rank-v2.html",
+          "name": "appskyline-keyword-rank-v2",
+          "description": "An inline Appskyline view that presents a keyword rank in a store.",
+          "mimeType": "text/html;profile=mcp-app",
+          "digest": "sha256:ac78f4415beba1e26e247320f35f4b7311ede79ef76b5bd0481d97a7f9ba690f"
+        },
+        {
+          "uri": "ui://appskyline/keyword-rank-v3.html",
+          "name": "appskyline-keyword-rank-v3",
+          "description": "An inline Appskyline view that presents a keyword rank in a store.",
+          "mimeType": "text/html;profile=mcp-app",
+          "digest": "sha256:b72dbbced9a435d0bcead7ba4f8cd28278d27623a65859a0b1f6a10544230a36"
+        },
+        {
+          "uri": "ui://appskyline/keyword-rank-v4.html",
+          "name": "appskyline-keyword-rank-v4",
+          "description": "An inline Appskyline view that presents a keyword rank in a store.",
+          "mimeType": "text/html;profile=mcp-app",
+          "digest": "sha256:08b633369b1f0e289ade0bfa00d6ff77144e6e642a0dc1874bc09ed4612b9751"
+        },
+        {
+          "uri": "ui://appskyline/keyword-rank-v5.html",
+          "name": "appskyline-keyword-rank-v5",
+          "description": "An inline Appskyline view that presents a keyword rank in a store.",
+          "mimeType": "text/html;profile=mcp-app",
+          "digest": "sha256:f831fd20383bba7bc478e267001c39be59f84bd9f0bdf86833b5c19498a7a2a6"
+        },
+        {
+          "uri": "ui://appskyline/workspace-v3.html",
+          "name": "appskyline-workspace",
+          "mimeType": "text/html;profile=mcp-app",
+          "digest": "sha256:0b63e9f5a76c1e5eeaf808bcacb654218ca0122a16339abe82e1759db30d0c9c"
+        },
+        {
+          "uri": "ui://appskyline/workspace-v1.html",
+          "name": "appskyline-workspace-v1",
+          "mimeType": "text/html;profile=mcp-app",
+          "digest": "sha256:0ed4121e244738bf86fa9fca40c6323cb0600b8072e86a3492f71f922bd70e97"
+        },
+        {
+          "uri": "ui://appskyline/workspace-v2.html",
+          "name": "appskyline-workspace-v2",
+          "mimeType": "text/html;profile=mcp-app",
+          "digest": "sha256:53f9346320372cfb3c0dae2100231a645382476d58aec8994dc85c0fd2ef2b64"
+        },
+        {
+          "uri": "skill://appskyline/aso-research/SKILL.md",
+          "name": "aso-research",
+          "title": "aso-research skill",
+          "description": "Research and improve an app's App Store Optimization standing using AppSkyline — keyword ranks and history across the iOS App Store, macOS App Store, Google Play and Microsoft Store, search-volume and difficulty lookups, suggested titles, subtitles and keyword fields built from the tracked keywords, store-listing metadata audits against Apple's character limits, competitor listings, and engagement/review signals. Use when asked for an ASO report, to check where an app ranks for a keyword, to find keywords worth targeting, which keywords to put in a title or subtitle, to audit or improve store metadata, or to compare an app against competitors.",
+          "mimeType": "text/markdown",
+          "digest": "sha256:3d97609d1b0cbb14fb71de89410999bb92a30cf0b942f453e1ae787707906b14"
+        },
+        {
+          "uri": "skill://appskyline/store-listing-audit/SKILL.md",
+          "name": "store-listing-audit",
+          "title": "store-listing-audit skill",
+          "description": "Audit an iOS App Store, Mac App Store, Google Play, or Microsoft Store listing with AppSkyline. Use when asked to review an app title, subtitle, keyword field, description, localization, competitor positioning, or listing metadata and produce evidence-based recommendations without inventing search volume or store support.",
+          "mimeType": "text/markdown",
+          "digest": "sha256:45aac0ea4ba802f72e28e3199075213fbee80ba4163cac0e8bb4540bc6c6d057"
+        }
+      ],
+      "digest": "sha256:6bda83e899d48b1d8431a77eddae1028f50996f1e45a14c9737921bd38e75312"
+    }
+  }
+}

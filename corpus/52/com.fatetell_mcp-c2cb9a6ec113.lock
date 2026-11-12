@@ -1,0 +1,2827 @@
+{
+  "lockfileVersion": 2,
+  "subjects": {
+    "com.fatetell/mcp": {
+      "kind": "mcp-server",
+      "source": {
+        "client": "manual",
+        "file": "registry.modelcontextprotocol.io"
+      },
+      "transport": {
+        "type": "http",
+        "url": "https://mcp.fatetell.com/mcp"
+      },
+      "protocol": {
+        "era": "modern",
+        "version": "2026-07-28",
+        "supportedVersions": ["2026-07-28"]
+      },
+      "serverInfo": {
+        "name": "fatetell",
+        "title": "FateTell",
+        "version": "0.1.0"
+      },
+      "capabilities": {
+        "extensions": {
+          "io.modelcontextprotocol/ui": {}
+        },
+        "resources": {
+          "listChanged": false
+        },
+        "tools": {
+          "listChanged": false
+        }
+      },
+      "instructions": "Saved charts first: for \"my chart\" or a saved profile call list_saved_charts, then get_saved_chart; never re-cast a saved chart from birth data. cast_bazi_chart is for births not saved. get_almanac needs no chart and no birth data (stems and branches, solar terms, lunar date; up to 31 days per call). get_daily_fortune (one day) and get_chart_calendar (many days) need a chart_id or \"self\". Calls are rate limited; a rate_limited error says when it resets; identical calls within 24 hours are not counted.",
+      "tools": [
+        {
+          "name": "cast_bazi_chart",
+          "title": "Cast BaZi chart",
+          "description": "Compute a BaZi chart from birth data: pillars with Ten Gods, hidden stems, Na Yin, Day Master, all luck pillars, palaces and today's pillars; southern-hemisphere births use cross-region rules.\nUse for a birth not saved in FateTell, e.g. \"What is my BaZi? Born 1990-05-17 08:30 in Taipei\".\nNot for a saved chart (get_saved_chart already has its pillars, luck pillars and judgment; do not rebuild its birth data for this), Day Master strength (get_bazi_judgment), calendar (get_almanac), Western astrology, or predicting events or years of accident, illness or death.\nDeterministic; nothing stored.",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "birth": {
+                "description": "Birth data. No birthplace name or latitude is collected.",
+                "properties": {
+                  "calendar": {
+                    "description": "Default solar (Gregorian). Use lunar when the user gives a Chinese lunar birthday; the server converts it to Gregorian, so do not convert it yourself.",
+                    "enum": ["solar", "lunar"],
+                    "type": "string"
+                  },
+                  "date": {
+                    "description": "Birth date in the local calendar of the birthplace, YYYY-MM-DD: Gregorian by default; with calendar lunar, the Chinese lunar year, month (1-12) and day.",
+                    "type": "string"
+                  },
+                  "gender": {
+                    "description": "Determines whether the luck pillars run forward or backward.",
+                    "enum": ["male", "female"],
+                    "type": "string"
+                  },
+                  "hemisphere": {
+                    "description": "Hemisphere of the birthplace. Judge it from the birthplace itself; it cannot be inferred from the time zone (Asia/Jakarta, Africa/Nairobi and America/Belem span the equator).",
+                    "enum": ["north", "south"],
+                    "type": "string"
+                  },
+                  "longitude": {
+                    "description": "Birthplace longitude, -180 to 180. Only used when use_true_solar_time is true and only when the user supplies it; do not infer it from the birthplace. Never stored or logged.",
+                    "maximum": 180,
+                    "minimum": -180,
+                    "type": "number"
+                  },
+                  "lunar_leap_month": {
+                    "description": "Default false. Only with calendar lunar: true when the birth was in a leap month, e.g. leap 4th month is month 04 with true.",
+                    "type": "boolean"
+                  },
+                  "time": {
+                    "description": "Local clock time at the birthplace, 24-hour HH:mm. Omit if unknown: the chart then uses 12:00 and reports hour_assumed.",
+                    "type": ["string", "null"]
+                  },
+                  "timezone": {
+                    "description": "IANA time zone name of the birthplace, e.g. Asia/Taipei or Australia/Sydney. GMT+8 or UTC+8 style offsets are not accepted.",
+                    "type": "string"
+                  },
+                  "use_true_solar_time": {
+                    "description": "Default false. Set true only when the user explicitly asks for true solar time; FateTell's app does not apply it by default. When true and longitude is given, the birth time is corrected to true solar time; without longitude no correction is made and notes include true_solar_skipped_no_longitude.",
+                    "type": "boolean"
+                  }
+                },
+                "required": ["date", "gender", "hemisphere", "timezone"],
+                "type": "object"
+              },
+              "include_today": {
+                "description": "Default true. When false, today's pillars are omitted (today is null), which keeps the result smaller.",
+                "type": "boolean"
+              },
+              "locale": {
+                "description": "Language of the chart card shown to the user, as a BCP 47 tag, normally the language the user is writing in. Only zh-CN, zh-TW and en are supported; any other language falls back to en.",
+                "type": "string"
+              }
+            },
+            "required": ["birth"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$defs": {
+              "Pillar": {
+                "additionalProperties": false,
+                "description": "One of the four pillars with its elements.",
+                "properties": {
+                  "branch": {
+                    "description": "Earthly branch, Chinese character.",
+                    "type": "string"
+                  },
+                  "branch_element": {
+                    "$ref": "#/$defs/Term",
+                    "description": "Five Element of the branch (main qi)."
+                  },
+                  "ganzhi": {
+                    "description": "A stem-branch pair in Chinese characters, e.g. \"丙午\".",
+                    "type": "string"
+                  },
+                  "hidden_stems": {
+                    "description": "Hidden stems of the branch, main qi first, then middle and residual qi.",
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "element": {
+                          "$ref": "#/$defs/Term",
+                          "description": "Five Element of the hidden stem."
+                        },
+                        "stem": {
+                          "description": "Hidden stem, Chinese character.",
+                          "type": "string"
+                        },
+                        "ten_god": {
+                          "$ref": "#/$defs/Term",
+                          "description": "Ten God of the hidden stem relative to the Day Master."
+                        }
+                      },
+                      "required": ["element", "stem", "ten_god"],
+                      "type": "object"
+                    },
+                    "type": "array"
+                  },
+                  "life_stage": {
+                    "$ref": "#/$defs/Term",
+                    "description": "Twelve-stage (Chang Sheng) state of the Day Master's stem on this pillar's branch; yang stems run forward, yin stems backward."
+                  },
+                  "nayin": {
+                    "$ref": "#/$defs/Term",
+                    "description": "Na Yin of this stem-branch pair."
+                  },
+                  "stem": {
+                    "description": "Heavenly stem, Chinese character.",
+                    "type": "string"
+                  },
+                  "stem_element": {
+                    "$ref": "#/$defs/Term",
+                    "description": "Five Element of the stem."
+                  },
+                  "ten_god": {
+                    "anyOf": [
+                      {
+                        "$ref": "#/$defs/Term"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "Ten God of the stem relative to the Day Master; null for the day pillar (the Day Master itself)."
+                  }
+                },
+                "required": ["branch", "branch_element", "ganzhi", "hidden_stems", "life_stage", "nayin", "stem", "stem_element", "ten_god"],
+                "type": "object"
+              },
+              "Term": {
+                "additionalProperties": false,
+                "description": "A BaZi term as {code, zh, en}.",
+                "properties": {
+                  "code": {
+                    "description": "Stable machine-readable code, e.g. \"hurting_officer\".",
+                    "type": "string"
+                  },
+                  "en": {
+                    "description": "English name, e.g. \"Hurting Officer\".",
+                    "type": "string"
+                  },
+                  "zh": {
+                    "description": "Chinese term as used by FateTell, e.g. \"伤官\".",
+                    "type": "string"
+                  }
+                },
+                "required": ["code", "en", "zh"],
+                "type": "object"
+              }
+            },
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "additionalProperties": false,
+            "properties": {
+              "birth": {
+                "additionalProperties": false,
+                "description": "Birth data as interpreted.",
+                "properties": {
+                  "calendar": {
+                    "description": "Calendar the birth date was given in.",
+                    "enum": ["solar", "lunar"],
+                    "type": "string"
+                  },
+                  "date": {
+                    "description": "Gregorian birth date used for the chart; converted from the lunar date when calendar is lunar.",
+                    "type": "string"
+                  },
+                  "gender": {
+                    "enum": ["male", "female"],
+                    "type": "string"
+                  },
+                  "hemisphere": {
+                    "enum": ["north", "south"],
+                    "type": "string"
+                  },
+                  "hour_assumed": {
+                    "description": "True when no birth time was given and 12:00 was used.",
+                    "type": "boolean"
+                  },
+                  "lunar_date": {
+                    "anyOf": [
+                      {
+                        "additionalProperties": false,
+                        "description": "The lunar birth date as given; null when the date was given in the Gregorian calendar.",
+                        "properties": {
+                          "date": {
+                            "description": "Lunar birth date as given, YYYY-MM-DD.",
+                            "type": "string"
+                          },
+                          "is_leap_month": {
+                            "type": "boolean"
+                          },
+                          "zh": {
+                            "description": "Lunar month and day written in Chinese, e.g. \"四月廿三\" or \"闰二月初一\".",
+                            "type": "string"
+                          }
+                        },
+                        "required": ["date", "is_leap_month", "zh"],
+                        "type": "object"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "moment_used": {
+                    "description": "Birth instant used for the chart, ISO 8601 with the original offset.",
+                    "type": "string"
+                  },
+                  "time": {
+                    "description": "Birth time as given; null when unknown.",
+                    "type": ["string", "null"]
+                  },
+                  "timezone": {
+                    "type": "string"
+                  },
+                  "true_solar_applied": {
+                    "type": "boolean"
+                  }
+                },
+                "required": ["calendar", "date", "gender", "hemisphere", "hour_assumed", "lunar_date", "moment_used", "time", "timezone", "true_solar_applied"],
+                "type": "object"
+              },
+              "conventions": {
+                "additionalProperties": false,
+                "description": "Chart conventions used for this result.",
+                "properties": {
+                  "calendar_input": {
+                    "anyOf": [
+                      {
+                        "enum": ["solar", "lunar"],
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "Calendar of the birth date given in this call; null for saved charts, whose input calendar is not recorded."
+                  },
+                  "hemisphere": {
+                    "description": "Hemisphere the chart was computed for.",
+                    "enum": ["north", "south"],
+                    "type": "string"
+                  },
+                  "hour_boundary": {
+                    "description": "From 23:00 local time (true solar time when applied) the day pillar is the next day and the hour pillar is Zi counted from that next day; there is no early/late Zi split.",
+                    "enum": ["day_changes_at_23"],
+                    "type": "string"
+                  },
+                  "month_adjusted": {
+                    "description": "Whether the month pillar was adjusted for the southern hemisphere (FateTell cross-region rules, v1 charts only).",
+                    "type": "boolean"
+                  },
+                  "true_solar_applied": {
+                    "description": "Whether the birth time was corrected to true solar time.",
+                    "type": "boolean"
+                  },
+                  "year_boundary": {
+                    "description": "The year pillar changes at the exact Start of Spring (Li Chun) instant, not at Lunar New Year.",
+                    "enum": ["lichun"],
+                    "type": "string"
+                  }
+                },
+                "required": ["calendar_input", "hemisphere", "hour_boundary", "month_adjusted", "true_solar_applied", "year_boundary"],
+                "type": "object"
+              },
+              "day_master": {
+                "additionalProperties": false,
+                "properties": {
+                  "element": {
+                    "$ref": "#/$defs/Term",
+                    "description": "Five Element of the Day Master."
+                  },
+                  "polarity": {
+                    "enum": ["yin", "yang"],
+                    "type": "string"
+                  },
+                  "stem": {
+                    "description": "Day stem, Chinese character.",
+                    "type": "string"
+                  }
+                },
+                "required": ["element", "polarity", "stem"],
+                "type": "object"
+              },
+              "engine_version": {
+                "description": "FateTell calculation engine version (package version + commit).",
+                "type": "string"
+              },
+              "locale": {
+                "description": "Chart card language resolved from the locale argument. Absent when no valid locale was given.",
+                "enum": ["zh-CN", "zh-TW", "en"],
+                "type": "string"
+              },
+              "luck_pillars": {
+                "additionalProperties": false,
+                "description": "Luck pillars (Da Yun).",
+                "properties": {
+                  "direction": {
+                    "enum": ["forward", "backward"],
+                    "type": "string"
+                  },
+                  "qiyun_years": {
+                    "description": "Years from birth to the first luck pillar, two decimals.",
+                    "type": "number"
+                  },
+                  "start_age": {
+                    "description": "Age when the first luck pillar starts, East Asian count.",
+                    "maximum": 9007199254740991,
+                    "minimum": -9007199254740991,
+                    "type": "integer"
+                  },
+                  "start_at": {
+                    "description": "Instant the first luck pillar starts, ISO 8601 with the birthplace offset.",
+                    "type": "string"
+                  },
+                  "start_year": {
+                    "description": "Gregorian year when the first luck pillar starts.",
+                    "maximum": 9007199254740991,
+                    "minimum": -9007199254740991,
+                    "type": "integer"
+                  },
+                  "steps": {
+                    "description": "Eight luck pillars of ten years each.",
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "end_age": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer"
+                        },
+                        "end_year": {
+                          "description": "Gregorian year this luck pillar ends (start_year + 9).",
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer"
+                        },
+                        "ganzhi": {
+                          "description": "A stem-branch pair in Chinese characters, e.g. \"丙午\".",
+                          "type": "string"
+                        },
+                        "nayin": {
+                          "$ref": "#/$defs/Term"
+                        },
+                        "start_age": {
+                          "description": "Age at start, counted in East Asian years (born at age 1, +1 at each Start of Spring).",
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer"
+                        },
+                        "start_year": {
+                          "description": "Gregorian year this luck pillar starts.",
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer"
+                        },
+                        "stem_ten_god": {
+                          "$ref": "#/$defs/Term",
+                          "description": "Ten God of the luck pillar stem relative to the Day Master."
+                        }
+                      },
+                      "required": ["end_age", "end_year", "ganzhi", "nayin", "start_age", "start_year", "stem_ten_god"],
+                      "type": "object"
+                    },
+                    "type": "array"
+                  }
+                },
+                "required": ["direction", "qiyun_years", "start_age", "start_at", "start_year", "steps"],
+                "type": "object"
+              },
+              "month_pillar_raw": {
+                "description": "Northern-hemisphere month pillar; equals pillars.month.ganzhi for northern births.",
+                "type": "string"
+              },
+              "notes": {
+                "description": "Codes for facts that qualify this result: hour_assumed (no birth time, 12:00 used), true_solar_skipped_no_longitude, southern_month_adjusted, palace_formula_lunar_javascript (life and body palaces follow the lunar-javascript formula), legacy_v0_chart, judgment_unavailable, chart_pending, truncated, lunar_converted (the birth date was given in the lunar calendar and converted to Gregorian).",
+                "items": {
+                  "enum": ["hour_assumed", "true_solar_skipped_no_longitude", "southern_month_adjusted", "palace_formula_lunar_javascript", "legacy_v0_chart", "judgment_unavailable", "chart_pending", "truncated", "lunar_converted"],
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "paipan_version": {
+                "description": "Chart rule version. Charts computed now are always v1 (FateTell cross-region rules).",
+                "enum": ["v1", "v0"],
+                "type": "string"
+              },
+              "palaces": {
+                "additionalProperties": false,
+                "description": "Palaces derived from the chart; month-based palaces use the adjusted month pillar.",
+                "properties": {
+                  "body": {
+                    "description": "Body palace (Shen Gong).",
+                    "type": "string"
+                  },
+                  "conception": {
+                    "description": "Conception palace (Tai Yuan).",
+                    "type": "string"
+                  },
+                  "life": {
+                    "description": "Life palace (Ming Gong).",
+                    "type": "string"
+                  }
+                },
+                "required": ["body", "conception", "life"],
+                "type": "object"
+              },
+              "pillars": {
+                "additionalProperties": false,
+                "properties": {
+                  "day": {
+                    "$ref": "#/$defs/Pillar"
+                  },
+                  "hour": {
+                    "$ref": "#/$defs/Pillar"
+                  },
+                  "month": {
+                    "$ref": "#/$defs/Pillar"
+                  },
+                  "year": {
+                    "$ref": "#/$defs/Pillar"
+                  }
+                },
+                "required": ["day", "hour", "month", "year"],
+                "type": "object"
+              },
+              "solar_terms": {
+                "additionalProperties": false,
+                "description": "The month-defining solar terms before and after the birth.",
+                "properties": {
+                  "next": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "at": {
+                        "description": "Instant of the solar term, ISO 8601 in the birthplace offset.",
+                        "type": "string"
+                      },
+                      "name": {
+                        "$ref": "#/$defs/Term"
+                      }
+                    },
+                    "required": ["at", "name"],
+                    "type": "object"
+                  },
+                  "previous": {
+                    "additionalProperties": false,
+                    "properties": {
+                      "at": {
+                        "description": "Instant of the solar term, ISO 8601 in the birthplace offset.",
+                        "type": "string"
+                      },
+                      "name": {
+                        "$ref": "#/$defs/Term"
+                      }
+                    },
+                    "required": ["at", "name"],
+                    "type": "object"
+                  }
+                },
+                "required": ["next", "previous"],
+                "type": "object"
+              },
+              "today": {
+                "anyOf": [
+                  {
+                    "additionalProperties": false,
+                    "description": "Today's pillars, taken at 12:00 Beijing time of that date.",
+                    "properties": {
+                      "date": {
+                        "description": "Today in the given time zone, YYYY-MM-DD.",
+                        "type": "string"
+                      },
+                      "day_pillar": {
+                        "description": "A stem-branch pair in Chinese characters, e.g. \"丙午\".",
+                        "type": "string"
+                      },
+                      "month_clash": {
+                        "description": "Whether the day branch clashes with the month branch.",
+                        "type": "boolean"
+                      },
+                      "month_pillar": {
+                        "description": "Month pillar for this chart, adjusted for the southern hemisphere when applicable.",
+                        "type": "string"
+                      },
+                      "month_pillar_raw": {
+                        "description": "Unadjusted (northern-hemisphere) month pillar.",
+                        "type": "string"
+                      },
+                      "year_pillar": {
+                        "description": "A stem-branch pair in Chinese characters, e.g. \"丙午\".",
+                        "type": "string"
+                      }
+                    },
+                    "required": ["date", "day_pillar", "month_clash", "month_pillar", "month_pillar_raw", "year_pillar"],
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Null when include_today is false."
+              },
+              "tzdata_version": {
+                "description": "IANA time zone database version used by the server.",
+                "type": "string"
+              }
+            },
+            "required": ["birth", "conventions", "day_master", "engine_version", "luck_pillars", "month_pillar_raw", "notes", "paipan_version", "palaces", "pillars", "solar_terms", "today", "tzdata_version"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Cast BaZi chart"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "ui": {
+              "resourceUri": "ui://fatetell/chart-card"
+            },
+            "ui/resourceUri": "ui://fatetell/chart-card"
+          },
+          "digest": "sha256:b33c42ce1f61f16f84a476259a5248ddc4f482e31b549848f00c82ffa72d2969"
+        },
+        {
+          "name": "create_saved_chart",
+          "title": "Create saved chart",
+          "description": "Save a new chart to the connected account from name, gender, birth date (Gregorian or lunar), optional birth time and birthplace; time zone and hemisphere come from the birthplace as in the app. Returns the chart_id.\nUse when the user explicitly asks to save a chart; check list_saved_charts first to avoid duplicates. For another person the user must confirm consent (consent_attested); without it nothing is saved or cast.\nNot for casting without saving (use cast_bazi_chart), reading (use get_saved_chart) or editing existing charts.\nNew charts return no pillars; read them with get_saved_chart.",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "birth_date": {
+                "description": "Birth date in the local calendar of the birthplace, YYYY-MM-DD: Gregorian by default; with calendar lunar, the Chinese lunar year, month (1-12) and day.",
+                "type": "string"
+              },
+              "birth_time": {
+                "description": "Local clock time at the birthplace, HH:mm. Omit if unknown; the chart is then marked as hour uncertain.",
+                "type": ["string", "null"]
+              },
+              "birthplace": {
+                "description": "Birthplace name as in the FateTell app, a city optionally with country, 1 to 60 characters. Not stored or logged by this server.",
+                "type": "string"
+              },
+              "calendar": {
+                "description": "Default solar (Gregorian). Use lunar when the user gives a Chinese lunar birthday; the server converts it to Gregorian, so do not convert it yourself.",
+                "enum": ["solar", "lunar"],
+                "type": "string"
+              },
+              "consent_attested": {
+                "description": "Required true when subject is other: the user confirms they have that person's permission.",
+                "type": "boolean"
+              },
+              "display_name": {
+                "description": "Name for the chart, 1 to 20 characters, no line breaks or Markdown symbols.",
+                "type": "string"
+              },
+              "gender": {
+                "description": "Determines whether the luck pillars run forward or backward.",
+                "enum": ["male", "female"],
+                "type": "string"
+              },
+              "lunar_leap_month": {
+                "description": "Default false. Only with calendar lunar: true when the birth was in a leap month, e.g. leap 4th month is month 04 with true.",
+                "type": "boolean"
+              },
+              "subject": {
+                "description": "Whose chart this is, recorded for audit only. Default other. Every chart saved here is an additional chart; it never becomes the user's own primary chart.",
+                "enum": ["self", "other"],
+                "type": "string"
+              }
+            },
+            "required": ["birth_date", "birthplace", "display_name", "gender"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "additionalProperties": false,
+            "properties": {
+              "chart_id": {
+                "type": "string"
+              },
+              "chart_ready": {
+                "type": "boolean"
+              },
+              "display_name": {
+                "type": "string"
+              },
+              "engine_version": {
+                "description": "FateTell calculation engine version (package version + commit).",
+                "type": "string"
+              },
+              "links": {
+                "description": "FateTell web pages for objects in this result, for citation. Only objects already present in the result are linked.",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "rel": {
+                      "description": "Which FateTell page this is: chart, daily_fortune, luck_pillars or account.",
+                      "enum": ["chart", "daily_fortune", "luck_pillars", "account"],
+                      "type": "string"
+                    },
+                    "url": {
+                      "description": "Page in the FateTell web app for an object that appears in this result.",
+                      "type": "string"
+                    }
+                  },
+                  "required": ["rel", "url"],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "matched_existing": {
+                "description": "True when a chart with the same name and birth details already exists; that chart is returned and no new one is created.",
+                "type": "boolean"
+              },
+              "moments": {
+                "description": "Calendar facts about this date: luck_pillar_change_in (value = months), solar_term_today, annual_clash (year branch clashes the natal year branch), birth_year_return (year pillar equals the natal year pillar), month_clash, energy_extreme (high or low energy), birthday_window (within 7 days of the birthday).",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "label": {
+                      "enum": ["luck_pillar_change_in", "solar_term_today", "annual_clash", "birth_year_return", "month_clash", "energy_extreme", "birthday_window"],
+                      "type": "string"
+                    },
+                    "value": {
+                      "description": "Only for luck_pillar_change_in: months until the next luck pillar starts.",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer"
+                    }
+                  },
+                  "required": ["label"],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "notes": {
+                "description": "Codes for facts that qualify this result: hour_assumed (no birth time, 12:00 used), true_solar_skipped_no_longitude, southern_month_adjusted, palace_formula_lunar_javascript (life and body palaces follow the lunar-javascript formula), legacy_v0_chart, judgment_unavailable, chart_pending, truncated, lunar_converted (the birth date was given in the lunar calendar and converted to Gregorian).",
+                "items": {
+                  "enum": ["hour_assumed", "true_solar_skipped_no_longitude", "southern_month_adjusted", "palace_formula_lunar_javascript", "legacy_v0_chart", "judgment_unavailable", "chart_pending", "truncated", "lunar_converted"],
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "paipan_version": {
+                "description": "Chart rule version. Charts computed now are always v1 (FateTell cross-region rules).",
+                "enum": ["v1", "v0"],
+                "type": "string"
+              },
+              "pillars": {
+                "anyOf": [
+                  {
+                    "additionalProperties": false,
+                    "description": "The four pillars as stem-branch strings: year, month, day, hour.",
+                    "properties": {
+                      "day": {
+                        "description": "A stem-branch pair in Chinese characters, e.g. \"丙午\".",
+                        "type": "string"
+                      },
+                      "hour": {
+                        "description": "A stem-branch pair in Chinese characters, e.g. \"丙午\".",
+                        "type": "string"
+                      },
+                      "month": {
+                        "description": "A stem-branch pair in Chinese characters, e.g. \"丙午\".",
+                        "type": "string"
+                      },
+                      "year": {
+                        "description": "A stem-branch pair in Chinese characters, e.g. \"丙午\".",
+                        "type": "string"
+                      }
+                    },
+                    "required": ["day", "hour", "month", "year"],
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Null while the chart is still being computed."
+              },
+              "resolved": {
+                "additionalProperties": false,
+                "description": "Time zone and hemisphere FateTell resolved from the birthplace, and the Gregorian birth date saved.",
+                "properties": {
+                  "birth_date": {
+                    "description": "Gregorian birth date saved; converted from the lunar date when calendar is lunar.",
+                    "type": "string"
+                  },
+                  "hemisphere": {
+                    "enum": ["north", "south"],
+                    "type": "string"
+                  },
+                  "hour_assumed": {
+                    "type": "boolean"
+                  },
+                  "timezone": {
+                    "type": "string"
+                  }
+                },
+                "required": ["birth_date", "hemisphere", "hour_assumed", "timezone"],
+                "type": "object"
+              }
+            },
+            "required": ["chart_id", "chart_ready", "display_name", "engine_version", "links", "matched_existing", "moments", "notes", "paipan_version", "pillars", "resolved"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": false,
+            "openWorldHint": false,
+            "readOnlyHint": false,
+            "title": "Create saved chart"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": false,
+            "openWorld": false,
+            "readOnly": false
+          },
+          "digest": "sha256:dd568d5f15b987370cd1584e11bd5a186c3737d94114b8813a1efdc2dbf3e7eb"
+        },
+        {
+          "name": "get_almanac",
+          "title": "Get almanac",
+          "description": "Return the Chinese almanac for one to 31 consecutive days: Gregorian and lunar dates, solar terms, and the year, month and day pillars. The month pillar is given for both hemispheres.\nUse for questions like \"What is today's day pillar?\", \"When is the next solar term?\", or to get the stems and branches of upcoming days or months for date selection.\nNot for a person's chart or days: use get_saved_chart or cast_bazi_chart for a chart, get_daily_fortune or get_chart_calendar for a saved chart's days. Not for Western astrology.\nDeterministic; no personal data involved.",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "days": {
+                "description": "Number of consecutive days, 1 to 31. Default 1.",
+                "maximum": 9007199254740991,
+                "minimum": -9007199254740991,
+                "type": "integer"
+              },
+              "hemisphere": {
+                "description": "Which month pillar the text summary leads with. Default north. The structured result always includes both.",
+                "enum": ["north", "south"],
+                "type": "string"
+              },
+              "start_date": {
+                "description": "First date, YYYY-MM-DD, between 1900-01-01 and 2100-12-31. Default: today in timezone.",
+                "type": "string"
+              },
+              "timezone": {
+                "description": "IANA time zone name used only to resolve the default start_date. Default UTC.",
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "outputSchema": {
+            "$defs": {
+              "Term": {
+                "additionalProperties": false,
+                "description": "A BaZi term as {code, zh, en}.",
+                "properties": {
+                  "code": {
+                    "description": "Stable machine-readable code, e.g. \"hurting_officer\".",
+                    "type": "string"
+                  },
+                  "en": {
+                    "description": "English name, e.g. \"Hurting Officer\".",
+                    "type": "string"
+                  },
+                  "zh": {
+                    "description": "Chinese term as used by FateTell, e.g. \"伤官\".",
+                    "type": "string"
+                  }
+                },
+                "required": ["code", "en", "zh"],
+                "type": "object"
+              }
+            },
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "additionalProperties": false,
+            "properties": {
+              "conventions": {
+                "additionalProperties": false,
+                "description": "Calendar conventions used for this result.",
+                "properties": {
+                  "hemisphere": {
+                    "description": "Hemisphere the text summary follows; both month pillars are always in the structured result.",
+                    "enum": ["north", "south"],
+                    "type": "string"
+                  },
+                  "year_boundary": {
+                    "description": "The year pillar changes at the exact Start of Spring (Li Chun) instant, not at Lunar New Year.",
+                    "enum": ["lichun"],
+                    "type": "string"
+                  }
+                },
+                "required": ["hemisphere", "year_boundary"],
+                "type": "object"
+              },
+              "days": {
+                "description": "Number of days returned.",
+                "maximum": 9007199254740991,
+                "minimum": -9007199254740991,
+                "type": "integer"
+              },
+              "days_list": {
+                "description": "Pillars are taken at 12:00 Beijing time; months and years change at the exact solar term instant.",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "date": {
+                      "description": "Gregorian date, YYYY-MM-DD.",
+                      "type": "string"
+                    },
+                    "day_pillar": {
+                      "description": "A stem-branch pair in Chinese characters, e.g. \"丙午\".",
+                      "type": "string"
+                    },
+                    "lunar": {
+                      "additionalProperties": false,
+                      "description": "Chinese lunar date.",
+                      "properties": {
+                        "day": {
+                          "description": "Lunar day, 1-30.",
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer"
+                        },
+                        "is_leap_month": {
+                          "type": "boolean"
+                        },
+                        "month": {
+                          "description": "Lunar month, 1-12.",
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer"
+                        },
+                        "year_ganzhi": {
+                          "description": "Lunar year stem-branch, starting at Lunar New Year.",
+                          "type": "string"
+                        },
+                        "zh": {
+                          "description": "Lunar date written in Chinese, e.g. \"八月廿三\".",
+                          "type": "string"
+                        }
+                      },
+                      "required": ["day", "is_leap_month", "month", "year_ganzhi", "zh"],
+                      "type": "object"
+                    },
+                    "month_clash": {
+                      "additionalProperties": false,
+                      "description": "Whether the day branch clashes with each month branch.",
+                      "properties": {
+                        "north": {
+                          "type": "boolean"
+                        },
+                        "south": {
+                          "type": "boolean"
+                        }
+                      },
+                      "required": ["north", "south"],
+                      "type": "object"
+                    },
+                    "month_pillar": {
+                      "additionalProperties": false,
+                      "description": "Month pillar for northern and southern-hemisphere charts; the southern one is adjusted per FateTell cross-region rules.",
+                      "properties": {
+                        "north": {
+                          "description": "A stem-branch pair in Chinese characters, e.g. \"丙午\".",
+                          "type": "string"
+                        },
+                        "south": {
+                          "description": "A stem-branch pair in Chinese characters, e.g. \"丙午\".",
+                          "type": "string"
+                        }
+                      },
+                      "required": ["north", "south"],
+                      "type": "object"
+                    },
+                    "solar_term": {
+                      "anyOf": [
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "at": {
+                              "description": "Instant of the solar term, ISO 8601 in Beijing time (+08:00).",
+                              "type": "string"
+                            },
+                            "name": {
+                              "$ref": "#/$defs/Term"
+                            }
+                          },
+                          "required": ["at", "name"],
+                          "type": "object"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "Solar term starting on this date (Beijing time), or null."
+                    },
+                    "weekday": {
+                      "enum": ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"],
+                      "type": "string"
+                    },
+                    "year_pillar": {
+                      "description": "Year pillar, changing at the Start of Spring.",
+                      "type": "string"
+                    }
+                  },
+                  "required": ["date", "day_pillar", "lunar", "month_clash", "month_pillar", "solar_term", "weekday", "year_pillar"],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "engine_version": {
+                "description": "FateTell calculation engine version (package version + commit).",
+                "type": "string"
+              },
+              "next_start_date": {
+                "description": "When truncated, the start_date that continues the range.",
+                "type": "string"
+              },
+              "notes": {
+                "description": "Codes for facts that qualify this result: hour_assumed (no birth time, 12:00 used), true_solar_skipped_no_longitude, southern_month_adjusted, palace_formula_lunar_javascript (life and body palaces follow the lunar-javascript formula), legacy_v0_chart, judgment_unavailable, chart_pending, truncated, lunar_converted (the birth date was given in the lunar calendar and converted to Gregorian).",
+                "items": {
+                  "enum": ["hour_assumed", "true_solar_skipped_no_longitude", "southern_month_adjusted", "palace_formula_lunar_javascript", "legacy_v0_chart", "judgment_unavailable", "chart_pending", "truncated", "lunar_converted"],
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "paipan_version": {
+                "description": "Chart rule version. Charts computed now are always v1 (FateTell cross-region rules).",
+                "enum": ["v1", "v0"],
+                "type": "string"
+              },
+              "start_date": {
+                "description": "First date returned, YYYY-MM-DD.",
+                "type": "string"
+              },
+              "truncated": {
+                "description": "True when fewer days than requested were returned to stay within the size limit.",
+                "type": "boolean"
+              },
+              "tzdata_version": {
+                "description": "IANA time zone database version used by the server.",
+                "type": "string"
+              }
+            },
+            "required": ["conventions", "days", "days_list", "engine_version", "notes", "paipan_version", "start_date", "truncated", "tzdata_version"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Get almanac"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:55a60ac91c2e3ebcb135fce60957afcb7275ea71fd3a687f4dd97bded9ab6d2e"
+        },
+        {
+          "name": "get_bazi_judgment",
+          "title": "Get BaZi judgment",
+          "description": "Return FateTell's Day Master verdict (strong, weak, follow-strong, follow-weak) and ranked favorable, unfavorable and neutral elements under rule set v1.0, for birth data or a saved chart_id.\nUse when the user asks about strength or favorable elements for a birth not saved (pass birth), or for a saved chart whose judgment get_saved_chart reported as not yet available (pass chart_id).\nNot a substitute for the chart (use cast_bazi_chart for pillars). For a saved chart, get_saved_chart already includes this judgment.\nDeterministic; nothing stored. Requires an active FateTell membership.",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "birth": {
+                "description": "Birth data to judge; computed on the fly and not stored. Give either birth or chart_id.",
+                "properties": {
+                  "calendar": {
+                    "description": "Default solar (Gregorian). Use lunar when the user gives a Chinese lunar birthday; the server converts it to Gregorian, so do not convert it yourself.",
+                    "enum": ["solar", "lunar"],
+                    "type": "string"
+                  },
+                  "date": {
+                    "description": "Birth date in the local calendar of the birthplace, YYYY-MM-DD: Gregorian by default; with calendar lunar, the Chinese lunar year, month (1-12) and day.",
+                    "type": "string"
+                  },
+                  "gender": {
+                    "description": "Determines whether the luck pillars run forward or backward.",
+                    "enum": ["male", "female"],
+                    "type": "string"
+                  },
+                  "hemisphere": {
+                    "description": "Hemisphere of the birthplace. Judge it from the birthplace itself; it cannot be inferred from the time zone (Asia/Jakarta, Africa/Nairobi and America/Belem span the equator).",
+                    "enum": ["north", "south"],
+                    "type": "string"
+                  },
+                  "longitude": {
+                    "description": "Birthplace longitude, -180 to 180. Only used when use_true_solar_time is true and only when the user supplies it; do not infer it from the birthplace. Never stored or logged.",
+                    "maximum": 180,
+                    "minimum": -180,
+                    "type": "number"
+                  },
+                  "lunar_leap_month": {
+                    "description": "Default false. Only with calendar lunar: true when the birth was in a leap month, e.g. leap 4th month is month 04 with true.",
+                    "type": "boolean"
+                  },
+                  "time": {
+                    "description": "Local clock time at the birthplace, 24-hour HH:mm. Omit if unknown: the chart then uses 12:00 and reports hour_assumed.",
+                    "type": ["string", "null"]
+                  },
+                  "timezone": {
+                    "description": "IANA time zone name of the birthplace, e.g. Asia/Taipei or Australia/Sydney. GMT+8 or UTC+8 style offsets are not accepted.",
+                    "type": "string"
+                  },
+                  "use_true_solar_time": {
+                    "description": "Default false. Set true only when the user explicitly asks for true solar time; FateTell's app does not apply it by default. When true and longitude is given, the birth time is corrected to true solar time; without longitude no correction is made and notes include true_solar_skipped_no_longitude.",
+                    "type": "boolean"
+                  }
+                },
+                "required": ["date", "gender", "hemisphere", "timezone"],
+                "type": "object"
+              },
+              "chart_id": {
+                "description": "chart_id from list_saved_charts, or \"self\" for the account holder's own chart. Returns the judgment stored with that chart. Give either birth or chart_id.",
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "outputSchema": {
+            "$defs": {
+              "Term": {
+                "additionalProperties": false,
+                "description": "A BaZi term as {code, zh, en}.",
+                "properties": {
+                  "code": {
+                    "description": "Stable machine-readable code, e.g. \"hurting_officer\".",
+                    "type": "string"
+                  },
+                  "en": {
+                    "description": "English name, e.g. \"Hurting Officer\".",
+                    "type": "string"
+                  },
+                  "zh": {
+                    "description": "Chinese term as used by FateTell, e.g. \"伤官\".",
+                    "type": "string"
+                  }
+                },
+                "required": ["code", "en", "zh"],
+                "type": "object"
+              }
+            },
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "additionalProperties": false,
+            "properties": {
+              "chart_id": {
+                "description": "Present when source is saved.",
+                "type": "string"
+              },
+              "conventions": {
+                "additionalProperties": false,
+                "description": "Chart conventions used for this result.",
+                "properties": {
+                  "calendar_input": {
+                    "anyOf": [
+                      {
+                        "enum": ["solar", "lunar"],
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "Calendar of the birth date given in this call; null for saved charts, whose input calendar is not recorded."
+                  },
+                  "hemisphere": {
+                    "description": "Hemisphere the chart was computed for.",
+                    "enum": ["north", "south"],
+                    "type": "string"
+                  },
+                  "hour_boundary": {
+                    "description": "From 23:00 local time (true solar time when applied) the day pillar is the next day and the hour pillar is Zi counted from that next day; there is no early/late Zi split.",
+                    "enum": ["day_changes_at_23"],
+                    "type": "string"
+                  },
+                  "month_adjusted": {
+                    "description": "Whether the month pillar was adjusted for the southern hemisphere (FateTell cross-region rules, v1 charts only).",
+                    "type": "boolean"
+                  },
+                  "true_solar_applied": {
+                    "description": "Whether the birth time was corrected to true solar time.",
+                    "type": "boolean"
+                  },
+                  "year_boundary": {
+                    "description": "The year pillar changes at the exact Start of Spring (Li Chun) instant, not at Lunar New Year.",
+                    "enum": ["lichun"],
+                    "type": "string"
+                  }
+                },
+                "required": ["calendar_input", "hemisphere", "hour_boundary", "month_adjusted", "true_solar_applied", "year_boundary"],
+                "type": "object"
+              },
+              "day_master": {
+                "additionalProperties": false,
+                "properties": {
+                  "element": {
+                    "$ref": "#/$defs/Term",
+                    "description": "Five Element of the Day Master."
+                  },
+                  "polarity": {
+                    "enum": ["yin", "yang"],
+                    "type": "string"
+                  },
+                  "stem": {
+                    "description": "Day stem, Chinese character.",
+                    "type": "string"
+                  }
+                },
+                "required": ["element", "polarity", "stem"],
+                "type": "object"
+              },
+              "display_name": {
+                "description": "Present when source is saved.",
+                "type": "string"
+              },
+              "engine_version": {
+                "description": "FateTell calculation engine version (package version + commit).",
+                "type": "string"
+              },
+              "judgment": {
+                "additionalProperties": false,
+                "description": "FateTell's Day Master strength and favorable elements under its rule set.",
+                "properties": {
+                  "branch_overrides": {
+                    "additionalProperties": {
+                      "$ref": "#/$defs/Term"
+                    },
+                    "description": "Branches whose verdict differs from their element: unfavorable, mixed, or favorable_with_flow.",
+                    "propertyNames": {
+                      "type": "string"
+                    },
+                    "type": "object"
+                  },
+                  "favorable": {
+                    "description": "Favorable elements, ranked.",
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "element": {
+                          "$ref": "#/$defs/Term"
+                        },
+                        "rank": {
+                          "anyOf": [
+                            {
+                              "maximum": 9007199254740991,
+                              "minimum": -9007199254740991,
+                              "type": "integer"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ],
+                          "description": "1 is the most favorable (or most unfavorable); null when unranked."
+                        }
+                      },
+                      "required": ["element", "rank"],
+                      "type": "object"
+                    },
+                    "type": "array"
+                  },
+                  "legacy": {
+                    "description": "True when the stored judgment was projected from older account fields; ranks are then null.",
+                    "type": "boolean"
+                  },
+                  "neutral": {
+                    "description": "Elements that are neither favorable nor unfavorable.",
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "element": {
+                          "$ref": "#/$defs/Term"
+                        }
+                      },
+                      "required": ["element"],
+                      "type": "object"
+                    },
+                    "type": "array"
+                  },
+                  "rule_version": {
+                    "description": "FateTell rule set version: v1.0, or legacy when the judgment was projected from older account fields.",
+                    "type": "string"
+                  },
+                  "unfavorable": {
+                    "description": "Unfavorable elements, ranked.",
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "element": {
+                          "$ref": "#/$defs/Term"
+                        },
+                        "rank": {
+                          "anyOf": [
+                            {
+                              "maximum": 9007199254740991,
+                              "minimum": -9007199254740991,
+                              "type": "integer"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ],
+                          "description": "1 is the most favorable (or most unfavorable); null when unranked."
+                        }
+                      },
+                      "required": ["element", "rank"],
+                      "type": "object"
+                    },
+                    "type": "array"
+                  },
+                  "verdict": {
+                    "$ref": "#/$defs/Term",
+                    "description": "Day Master strength: strong, weak, follow_strong or follow_weak."
+                  }
+                },
+                "required": ["branch_overrides", "favorable", "legacy", "neutral", "rule_version", "unfavorable", "verdict"],
+                "type": "object"
+              },
+              "month_pillar_raw": {
+                "description": "Northern-hemisphere month pillar; equals pillars.month for northern charts.",
+                "type": "string"
+              },
+              "notes": {
+                "description": "Codes for facts that qualify this result: hour_assumed (no birth time, 12:00 used), true_solar_skipped_no_longitude, southern_month_adjusted, palace_formula_lunar_javascript (life and body palaces follow the lunar-javascript formula), legacy_v0_chart, judgment_unavailable, chart_pending, truncated, lunar_converted (the birth date was given in the lunar calendar and converted to Gregorian).",
+                "items": {
+                  "enum": ["hour_assumed", "true_solar_skipped_no_longitude", "southern_month_adjusted", "palace_formula_lunar_javascript", "legacy_v0_chart", "judgment_unavailable", "chart_pending", "truncated", "lunar_converted"],
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "paipan_version": {
+                "description": "Chart rule version. Charts computed now are always v1 (FateTell cross-region rules).",
+                "enum": ["v1", "v0"],
+                "type": "string"
+              },
+              "pillars": {
+                "additionalProperties": false,
+                "description": "The four pillars as stem-branch strings: year, month, day, hour.",
+                "properties": {
+                  "day": {
+                    "description": "A stem-branch pair in Chinese characters, e.g. \"丙午\".",
+                    "type": "string"
+                  },
+                  "hour": {
+                    "description": "A stem-branch pair in Chinese characters, e.g. \"丙午\".",
+                    "type": "string"
+                  },
+                  "month": {
+                    "description": "A stem-branch pair in Chinese characters, e.g. \"丙午\".",
+                    "type": "string"
+                  },
+                  "year": {
+                    "description": "A stem-branch pair in Chinese characters, e.g. \"丙午\".",
+                    "type": "string"
+                  }
+                },
+                "required": ["day", "hour", "month", "year"],
+                "type": "object"
+              },
+              "rule_version": {
+                "description": "FateTell rule set version: v1.0, or legacy when the judgment was projected from older account fields.",
+                "type": "string"
+              },
+              "source": {
+                "description": "computed from birth data, or the judgment saved with chart_id.",
+                "enum": ["computed", "saved"],
+                "type": "string"
+              },
+              "tzdata_version": {
+                "description": "IANA time zone database version used by the server.",
+                "type": "string"
+              }
+            },
+            "required": ["conventions", "day_master", "engine_version", "judgment", "month_pillar_raw", "notes", "paipan_version", "pillars", "rule_version", "source", "tzdata_version"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Get BaZi judgment"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:f56fac090d5e753cdb309bbd43e2feb2771cca78ad56f343231231852b23c878"
+        },
+        {
+          "name": "get_chart_calendar",
+          "title": "Get chart calendar",
+          "description": "Return a saved chart's view of upcoming dates: for each day (up to 31) the year, month and day pillars adjusted for this chart's hemisphere, relations with the natal pillars, month clash and solar terms; or for each month (up to 12) the month pillar and its natal relations.\nUse to pick a date or see upcoming days or months for a saved chart. Only stems, branches and relations are returned; interpretation is left to you.\nNot for one day's energy level or do/avoid items (use get_daily_fortune) or dates without a chart (use get_almanac). Needs a chart_id; it cannot take birth data.",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "chart_id": {
+                "description": "chart_id from list_saved_charts, or \"self\" for the account holder's own chart.",
+                "type": "string"
+              },
+              "count": {
+                "description": "Days 1 to 31 (default 7), or months 1 to 12 (default 3).",
+                "maximum": 9007199254740991,
+                "minimum": -9007199254740991,
+                "type": "integer"
+              },
+              "granularity": {
+                "description": "day (default) or month.",
+                "enum": ["day", "month"],
+                "type": "string"
+              },
+              "start_date": {
+                "description": "YYYY-MM-DD. Default: today in the account's time zone. For months, the month containing this date comes first.",
+                "type": "string"
+              }
+            },
+            "required": ["chart_id"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$defs": {
+              "Term": {
+                "additionalProperties": false,
+                "description": "A BaZi term as {code, zh, en}.",
+                "properties": {
+                  "code": {
+                    "description": "Stable machine-readable code, e.g. \"hurting_officer\".",
+                    "type": "string"
+                  },
+                  "en": {
+                    "description": "English name, e.g. \"Hurting Officer\".",
+                    "type": "string"
+                  },
+                  "zh": {
+                    "description": "Chinese term as used by FateTell, e.g. \"伤官\".",
+                    "type": "string"
+                  }
+                },
+                "required": ["code", "en", "zh"],
+                "type": "object"
+              }
+            },
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "additionalProperties": false,
+            "properties": {
+              "chart_id": {
+                "type": "string"
+              },
+              "count": {
+                "description": "Number of days or months returned.",
+                "maximum": 9007199254740991,
+                "minimum": -9007199254740991,
+                "type": "integer"
+              },
+              "days": {
+                "description": "Present for granularity day. Pillars are taken at 12:00 Beijing time.",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "date": {
+                      "type": "string"
+                    },
+                    "day_pillar": {
+                      "description": "A stem-branch pair in Chinese characters, e.g. \"丙午\".",
+                      "type": "string"
+                    },
+                    "month_clash": {
+                      "type": "boolean"
+                    },
+                    "month_pillar": {
+                      "description": "Month pillar for this chart's hemisphere.",
+                      "type": "string"
+                    },
+                    "month_pillar_raw": {
+                      "description": "Unadjusted (northern-hemisphere) month pillar.",
+                      "type": "string"
+                    },
+                    "relations": {
+                      "description": "The day pillar's relations with the natal pillars.",
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "part": {
+                            "enum": ["stem", "branch"],
+                            "type": "string"
+                          },
+                          "position": {
+                            "description": "Natal pillar compared against.",
+                            "enum": ["year", "month", "day", "hour"],
+                            "type": "string"
+                          },
+                          "relation": {
+                            "$ref": "#/$defs/Term",
+                            "description": "clash, combination, punishment, harm or break."
+                          },
+                          "with": {
+                            "description": "The natal character involved, Chinese.",
+                            "type": "string"
+                          }
+                        },
+                        "required": ["part", "position", "relation", "with"],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "solar_term": {
+                      "anyOf": [
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "at": {
+                              "description": "Instant, ISO 8601 in Beijing time (+08:00).",
+                              "type": "string"
+                            },
+                            "name": {
+                              "$ref": "#/$defs/Term"
+                            }
+                          },
+                          "required": ["at", "name"],
+                          "type": "object"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "year_pillar": {
+                      "description": "A stem-branch pair in Chinese characters, e.g. \"丙午\".",
+                      "type": "string"
+                    }
+                  },
+                  "required": ["date", "day_pillar", "month_clash", "month_pillar", "month_pillar_raw", "relations", "solar_term", "year_pillar"],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "display_name": {
+                "type": "string"
+              },
+              "engine_version": {
+                "description": "FateTell calculation engine version (package version + commit).",
+                "type": "string"
+              },
+              "granularity": {
+                "enum": ["day", "month"],
+                "type": "string"
+              },
+              "hemisphere": {
+                "enum": ["north", "south"],
+                "type": "string"
+              },
+              "links": {
+                "description": "FateTell web pages for objects in this result, for citation. Only objects already present in the result are linked.",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "rel": {
+                      "description": "Which FateTell page this is: chart, daily_fortune, luck_pillars or account.",
+                      "enum": ["chart", "daily_fortune", "luck_pillars", "account"],
+                      "type": "string"
+                    },
+                    "url": {
+                      "description": "Page in the FateTell web app for an object that appears in this result.",
+                      "type": "string"
+                    }
+                  },
+                  "required": ["rel", "url"],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "moments": {
+                "description": "Calendar facts about this date: luck_pillar_change_in (value = months), solar_term_today, annual_clash (year branch clashes the natal year branch), birth_year_return (year pillar equals the natal year pillar), month_clash, energy_extreme (high or low energy), birthday_window (within 7 days of the birthday).",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "label": {
+                      "enum": ["luck_pillar_change_in", "solar_term_today", "annual_clash", "birth_year_return", "month_clash", "energy_extreme", "birthday_window"],
+                      "type": "string"
+                    },
+                    "value": {
+                      "description": "Only for luck_pillar_change_in: months until the next luck pillar starts.",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer"
+                    }
+                  },
+                  "required": ["label"],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "months": {
+                "description": "Present for granularity month.",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "end_date": {
+                      "description": "Date (Beijing time) of the solar term that starts the next month.",
+                      "type": "string"
+                    },
+                    "index": {
+                      "description": "0 for the month containing start_date.",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer"
+                    },
+                    "month_pillar": {
+                      "description": "Month pillar for this chart's hemisphere.",
+                      "type": "string"
+                    },
+                    "month_pillar_raw": {
+                      "description": "Unadjusted (northern-hemisphere) month pillar.",
+                      "type": "string"
+                    },
+                    "relations": {
+                      "description": "The month pillar's relations with the natal pillars.",
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "part": {
+                            "enum": ["stem", "branch"],
+                            "type": "string"
+                          },
+                          "position": {
+                            "description": "Natal pillar compared against.",
+                            "enum": ["year", "month", "day", "hour"],
+                            "type": "string"
+                          },
+                          "relation": {
+                            "$ref": "#/$defs/Term",
+                            "description": "clash, combination, punishment, harm or break."
+                          },
+                          "with": {
+                            "description": "The natal character involved, Chinese.",
+                            "type": "string"
+                          }
+                        },
+                        "required": ["part", "position", "relation", "with"],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "start_date": {
+                      "description": "Date (Beijing time) of the solar term that starts this month.",
+                      "type": "string"
+                    },
+                    "year_pillar": {
+                      "description": "A stem-branch pair in Chinese characters, e.g. \"丙午\".",
+                      "type": "string"
+                    }
+                  },
+                  "required": ["end_date", "index", "month_pillar", "month_pillar_raw", "relations", "start_date", "year_pillar"],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "natal_pillars": {
+                "additionalProperties": false,
+                "description": "The four pillars as stem-branch strings: year, month, day, hour.",
+                "properties": {
+                  "day": {
+                    "description": "A stem-branch pair in Chinese characters, e.g. \"丙午\".",
+                    "type": "string"
+                  },
+                  "hour": {
+                    "description": "A stem-branch pair in Chinese characters, e.g. \"丙午\".",
+                    "type": "string"
+                  },
+                  "month": {
+                    "description": "A stem-branch pair in Chinese characters, e.g. \"丙午\".",
+                    "type": "string"
+                  },
+                  "year": {
+                    "description": "A stem-branch pair in Chinese characters, e.g. \"丙午\".",
+                    "type": "string"
+                  }
+                },
+                "required": ["day", "hour", "month", "year"],
+                "type": "object"
+              },
+              "next_start_date": {
+                "description": "When truncated, the start_date that continues the range.",
+                "type": "string"
+              },
+              "notes": {
+                "description": "Codes for facts that qualify this result: hour_assumed (no birth time, 12:00 used), true_solar_skipped_no_longitude, southern_month_adjusted, palace_formula_lunar_javascript (life and body palaces follow the lunar-javascript formula), legacy_v0_chart, judgment_unavailable, chart_pending, truncated, lunar_converted (the birth date was given in the lunar calendar and converted to Gregorian).",
+                "items": {
+                  "enum": ["hour_assumed", "true_solar_skipped_no_longitude", "southern_month_adjusted", "palace_formula_lunar_javascript", "legacy_v0_chart", "judgment_unavailable", "chart_pending", "truncated", "lunar_converted"],
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "paipan_version": {
+                "description": "Chart rule version. Charts computed now are always v1 (FateTell cross-region rules).",
+                "enum": ["v1", "v0"],
+                "type": "string"
+              },
+              "start_date": {
+                "type": "string"
+              },
+              "truncated": {
+                "type": "boolean"
+              },
+              "tzdata_version": {
+                "description": "IANA time zone database version used by the server.",
+                "type": "string"
+              }
+            },
+            "required": ["chart_id", "count", "display_name", "engine_version", "granularity", "hemisphere", "links", "moments", "natal_pillars", "notes", "paipan_version", "start_date", "truncated", "tzdata_version"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Get chart calendar"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:3e50fda52f728c19b9f8d95c534bc776b4939dee4b82aec8eb913be3a2799a4b"
+        },
+        {
+          "name": "get_daily_fortune",
+          "title": "Get daily fortune",
+          "description": "Return a saved chart's daily fortune for one date: energy level (high / medium / low), the day's stems-and-branches relations with the natal chart, the day's do/avoid items, the day pillar, this chart's year and month pillars and month clash.\nUse for how a specific day looks for a saved chart, e.g. \"How is today for me?\". Pass chart_id (or \"self\") and optionally a date; the default is today in the account's time zone.\nNot for a day's pillars without a chart (use get_almanac), several days at once (use get_chart_calendar), or births not saved. Contains no generated text.",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "chart_id": {
+                "description": "chart_id from list_saved_charts, or \"self\" for the account holder's own chart.",
+                "type": "string"
+              },
+              "date": {
+                "description": "YYYY-MM-DD, within 30 days before or after today. Default: today in the account's time zone.",
+                "type": "string"
+              },
+              "locale": {
+                "description": "Language of the do/avoid items. Default: the account's interface language.",
+                "enum": ["zh-CN", "zh-TW", "en"],
+                "type": "string"
+              }
+            },
+            "required": ["chart_id"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$defs": {
+              "Term": {
+                "additionalProperties": false,
+                "description": "A BaZi term as {code, zh, en}.",
+                "properties": {
+                  "code": {
+                    "description": "Stable machine-readable code, e.g. \"hurting_officer\".",
+                    "type": "string"
+                  },
+                  "en": {
+                    "description": "English name, e.g. \"Hurting Officer\".",
+                    "type": "string"
+                  },
+                  "zh": {
+                    "description": "Chinese term as used by FateTell, e.g. \"伤官\".",
+                    "type": "string"
+                  }
+                },
+                "required": ["code", "en", "zh"],
+                "type": "object"
+              }
+            },
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "additionalProperties": false,
+            "properties": {
+              "algo_version": {
+                "type": "string"
+              },
+              "chart_id": {
+                "type": "string"
+              },
+              "date": {
+                "description": "The date, YYYY-MM-DD.",
+                "type": "string"
+              },
+              "day_pillar": {
+                "description": "A stem-branch pair in Chinese characters, e.g. \"丙午\".",
+                "type": "string"
+              },
+              "display_name": {
+                "type": "string"
+              },
+              "energy": {
+                "$ref": "#/$defs/Term",
+                "description": "Energy level: high, medium or low. No score is given."
+              },
+              "engine_version": {
+                "description": "FateTell calculation engine version (package version + commit).",
+                "type": "string"
+              },
+              "flow": {
+                "additionalProperties": false,
+                "description": "Year and month pillars of the date for this chart.",
+                "properties": {
+                  "month_pillar": {
+                    "description": "Month pillar for this chart's hemisphere.",
+                    "type": "string"
+                  },
+                  "month_pillar_raw": {
+                    "description": "Unadjusted (northern-hemisphere) month pillar.",
+                    "type": "string"
+                  },
+                  "southern_adjusted": {
+                    "type": "boolean"
+                  },
+                  "year_pillar": {
+                    "description": "A stem-branch pair in Chinese characters, e.g. \"丙午\".",
+                    "type": "string"
+                  }
+                },
+                "required": ["month_pillar", "month_pillar_raw", "southern_adjusted", "year_pillar"],
+                "type": "object"
+              },
+              "links": {
+                "description": "FateTell web pages for objects in this result, for citation. Only objects already present in the result are linked.",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "rel": {
+                      "description": "Which FateTell page this is: chart, daily_fortune, luck_pillars or account.",
+                      "enum": ["chart", "daily_fortune", "luck_pillars", "account"],
+                      "type": "string"
+                    },
+                    "url": {
+                      "description": "Page in the FateTell web app for an object that appears in this result.",
+                      "type": "string"
+                    }
+                  },
+                  "required": ["rel", "url"],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "locale": {
+                "description": "Language of the do/avoid items.",
+                "enum": ["zh-CN", "zh-TW", "en"],
+                "type": "string"
+              },
+              "materialized": {
+                "type": "boolean"
+              },
+              "moments": {
+                "description": "Calendar facts about this date: luck_pillar_change_in (value = months), solar_term_today, annual_clash (year branch clashes the natal year branch), birth_year_return (year pillar equals the natal year pillar), month_clash, energy_extreme (high or low energy), birthday_window (within 7 days of the birthday).",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "label": {
+                      "enum": ["luck_pillar_change_in", "solar_term_today", "annual_clash", "birth_year_return", "month_clash", "energy_extreme", "birthday_window"],
+                      "type": "string"
+                    },
+                    "value": {
+                      "description": "Only for luck_pillar_change_in: months until the next luck pillar starts.",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer"
+                    }
+                  },
+                  "required": ["label"],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "month_clash": {
+                "description": "Whether the day branch clashes with the month branch.",
+                "type": "boolean"
+              },
+              "notes": {
+                "description": "Codes for facts that qualify this result: hour_assumed (no birth time, 12:00 used), true_solar_skipped_no_longitude, southern_month_adjusted, palace_formula_lunar_javascript (life and body palaces follow the lunar-javascript formula), legacy_v0_chart, judgment_unavailable, chart_pending, truncated, lunar_converted (the birth date was given in the lunar calendar and converted to Gregorian).",
+                "items": {
+                  "enum": ["hour_assumed", "true_solar_skipped_no_longitude", "southern_month_adjusted", "palace_formula_lunar_javascript", "legacy_v0_chart", "judgment_unavailable", "chart_pending", "truncated", "lunar_converted"],
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "paipan_version": {
+                "description": "Chart rule version. Charts computed now are always v1 (FateTell cross-region rules).",
+                "enum": ["v1", "v0"],
+                "type": "string"
+              },
+              "recommendations": {
+                "additionalProperties": false,
+                "description": "Do and avoid items from the FateTell app, as written there.",
+                "properties": {
+                  "avoid": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "do": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "quote": {
+                    "type": ["string", "null"]
+                  }
+                },
+                "required": ["avoid", "do", "quote"],
+                "type": "object"
+              },
+              "relations": {
+                "description": "The day pillar's relations with the natal pillars.",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "part": {
+                      "enum": ["stem", "branch"],
+                      "type": "string"
+                    },
+                    "position": {
+                      "description": "Natal pillar compared against.",
+                      "enum": ["year", "month", "day", "hour"],
+                      "type": "string"
+                    },
+                    "relation": {
+                      "$ref": "#/$defs/Term",
+                      "description": "clash, combination, punishment, harm or break."
+                    },
+                    "with": {
+                      "description": "The natal character involved, Chinese.",
+                      "type": "string"
+                    }
+                  },
+                  "required": ["part", "position", "relation", "with"],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "tzdata_version": {
+                "description": "IANA time zone database version used by the server.",
+                "type": "string"
+              }
+            },
+            "required": ["algo_version", "chart_id", "date", "day_pillar", "display_name", "energy", "engine_version", "flow", "links", "locale", "materialized", "moments", "month_clash", "notes", "paipan_version", "recommendations", "relations", "tzdata_version"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Get daily fortune"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:663685bf2c878c77e6cb6b110bdbdafcab738645fb727b154df2c630431ab1c9"
+        },
+        {
+          "name": "get_fatetell_account",
+          "title": "Get FateTell account",
+          "description": "Return the connected FateTell account: masked email, sign-in method, interface language, time zone, membership status, the permissions granted to this client, and this account's remaining quota for each tool.\nUse when the user asks which account is connected, whether membership is active, how many calls remain, or when a tool returned membership_required or rate_limited.\nNot for reading charts (use list_saved_charts / get_saved_chart).\nRead-only.",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {},
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "additionalProperties": false,
+            "properties": {
+              "account": {
+                "additionalProperties": false,
+                "properties": {
+                  "email_masked": {
+                    "description": "First character, *** and the domain; null when the account has no email.",
+                    "type": ["string", "null"]
+                  },
+                  "email_verified": {
+                    "type": "boolean"
+                  },
+                  "interface_language": {
+                    "type": "string"
+                  },
+                  "login_method": {
+                    "description": "Sign-in method, e.g. email, google or apple.",
+                    "type": "string"
+                  },
+                  "status": {
+                    "type": "string"
+                  },
+                  "timezone": {
+                    "description": "IANA time zone of the account.",
+                    "type": "string"
+                  }
+                },
+                "required": ["email_masked", "email_verified", "interface_language", "login_method", "status", "timezone"],
+                "type": "object"
+              },
+              "connection": {
+                "additionalProperties": false,
+                "properties": {
+                  "client_id": {
+                    "type": "string"
+                  },
+                  "client_name": {
+                    "description": "Name of the connected client when known.",
+                    "type": ["string", "null"]
+                  },
+                  "granted_at": {
+                    "description": "When access was granted, when known.",
+                    "type": ["string", "null"]
+                  },
+                  "scopes": {
+                    "description": "Permissions this client was granted.",
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  }
+                },
+                "required": ["client_id", "client_name", "granted_at", "scopes"],
+                "type": "object"
+              },
+              "engine_version": {
+                "description": "FateTell calculation engine version (package version + commit).",
+                "type": "string"
+              },
+              "links": {
+                "description": "FateTell web pages for objects in this result, for citation. Only objects already present in the result are linked.",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "rel": {
+                      "description": "Which FateTell page this is: chart, daily_fortune, luck_pillars or account.",
+                      "enum": ["chart", "daily_fortune", "luck_pillars", "account"],
+                      "type": "string"
+                    },
+                    "url": {
+                      "description": "Page in the FateTell web app for an object that appears in this result.",
+                      "type": "string"
+                    }
+                  },
+                  "required": ["rel", "url"],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "membership": {
+                "additionalProperties": false,
+                "properties": {
+                  "auto_renew": {
+                    "type": ["boolean", "null"]
+                  },
+                  "basis": {
+                    "type": "string"
+                  },
+                  "expires_at": {
+                    "type": ["string", "null"]
+                  },
+                  "is_member": {
+                    "description": "True when a membership is active on any platform.",
+                    "type": "boolean"
+                  },
+                  "platform": {
+                    "description": "web, ios or android; null when not a member.",
+                    "type": ["string", "null"]
+                  },
+                  "tier": {
+                    "description": "yearly, monthly or weekly; null when not a member.",
+                    "type": ["string", "null"]
+                  }
+                },
+                "required": ["auto_renew", "basis", "expires_at", "is_member", "platform", "tier"],
+                "type": "object"
+              },
+              "notes": {
+                "description": "Codes for facts that qualify this result: hour_assumed (no birth time, 12:00 used), true_solar_skipped_no_longitude, southern_month_adjusted, palace_formula_lunar_javascript (life and body palaces follow the lunar-javascript formula), legacy_v0_chart, judgment_unavailable, chart_pending, truncated, lunar_converted (the birth date was given in the lunar calendar and converted to Gregorian).",
+                "items": {
+                  "enum": ["hour_assumed", "true_solar_skipped_no_longitude", "southern_month_adjusted", "palace_formula_lunar_javascript", "legacy_v0_chart", "judgment_unavailable", "chart_pending", "truncated", "lunar_converted"],
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "quotas": {
+                "description": "This account's per-tool limits; tools without a limit are not listed.",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "limit": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer"
+                    },
+                    "remaining": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer"
+                    },
+                    "reset_at": {
+                      "description": "When the window resets, ISO 8601 UTC.",
+                      "type": "string"
+                    },
+                    "tool": {
+                      "type": "string"
+                    },
+                    "used": {
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer"
+                    },
+                    "window": {
+                      "description": "Counting window; days are UTC calendar days.",
+                      "enum": ["day", "hour"],
+                      "type": "string"
+                    }
+                  },
+                  "required": ["limit", "remaining", "reset_at", "tool", "used", "window"],
+                  "type": "object"
+                },
+                "type": "array"
+              }
+            },
+            "required": ["account", "connection", "engine_version", "links", "membership", "notes", "quotas"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Get FateTell account"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:3f27f3657f054a022978e640cb9c4c9f6a0bc7376ad6cdde66ba1d51f5fd9e60"
+        },
+        {
+          "name": "get_saved_chart",
+          "title": "Get saved chart",
+          "description": "Return one saved chart in full: birth date, time and time zone (no birthplace), pillars with Ten Gods, hidden stems and Na Yin, all luck pillars (current one marked), palaces, the stored Day Master strength and favorable elements, and today's pillars.\nUse whenever the user asks about a saved chart or \"my chart\"; luck pillars and judgment are included. chart_id comes from list_saved_charts, or \"self\" for the user's own chart.\nNot for births not saved (use cast_bazi_chart). Never re-cast or re-judge a saved chart with other tools. Not for predicting events or years of accident, illness or death.",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "chart_id": {
+                "description": "chart_id from list_saved_charts, or \"self\" for the account holder's own chart.",
+                "type": "string"
+              },
+              "include_today": {
+                "description": "Default true. When false, today's pillars are omitted (today is null).",
+                "type": "boolean"
+              },
+              "locale": {
+                "description": "Language of the chart card shown to the user, as a BCP 47 tag, normally the language the user is writing in. Only zh-CN, zh-TW and en are supported; any other language falls back to en.",
+                "type": "string"
+              }
+            },
+            "required": ["chart_id"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$defs": {
+              "Pillar": {
+                "additionalProperties": false,
+                "description": "One of the four pillars with its elements.",
+                "properties": {
+                  "branch": {
+                    "description": "Earthly branch, Chinese character.",
+                    "type": "string"
+                  },
+                  "branch_element": {
+                    "$ref": "#/$defs/Term",
+                    "description": "Five Element of the branch (main qi)."
+                  },
+                  "ganzhi": {
+                    "description": "A stem-branch pair in Chinese characters, e.g. \"丙午\".",
+                    "type": "string"
+                  },
+                  "hidden_stems": {
+                    "description": "Hidden stems of the branch, main qi first, then middle and residual qi.",
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "element": {
+                          "$ref": "#/$defs/Term",
+                          "description": "Five Element of the hidden stem."
+                        },
+                        "stem": {
+                          "description": "Hidden stem, Chinese character.",
+                          "type": "string"
+                        },
+                        "ten_god": {
+                          "$ref": "#/$defs/Term",
+                          "description": "Ten God of the hidden stem relative to the Day Master."
+                        }
+                      },
+                      "required": ["element", "stem", "ten_god"],
+                      "type": "object"
+                    },
+                    "type": "array"
+                  },
+                  "life_stage": {
+                    "$ref": "#/$defs/Term",
+                    "description": "Twelve-stage (Chang Sheng) state of the Day Master's stem on this pillar's branch; yang stems run forward, yin stems backward."
+                  },
+                  "nayin": {
+                    "$ref": "#/$defs/Term",
+                    "description": "Na Yin of this stem-branch pair."
+                  },
+                  "stem": {
+                    "description": "Heavenly stem, Chinese character.",
+                    "type": "string"
+                  },
+                  "stem_element": {
+                    "$ref": "#/$defs/Term",
+                    "description": "Five Element of the stem."
+                  },
+                  "ten_god": {
+                    "anyOf": [
+                      {
+                        "$ref": "#/$defs/Term"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "Ten God of the stem relative to the Day Master; null for the day pillar (the Day Master itself)."
+                  }
+                },
+                "required": ["branch", "branch_element", "ganzhi", "hidden_stems", "life_stage", "nayin", "stem", "stem_element", "ten_god"],
+                "type": "object"
+              },
+              "Term": {
+                "additionalProperties": false,
+                "description": "A BaZi term as {code, zh, en}.",
+                "properties": {
+                  "code": {
+                    "description": "Stable machine-readable code, e.g. \"hurting_officer\".",
+                    "type": "string"
+                  },
+                  "en": {
+                    "description": "English name, e.g. \"Hurting Officer\".",
+                    "type": "string"
+                  },
+                  "zh": {
+                    "description": "Chinese term as used by FateTell, e.g. \"伤官\".",
+                    "type": "string"
+                  }
+                },
+                "required": ["code", "en", "zh"],
+                "type": "object"
+              }
+            },
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "additionalProperties": false,
+            "properties": {
+              "birth": {
+                "additionalProperties": false,
+                "properties": {
+                  "date": {
+                    "type": "string"
+                  },
+                  "hemisphere": {
+                    "enum": ["north", "south"],
+                    "type": "string"
+                  },
+                  "hour_assumed": {
+                    "type": "boolean"
+                  },
+                  "time": {
+                    "type": ["string", "null"]
+                  },
+                  "timezone": {
+                    "description": "IANA time zone of the birthplace; null for older charts.",
+                    "type": ["string", "null"]
+                  },
+                  "true_solar_applied": {
+                    "type": "boolean"
+                  }
+                },
+                "required": ["date", "hemisphere", "hour_assumed", "time", "timezone", "true_solar_applied"],
+                "type": "object"
+              },
+              "chart_id": {
+                "type": "string"
+              },
+              "conventions": {
+                "additionalProperties": false,
+                "description": "Chart conventions used for this result.",
+                "properties": {
+                  "calendar_input": {
+                    "anyOf": [
+                      {
+                        "enum": ["solar", "lunar"],
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "description": "Calendar of the birth date given in this call; null for saved charts, whose input calendar is not recorded."
+                  },
+                  "hemisphere": {
+                    "description": "Hemisphere the chart was computed for.",
+                    "enum": ["north", "south"],
+                    "type": "string"
+                  },
+                  "hour_boundary": {
+                    "description": "From 23:00 local time (true solar time when applied) the day pillar is the next day and the hour pillar is Zi counted from that next day; there is no early/late Zi split.",
+                    "enum": ["day_changes_at_23"],
+                    "type": "string"
+                  },
+                  "month_adjusted": {
+                    "description": "Whether the month pillar was adjusted for the southern hemisphere (FateTell cross-region rules, v1 charts only).",
+                    "type": "boolean"
+                  },
+                  "true_solar_applied": {
+                    "description": "Whether the birth time was corrected to true solar time.",
+                    "type": "boolean"
+                  },
+                  "year_boundary": {
+                    "description": "The year pillar changes at the exact Start of Spring (Li Chun) instant, not at Lunar New Year.",
+                    "enum": ["lichun"],
+                    "type": "string"
+                  }
+                },
+                "required": ["calendar_input", "hemisphere", "hour_boundary", "month_adjusted", "true_solar_applied", "year_boundary"],
+                "type": "object"
+              },
+              "day_master": {
+                "additionalProperties": false,
+                "properties": {
+                  "element": {
+                    "$ref": "#/$defs/Term",
+                    "description": "Five Element of the Day Master."
+                  },
+                  "polarity": {
+                    "enum": ["yin", "yang"],
+                    "type": "string"
+                  },
+                  "stem": {
+                    "description": "Day stem, Chinese character.",
+                    "type": "string"
+                  }
+                },
+                "required": ["element", "polarity", "stem"],
+                "type": "object"
+              },
+              "display_name": {
+                "type": "string"
+              },
+              "engine_version": {
+                "description": "FateTell calculation engine version (package version + commit).",
+                "type": "string"
+              },
+              "gender": {
+                "enum": ["male", "female"],
+                "type": "string"
+              },
+              "is_self": {
+                "type": "boolean"
+              },
+              "judgment": {
+                "anyOf": [
+                  {
+                    "additionalProperties": false,
+                    "description": "FateTell's Day Master strength and favorable elements under its rule set.",
+                    "properties": {
+                      "branch_overrides": {
+                        "additionalProperties": {
+                          "$ref": "#/$defs/Term"
+                        },
+                        "description": "Branches whose verdict differs from their element: unfavorable, mixed, or favorable_with_flow.",
+                        "propertyNames": {
+                          "type": "string"
+                        },
+                        "type": "object"
+                      },
+                      "favorable": {
+                        "description": "Favorable elements, ranked.",
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "element": {
+                              "$ref": "#/$defs/Term"
+                            },
+                            "rank": {
+                              "anyOf": [
+                                {
+                                  "maximum": 9007199254740991,
+                                  "minimum": -9007199254740991,
+                                  "type": "integer"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "1 is the most favorable (or most unfavorable); null when unranked."
+                            }
+                          },
+                          "required": ["element", "rank"],
+                          "type": "object"
+                        },
+                        "type": "array"
+                      },
+                      "legacy": {
+                        "description": "True when the stored judgment was projected from older account fields; ranks are then null.",
+                        "type": "boolean"
+                      },
+                      "neutral": {
+                        "description": "Elements that are neither favorable nor unfavorable.",
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "element": {
+                              "$ref": "#/$defs/Term"
+                            }
+                          },
+                          "required": ["element"],
+                          "type": "object"
+                        },
+                        "type": "array"
+                      },
+                      "rule_version": {
+                        "description": "FateTell rule set version: v1.0, or legacy when the judgment was projected from older account fields.",
+                        "type": "string"
+                      },
+                      "unfavorable": {
+                        "description": "Unfavorable elements, ranked.",
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "element": {
+                              "$ref": "#/$defs/Term"
+                            },
+                            "rank": {
+                              "anyOf": [
+                                {
+                                  "maximum": 9007199254740991,
+                                  "minimum": -9007199254740991,
+                                  "type": "integer"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "1 is the most favorable (or most unfavorable); null when unranked."
+                            }
+                          },
+                          "required": ["element", "rank"],
+                          "type": "object"
+                        },
+                        "type": "array"
+                      },
+                      "verdict": {
+                        "$ref": "#/$defs/Term",
+                        "description": "Day Master strength: strong, weak, follow_strong or follow_weak."
+                      }
+                    },
+                    "required": ["branch_overrides", "favorable", "legacy", "neutral", "rule_version", "unfavorable", "verdict"],
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Null when the account has no stored judgment for this chart."
+              },
+              "links": {
+                "description": "FateTell web pages for objects in this result, for citation. Only objects already present in the result are linked.",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "rel": {
+                      "description": "Which FateTell page this is: chart, daily_fortune, luck_pillars or account.",
+                      "enum": ["chart", "daily_fortune", "luck_pillars", "account"],
+                      "type": "string"
+                    },
+                    "url": {
+                      "description": "Page in the FateTell web app for an object that appears in this result.",
+                      "type": "string"
+                    }
+                  },
+                  "required": ["rel", "url"],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "locale": {
+                "description": "Chart card language resolved from the locale argument. Absent when no valid locale was given.",
+                "enum": ["zh-CN", "zh-TW", "en"],
+                "type": "string"
+              },
+              "luck_pillars": {
+                "additionalProperties": false,
+                "description": "Luck pillars (Da Yun) as stored with the chart.",
+                "properties": {
+                  "direction": {
+                    "enum": ["forward", "backward"],
+                    "type": "string"
+                  },
+                  "start_age": {
+                    "description": "Age when the first luck pillar starts, East Asian count.",
+                    "maximum": 9007199254740991,
+                    "minimum": -9007199254740991,
+                    "type": "integer"
+                  },
+                  "start_year": {
+                    "description": "Gregorian year when the first luck pillar starts.",
+                    "maximum": 9007199254740991,
+                    "minimum": -9007199254740991,
+                    "type": "integer"
+                  },
+                  "steps": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "end_age": {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer"
+                        },
+                        "end_year": {
+                          "description": "Gregorian year this luck pillar ends (start_year + 9).",
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer"
+                        },
+                        "ganzhi": {
+                          "description": "A stem-branch pair in Chinese characters, e.g. \"丙午\".",
+                          "type": "string"
+                        },
+                        "nayin": {
+                          "$ref": "#/$defs/Term"
+                        },
+                        "start_age": {
+                          "description": "Age at start, counted in East Asian years (born at age 1, +1 at each Start of Spring).",
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer"
+                        },
+                        "start_year": {
+                          "description": "Gregorian year this luck pillar starts.",
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer"
+                        },
+                        "stem_ten_god": {
+                          "$ref": "#/$defs/Term",
+                          "description": "Ten God of the luck pillar stem relative to the Day Master."
+                        }
+                      },
+                      "required": ["end_age", "end_year", "ganzhi", "nayin", "start_age", "start_year", "stem_ten_god"],
+                      "type": "object"
+                    },
+                    "type": "array"
+                  }
+                },
+                "required": ["direction", "start_age", "start_year", "steps"],
+                "type": "object"
+              },
+              "moments": {
+                "description": "Calendar facts about this date: luck_pillar_change_in (value = months), solar_term_today, annual_clash (year branch clashes the natal year branch), birth_year_return (year pillar equals the natal year pillar), month_clash, energy_extreme (high or low energy), birthday_window (within 7 days of the birthday).",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "label": {
+                      "enum": ["luck_pillar_change_in", "solar_term_today", "annual_clash", "birth_year_return", "month_clash", "energy_extreme", "birthday_window"],
+                      "type": "string"
+                    },
+                    "value": {
+                      "description": "Only for luck_pillar_change_in: months until the next luck pillar starts.",
+                      "maximum": 9007199254740991,
+                      "minimum": -9007199254740991,
+                      "type": "integer"
+                    }
+                  },
+                  "required": ["label"],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "month_pillar_raw": {
+                "description": "Northern-hemisphere month pillar; equals pillars.month.ganzhi for northern charts.",
+                "type": "string"
+              },
+              "notes": {
+                "description": "Codes for facts that qualify this result: hour_assumed (no birth time, 12:00 used), true_solar_skipped_no_longitude, southern_month_adjusted, palace_formula_lunar_javascript (life and body palaces follow the lunar-javascript formula), legacy_v0_chart, judgment_unavailable, chart_pending, truncated, lunar_converted (the birth date was given in the lunar calendar and converted to Gregorian).",
+                "items": {
+                  "enum": ["hour_assumed", "true_solar_skipped_no_longitude", "southern_month_adjusted", "palace_formula_lunar_javascript", "legacy_v0_chart", "judgment_unavailable", "chart_pending", "truncated", "lunar_converted"],
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "paipan_version": {
+                "description": "Chart rule version. Charts computed now are always v1 (FateTell cross-region rules).",
+                "enum": ["v1", "v0"],
+                "type": "string"
+              },
+              "palaces": {
+                "additionalProperties": false,
+                "description": "Palaces derived from the chart; month-based palaces use the adjusted month pillar.",
+                "properties": {
+                  "body": {
+                    "description": "Body palace (Shen Gong).",
+                    "type": "string"
+                  },
+                  "conception": {
+                    "description": "Conception palace (Tai Yuan).",
+                    "type": "string"
+                  },
+                  "life": {
+                    "description": "Life palace (Ming Gong).",
+                    "type": "string"
+                  }
+                },
+                "required": ["body", "conception", "life"],
+                "type": "object"
+              },
+              "pillars": {
+                "additionalProperties": false,
+                "properties": {
+                  "day": {
+                    "$ref": "#/$defs/Pillar"
+                  },
+                  "hour": {
+                    "$ref": "#/$defs/Pillar"
+                  },
+                  "month": {
+                    "$ref": "#/$defs/Pillar"
+                  },
+                  "year": {
+                    "$ref": "#/$defs/Pillar"
+                  }
+                },
+                "required": ["day", "hour", "month", "year"],
+                "type": "object"
+              },
+              "rule_version": {
+                "description": "Present when a judgment is included: v1.0, or legacy for a judgment projected from older account fields.",
+                "type": "string"
+              },
+              "today": {
+                "anyOf": [
+                  {
+                    "additionalProperties": false,
+                    "description": "Today's pillars, taken at 12:00 Beijing time of that date.",
+                    "properties": {
+                      "date": {
+                        "description": "Today in the given time zone, YYYY-MM-DD.",
+                        "type": "string"
+                      },
+                      "day_pillar": {
+                        "description": "A stem-branch pair in Chinese characters, e.g. \"丙午\".",
+                        "type": "string"
+                      },
+                      "month_clash": {
+                        "description": "Whether the day branch clashes with the month branch.",
+                        "type": "boolean"
+                      },
+                      "month_pillar": {
+                        "description": "Month pillar for this chart, adjusted for the southern hemisphere when applicable.",
+                        "type": "string"
+                      },
+                      "month_pillar_raw": {
+                        "description": "Unadjusted (northern-hemisphere) month pillar.",
+                        "type": "string"
+                      },
+                      "year_pillar": {
+                        "description": "A stem-branch pair in Chinese characters, e.g. \"丙午\".",
+                        "type": "string"
+                      }
+                    },
+                    "required": ["date", "day_pillar", "month_clash", "month_pillar", "month_pillar_raw", "year_pillar"],
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Today's pillars for this chart; null when include_today is false."
+              },
+              "tzdata_version": {
+                "description": "IANA time zone database version used by the server.",
+                "type": "string"
+              }
+            },
+            "required": ["birth", "chart_id", "conventions", "day_master", "display_name", "engine_version", "gender", "is_self", "judgment", "links", "luck_pillars", "moments", "month_pillar_raw", "notes", "paipan_version", "palaces", "pillars", "today", "tzdata_version"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Get saved chart"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "ui": {
+              "resourceUri": "ui://fatetell/chart-card"
+            },
+            "ui/resourceUri": "ui://fatetell/chart-card"
+          },
+          "digest": "sha256:75a632909abcb51476772a5a4598f5c080acc05a0783bdadc6836740905a2281"
+        },
+        {
+          "name": "list_saved_charts",
+          "title": "List saved charts",
+          "description": "List the charts saved in the connected FateTell account: id, display name, gender, whether it is the user's own chart, hemisphere, chart rule version and whether the chart has been computed.\nUse first whenever the user refers to \"my chart\", a family member's chart or any saved profile, to get the chart_id that get_saved_chart, get_bazi_judgment, get_daily_fortune and get_chart_calendar need. Do not ask for birth data when a saved chart may exist.\nNot for creating charts (use create_saved_chart) or reading a chart's content (use get_saved_chart).\nBirthplace and coordinates are never returned.",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {},
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "additionalProperties": false,
+            "properties": {
+              "charts": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "birth_date": {
+                      "description": "Gregorian birth date, YYYY-MM-DD; given to tell charts apart.",
+                      "type": "string"
+                    },
+                    "chart_id": {
+                      "description": "Pass to get_saved_chart, get_bazi_judgment, get_daily_fortune or get_chart_calendar.",
+                      "type": "string"
+                    },
+                    "chart_ready": {
+                      "description": "False while the chart is still being computed or cannot be read.",
+                      "type": "boolean"
+                    },
+                    "created_at": {
+                      "type": "string"
+                    },
+                    "display_name": {
+                      "type": "string"
+                    },
+                    "gender": {
+                      "enum": ["male", "female"],
+                      "type": "string"
+                    },
+                    "hemisphere": {
+                      "anyOf": [
+                        {
+                          "enum": ["north", "south"],
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "Hemisphere of the stored chart; null while the chart is not ready."
+                    },
+                    "hour_assumed": {
+                      "type": "boolean"
+                    },
+                    "is_self": {
+                      "description": "True for the account holder's own chart.",
+                      "type": "boolean"
+                    },
+                    "paipan_version": {
+                      "description": "Chart rule version. Charts computed now are always v1 (FateTell cross-region rules).",
+                      "enum": ["v1", "v0"],
+                      "type": "string"
+                    }
+                  },
+                  "required": ["birth_date", "chart_id", "chart_ready", "created_at", "display_name", "gender", "hemisphere", "hour_assumed", "is_self", "paipan_version"],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "engine_version": {
+                "description": "FateTell calculation engine version (package version + commit).",
+                "type": "string"
+              },
+              "links": {
+                "description": "FateTell web pages for objects in this result, for citation. Only objects already present in the result are linked.",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "rel": {
+                      "description": "Which FateTell page this is: chart, daily_fortune, luck_pillars or account.",
+                      "enum": ["chart", "daily_fortune", "luck_pillars", "account"],
+                      "type": "string"
+                    },
+                    "url": {
+                      "description": "Page in the FateTell web app for an object that appears in this result.",
+                      "type": "string"
+                    }
+                  },
+                  "required": ["rel", "url"],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "notes": {
+                "description": "Codes for facts that qualify this result: hour_assumed (no birth time, 12:00 used), true_solar_skipped_no_longitude, southern_month_adjusted, palace_formula_lunar_javascript (life and body palaces follow the lunar-javascript formula), legacy_v0_chart, judgment_unavailable, chart_pending, truncated, lunar_converted (the birth date was given in the lunar calendar and converted to Gregorian).",
+                "items": {
+                  "enum": ["hour_assumed", "true_solar_skipped_no_longitude", "southern_month_adjusted", "palace_formula_lunar_javascript", "legacy_v0_chart", "judgment_unavailable", "chart_pending", "truncated", "lunar_converted"],
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "total": {
+                "maximum": 9007199254740991,
+                "minimum": -9007199254740991,
+                "type": "integer"
+              }
+            },
+            "required": ["charts", "engine_version", "links", "notes", "total"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "List saved charts"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:da05719ddeaebb187dad91453f6753f4cb4f63abb86db65e008c3fcd483b474b"
+        }
+      ],
+      "resources": [
+        {
+          "uri": "ui://fatetell/chart-card",
+          "name": "chart-card",
+          "title": "FateTell chart card",
+          "description": "Interactive view of a BaZi chart.",
+          "mimeType": "text/html;profile=mcp-app",
+          "meta": {
+            "ui": {
+              "prefersBorder": false
+            }
+          },
+          "digest": "sha256:c047ebdc53625c93f43129605703598fcc94ab275b80af2934713588663b30c6"
+        }
+      ],
+      "digest": "sha256:293b09e2b5fb4357e662c3798bef398ac7ba087fb9ebd5896fe8f91efa10f809"
+    }
+  }
+}

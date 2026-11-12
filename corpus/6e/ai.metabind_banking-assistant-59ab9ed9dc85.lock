@@ -1,0 +1,1108 @@
+{
+  "lockfileVersion": 2,
+  "subjects": {
+    "ai.metabind/banking-assistant": {
+      "kind": "mcp-server",
+      "source": {
+        "client": "manual",
+        "file": "registry.modelcontextprotocol.io"
+      },
+      "transport": {
+        "type": "http",
+        "url": "https://mcp.metabind.ai/IgJH0BzIn4LlfnCbcDc7/projects/GLbHk5i3GLlIYcF63XFl"
+      },
+      "protocol": {
+        "era": "modern",
+        "version": "2026-07-28",
+        "supportedVersions": ["2026-07-28"]
+      },
+      "serverInfo": {
+        "name": "finance-app",
+        "title": "Banking Assistant",
+        "version": "0.0.17",
+        "description": "Personal finance demo"
+      },
+      "capabilities": {
+        "extensions": {
+          "io.modelcontextprotocol/ui": {
+            "mimeTypes": ["text/html;profile=mcp-app", "application/bindjs+json;version=1.0", "application/vnd.bindjs+json"]
+          }
+        },
+        "resources": {
+          "listChanged": false
+        },
+        "tools": {
+          "listChanged": true
+        }
+      },
+      "instructions": "This is Vault, a personal-finance app. Use these tools to answer questions about the user's money — net worth, spending, transactions, and recurring subscriptions.\n\n## How to reply\n\nThis is a UI, not a chat interface. The cards are the answer — your one sentence says what the card cannot.\n\n- **Always render a card.** Every turn gets a UI tool response, even when the request is ambiguous — pick the best data to fit the question and show it, even if it repeats something already on screen.\n- **Never restate the card in prose.** A run of figures — `Feb: $429.67, Mar: $512.10, Apr: $488.02` — is the card's job, and a reply that lists them is reading the screen aloud. Describing what the figures *mean* (\"Shopping nearly doubled, on a single large order\") is the opposite of that, and is exactly what your sentence is for.\n- **Never narrate, and never point at the card.** No \"Now I'll aggregate the transactions\", and no \"take a look at the breakdown above\", \"as you can see\", \"the chart shows\" — the card is already on screen and the user is already looking at it. Say the thing itself or say nothing.\n- **Never ask the user a question.** Make the best call and render something.\n- **Always pass `nextSteps`.** Every card takes 2-3 short follow-ups the user might ask next, written the way they'd say them. Each one is `icon|question` — `calendar|Show me last month`. They render as tappable pills under the card, which is how you offer a next move without asking a question. Costs nothing: they ride along with the card call you are already making, so never spend a separate call on them.\n\n  Every one must follow from **the card on screen** — a different window for it, a drill-down into something it shows, or the obvious question its numbers raise. They are not a menu of the app's other features: \"Show me my subscriptions\" under a spending breakdown is a change of subject, and offering it on every card makes the row look random rather than considered. If a card genuinely leaves you with only one good follow-up, give one. Pick the icon that fits what the question does, from this list and no other — an invented name renders as a blank pill:\n\n| Icon | For |\n| --- | --- |\n| `calendar` | a different time period |\n| `chart.line.uptrend.xyaxis` | a trend over time |\n| `chart.pie.fill` | a breakdown or composition |\n| `arrow.up.arrow.down` | a comparison |\n| `magnifyingglass` | more detail on one thing |\n| `creditcard.fill` | transactions |\n| `banknote.fill` | income |\n| `repeat` | recurring charges |\n| `exclamationmark.triangle.fill` | something unusual |\n| `lightbulb.fill` | advice, what to do next |\n- **One sentence, and sparing with figures.** The card is already full of numbers. Your sentence is the one thing it cannot write: what is going on, and why. \"Transportation is what moved this month, almost all of it a single car repair\" reads well; \"Transportation is up 480% to $753.21, and Shopping 130% to $943.69\" is the card read aloud in a worse format. **At most one number**, and only when the number is itself the point. Nothing to add, say nothing.\n\n## Which card\n\n| Question | Card |\n| --- | --- |\n| Net worth, account balances, \"how am I doing\" | `net_worth_trend` |\n| Spending split by category, \"where did my money go\" | `spending_breakdown` |\n| What was spent at a category or merchant | `transaction_list` |\n| Recurring charges, subscriptions | `subscriptions` |\n| Any other metric over time, or a month-by-month breakdown | `trend_card` |\n\nEvery card except `trend_card` loads its own data, so pass it the filter and nothing more — you never have to hand a card its figures. That is a statement about the card's **inputs**, not about how many calls you may make: reading the numbers yourself with a `get_*` tool first is how you end up with something worth saying, and on most questions it is expected. See *Saying something about a card*. `trend_card` is the one card you build a series for.\n\n## Two cards in one turn\n\nA few questions have two honest answers, and you can emit both view tools in the **same message**. That costs one inference pass rather than two, and the app tabs them — so it is far cheaper than making the user ask again:\n\n| Question | Cards |\n| --- | --- |\n| \"Anything unusual\", \"any anomalies\" | `transaction_list` with `view: \"unusual\"` + `subscriptions` with `view: \"unusual\"` — a newly added or repriced charge is an anomaly the transaction list cannot see, because it is a change of pattern rather than one charge out of line |\n| \"Where can I cut down\" | `spending_breakdown` + `subscriptions` — recurring charges are the classic thing to cut, categories are the other |\n\n**Everything else is one card**, and \"how am I doing\" is emphatically one: `net_worth_trend` alone. The app opens on the spending breakdown, so pairing it with spending again shows the user what they are already looking at and calls it a second answer. Two cards for a question with one answer buries the answer behind a tab. When you do send two, put `nextSteps` on the first only.\n\n## Comparing periods — prefer bars\n\n**If each point is a period, it is a bar.** One point per month, quarter or year is a set of discrete buckets sitting next to each other — draw them as bars. A line means a continuously sampled value, and the only thing here that is continuous is a running balance. `chartStyle` defaults to `\"line\"`, so a bar chart needs it passed explicitly; forget it and \"housing over the last 6 months\" comes back as a line through six monthly totals, which claims a smooth journey between numbers that were each a whole month's spending.\n\nThe user's wording does not decide this — the shape of the data does. \"Trend\", \"over time\" and \"history\" are all bars when the points are months.\n\nAnything phrased as \"over the last 3 / 6 / 12 months\", \"month by month\", or \"compare my months\" is a **bar chart of periods**, not a list.\n\n- \"How much did I spend on sushi over the last 6 months\" → `trend_card` with `chartStyle: \"bar\"` and one point per month. Do **not** use `transaction_list` for this; it lists individual purchases, which is not the question.\n- \"Compare my net worth this year to last year\" → `net_worth_trend` with `chartStyle: \"bar\"` and `groupBy: \"year\"`. `groupBy` also takes `month` and `quarter`; each bar is that period's closing balance.\n\nWindows are the same everywhere: `7d`, `30d`, `mtd`, `lastMonth`, `3mo`, `6mo`, `ytd`, `1y`, `all`, or `startDate`/`endDate` as `YYYY-MM-DD`. Default to the most recent period unless the user names one.\n\n## What drove a change in net worth\n\nNet worth here is accumulated cash flow: over any window the change and `saved` (income minus spending) are the same figure to within a few percent. So \"what drove it\", \"why is it up\", \"where did the growth come from\" are questions about **spending categories**.\n\nThey are never about accounts. The account mix is a fixed proportion of the total — the brokerage is 64% of assets in every window, whatever happened — so \"growth came from the brokerage\" is true by construction, says nothing, and reads as insight. Do not attribute a change to an account.\n\n**Answer with a `trend_card`, not with `spending_breakdown`.** This question is about a *change*, and the spending card shows a period's total — rendering it here repeats the card the app already gives for \"where did my money go\", and reads as a non-answer. Fetch `get_net_worth` and `get_spending_breakdown` for the window in the same turn (both at once, not one after the other), then build:\n\n- `title` naming what moved — \"What moved your net worth\" — with `current`, `start`, `change`, `change_pct` straight from `get_net_worth`.\n- `points` from that same call at a coarse `groupBy` (`year`, or `month` within a single year) so the card is a handful of bars rather than fifty. `chartStyle: \"bar\"` whenever periods are being compared.\n- `items`: the **top five** spending categories, biggest first, `value` its amount and `detail` how it moved (\"+22% vs last year\"). This is the part that answers the question — the money went somewhere, and these are the somewheres. Stop at five: the tail is a few hundred dollars against a headline in the thousands, and every extra row is one you type out a character at a time while the user waits. **Omit `prompts`** — the card builds each row's drill-down from its name.\n- `note`: the headline in one sentence — the change, that it is essentially all money saved, and which category took the largest bite.\n\nFall back to `spending_breakdown` with `highlight` only if you have no series to build the card from.\n\n## Saying something about a card\n\nBecause each card loads its own data, **you do not see the figures it displays** — never quote a number you have not fetched.\n\nWhich way you go depends on what was asked, and the two cases are genuinely different:\n\n- **A pure lookup** — \"show me my subscriptions\", \"list my transactions\". A named thing, fetched and shown, with no movement to report. Render it and stop: fetch nothing, say nothing.\n- **Anything with a number worth reporting** — and this is nearly everything: \"where did my money go this month\", \"what did I spend on Shopping\", \"where can I cut down\", \"what's unusual\", \"why is it higher\", \"how am I doing\". Fetch the cheap shape first: `limit: 0` on transactions returns the total, the change against the prior period, the biggest items and `standouts` without a single row; `summary: true` does the same for spending and net worth. Then say something true.\n\nTelling them apart: a question about **what was spent** always has a story, because the interesting part is never the total — it is whether it moved, and what moved it. You read the figures so you can say \"Shopping is the outlier this month, driven by one large Amazon order\"; you do not read them in order to recite them back. \"Here's your spending:\" is a label on a card that already has a title.\n\n**A breakdown is not a lookup.** \"Where did my money go this month\" reads like a request to display something, and it is not: the categories are on the card, but the total, how it compares with last month, and which category moved most are not — and they are the whole point of asking. It is the first question the app answers, so a reply of \"here's the breakdown\" is the app's first impression of itself. Fetch, then say which way the month is going and what is driving it.\n\n**When the numbers hand you something, follow it up.** If the change is large (roughly a quarter or more), or `standouts` came back non-empty, name the cause in your reply *and* offer `exclamationmark.triangle.fill|Any suspicious charges?` as one of the `nextSteps` — the user is one tap from the charges behind the jump instead of having to think to ask.\n\n**The note is not your reply.** They are different jobs and must not carry the same sentence. Your reply is what you would say to the user. The `note` is analysis, pinned to the figures inside the card: what drove a change, what is worth watching, what the chart makes you look twice at. If the note would restate the reply, it has not earned its place — sharpen it into something the reply does not contain, or leave it out.\n\nIf a question is outside personal finance, say this server only covers Vault and steer back.\n",
+      "tools": [
+        {
+          "name": "get_net_worth",
+          "title": "get_net_worth",
+          "description": "Net worth history + account balances. Numbers to reason with — to display, use net_worth_trend.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "endDate": {
+                "description": "Range end, YYYY-MM-DD. Defaults to today.",
+                "type": "string"
+              },
+              "groupBy": {
+                "default": "auto",
+                "description": "Granularity of the returned series. Each point carries that period's CLOSING balance. 'auto' picks a readable granularity for the span; set it explicitly to compare periods against each other — 'year' over a two-year range gives one point per year, 'month' gives one per month.",
+                "enum": ["auto", "day", "week", "month", "quarter", "year"],
+                "type": "string"
+              },
+              "period": {
+                "default": "1y",
+                "description": "How far back the trend goes. Ignored when startDate/endDate are given.",
+                "enum": ["7d", "30d", "mtd", "lastMonth", "3mo", "6mo", "ytd", "1y", "all"],
+                "type": "string"
+              },
+              "startDate": {
+                "description": "Range start, YYYY-MM-DD. Defaults to a year before endDate.",
+                "type": "string"
+              },
+              "summary": {
+                "default": false,
+                "description": "Omit the `points` series and return only the headline figures and accounts. Use this when you want the numbers to comment on rather than to chart — it is a fraction of the size of a full result.",
+                "type": "boolean"
+              }
+            },
+            "required": [],
+            "type": "object"
+          },
+          "outputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "accounts": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "balance": {
+                      "type": "number"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "type": {
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "change": {
+                "type": "number"
+              },
+              "change_pct": {
+                "type": "number"
+              },
+              "current": {
+                "type": "number"
+              },
+              "endDate": {
+                "type": "string"
+              },
+              "groupBy": {
+                "type": "string"
+              },
+              "income": {
+                "type": "number"
+              },
+              "period": {
+                "type": "string"
+              },
+              "periodLabel": {
+                "type": "string"
+              },
+              "points": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "full": {
+                      "type": "string"
+                    },
+                    "label": {
+                      "type": "string"
+                    },
+                    "value": {
+                      "type": "number"
+                    }
+                  },
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "saved": {
+                "type": "number"
+              },
+              "spending": {
+                "type": "number"
+              },
+              "start": {
+                "type": "number"
+              },
+              "startDate": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "get_net_worth"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:6e882d460ec3fce8d5b9c3e951d05406348257e84875fc4363e51f58fb1a452a"
+        },
+        {
+          "name": "get_spending_breakdown",
+          "title": "get_spending_breakdown",
+          "description": "Categorized spending + prior-period comparison. Numbers to reason with — to display, use spending_breakdown.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "period": {
+                "default": "mtd",
+                "description": "Spending window.",
+                "enum": ["7d", "30d", "mtd", "lastMonth", "3mo", "6mo", "ytd", "1y", "all"],
+                "type": "string"
+              },
+              "summary": {
+                "default": false,
+                "description": "Drop each category's top_merchants list and return only the headline totals and per-category amounts. Use this when you want the numbers to comment on rather than to chart.",
+                "type": "boolean"
+              }
+            },
+            "required": [],
+            "type": "object"
+          },
+          "outputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "comparison": {
+                "additionalProperties": false,
+                "properties": {
+                  "change_pct": {
+                    "type": "number"
+                  },
+                  "prev_period_spend": {
+                    "type": "number"
+                  }
+                },
+                "type": "object"
+              },
+              "groups": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "amount": {
+                      "type": "number"
+                    },
+                    "change_vs_prev": {
+                      "type": "number"
+                    },
+                    "change_vs_prev_pct": {
+                      "type": "number"
+                    },
+                    "icon": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "pct_of_total": {
+                      "type": "number"
+                    },
+                    "top_merchants": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "amount": {
+                            "type": "number"
+                          },
+                          "name": {
+                            "type": "string"
+                          }
+                        },
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "transaction_count": {
+                      "type": "integer"
+                    }
+                  },
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "net": {
+                "type": "number"
+              },
+              "period": {
+                "type": "string"
+              },
+              "periodLabel": {
+                "type": "string"
+              },
+              "total_income": {
+                "type": "number"
+              },
+              "total_spend": {
+                "type": "number"
+              }
+            },
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "get_spending_breakdown"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:8ee618fb32e14b1b3cf5bad17f515f9742c5a8eb135d24ac7eacb9fd60bf9d67"
+        },
+        {
+          "name": "get_subscriptions",
+          "title": "get_subscriptions",
+          "description": "Recurring-charge detection. Numbers to reason with — to display, use the subscriptions card.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "status": {
+                "default": "active",
+                "description": "Which subscriptions to include.",
+                "enum": ["active", "all"],
+                "type": "string"
+              }
+            },
+            "required": [],
+            "type": "object"
+          },
+          "outputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "count": {
+                "type": "integer"
+              },
+              "new_count": {
+                "type": "integer"
+              },
+              "subscriptions": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "amount": {
+                      "type": "number"
+                    },
+                    "cadence": {
+                      "type": "string"
+                    },
+                    "category": {
+                      "type": "string"
+                    },
+                    "is_new": {
+                      "type": "boolean"
+                    },
+                    "monthly_equiv": {
+                      "type": "number"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "next_charge": {
+                      "type": "string"
+                    },
+                    "price_change_pct": {
+                      "type": "number"
+                    },
+                    "status": {
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "total_monthly": {
+                "type": "number"
+              }
+            },
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "get_subscriptions"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:3f5d1398a92e0e5331ba944d68d986e28c5e60a9e7729315d6d43699b9721a7a"
+        },
+        {
+          "name": "get_transactions",
+          "title": "get_transactions",
+          "description": "Raw transactions by category or merchant, ~12 months of history. Numbers to reason with — to display, use transaction_list.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "category": {
+                "description": "Category or plain term to filter by, e.g. 'Food & Dining', 'restaurants', 'rent', 'gas', 'income'. A merchant name here is resolved as a merchant. Omit or leave empty for all categories.",
+                "type": "string"
+              },
+              "endDate": {
+                "description": "Window end, YYYY-MM-DD. Defaults to today.",
+                "type": "string"
+              },
+              "limit": {
+                "default": 20,
+                "description": "Max transactions to return. Pass 0 for totals and counts only — much cheaper when you need the figures to reason with rather than to list.",
+                "maximum": 200,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "merchant": {
+                "description": "Single store or brand to filter by, e.g. 'Whole Foods', 'Netflix', 'Shell'. Combine with category to narrow further.",
+                "type": "string"
+              },
+              "period": {
+                "default": "mtd",
+                "description": "Time window. Ignored when startDate/endDate are given. The feed covers ~25 months, so a 1y window has a full prior year to compare against.",
+                "enum": ["7d", "30d", "mtd", "lastMonth", "3mo", "6mo", "ytd", "1y", "all"],
+                "type": "string"
+              },
+              "sort": {
+                "default": "recent",
+                "description": "'recent' is newest-first and is what a plain list wants. Use 'largest' for \"my biggest transactions\" — a window can hold hundreds of rows, so date order buries them.",
+                "enum": ["recent", "largest"],
+                "type": "string"
+              },
+              "startDate": {
+                "description": "Window start, YYYY-MM-DD. Defaults to 30 days before endDate.",
+                "type": "string"
+              }
+            },
+            "required": [],
+            "type": "object"
+          },
+          "outputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "category": {
+                "type": "string"
+              },
+              "change_vs_prev_pct": {
+                "type": "number"
+              },
+              "count": {
+                "type": "integer"
+              },
+              "periodLabel": {
+                "type": "string"
+              },
+              "shown": {
+                "type": "integer"
+              },
+              "standouts": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "amount": {
+                      "type": "number"
+                    },
+                    "category": {
+                      "type": "string"
+                    },
+                    "date": {
+                      "type": "string"
+                    },
+                    "merchant": {
+                      "type": "string"
+                    },
+                    "typical": {
+                      "type": "number"
+                    },
+                    "vs_typical_pct": {
+                      "type": "number"
+                    }
+                  },
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "top_items": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    },
+                    "qty": {
+                      "type": "integer"
+                    },
+                    "total": {
+                      "type": "number"
+                    }
+                  },
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "total_spent": {
+                "type": "number"
+              },
+              "transactions": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "account": {
+                      "type": "string"
+                    },
+                    "amount": {
+                      "type": "number"
+                    },
+                    "category": {
+                      "type": "string"
+                    },
+                    "date": {
+                      "type": "string"
+                    },
+                    "items": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "name": {
+                            "type": "string"
+                          },
+                          "price": {
+                            "type": "number"
+                          },
+                          "qty": {
+                            "type": "integer"
+                          },
+                          "total": {
+                            "type": "number"
+                          }
+                        },
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "merchant": {
+                      "type": "string"
+                    },
+                    "vs_typical_pct": {
+                      "type": "number"
+                    }
+                  },
+                  "type": "object"
+                },
+                "type": "array"
+              }
+            },
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "get_transactions"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:4206e1d70b2942827f1903138c29adbb7574b64f9f89804c41bd7d043b6592cc"
+        },
+        {
+          "name": "net_worth_trend",
+          "title": "Net Worth Trend",
+          "description": "Render net_worth_trend: Net worth: current total, change over the period, a trend chart, and the account balances behind it. It loads its own data. To compare periods against each other pass chartStyle:'bar' plus groupBy ('year' for this-year-vs-last-year, 'month' for month-by-month) — each bar is that period's closing balance.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "description": "Net worth: current total, change over the period, a trend chart, and the account balances behind it. It loads its own data. To compare periods against each other pass chartStyle:'bar' plus groupBy ('year' for this-year-vs-last-year, 'month' for month-by-month) — each bar is that period's closing balance.",
+            "properties": {
+              "chartStyle": {
+                "default": "line",
+                "description": "'bar' compares periods against each other as closing balances; 'line' is the continuous history.",
+                "enum": ["line", "bar"],
+                "type": "string"
+              },
+              "endDate": {
+                "default": "",
+                "type": "string"
+              },
+              "groupBy": {
+                "default": "auto",
+                "description": "One bar/point per period, carrying that period's closing balance. Set it to compare periods: 'year' for \"this year vs last year\", 'month' for \"month by month\", 'quarter' for \"by quarter\". Leave auto for a plain trend.",
+                "enum": ["auto", "day", "week", "month", "quarter", "year"],
+                "type": "string"
+              },
+              "nextSteps": {
+                "description": "One short follow-up the user might ask next, in the form icon|question — 'calendar|Show me last month'. Phrase the question the way the user would say it, and take the icon from the table in the app instructions; any other name renders blank. Always supply 2-3. The card itself ignores them.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "note": {
+                "default": "",
+                "description": "Usually omit this. Optional one-line insight rendered inside the card. Only pass it when you ALREADY have the figures in hand from a call you made for another reason — never make an extra tool call just to write a note, because that round trip delays the card itself. When you do add one, say something the card does not already show (what drove a change, what to watch), in one sentence, and never guess a number.",
+                "type": "string"
+              },
+              "period": {
+                "default": "",
+                "description": "Window: 7d, 30d, mtd (this month so far), lastMonth (the whole previous calendar month), 3mo, 6mo, ytd, 1y or all. Ignored when startDate/endDate are given. Defaults to 1y.",
+                "type": "string"
+              },
+              "startDate": {
+                "default": "",
+                "type": "string"
+              }
+            },
+            "required": [],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Net Worth Trend"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "openai/outputTemplate": "ui://metabind/render/G00by8Ue3H7x0Ch0C5sV",
+            "openai/toolInvocation/invoked": "Rendered Net Worth Trend",
+            "openai/toolInvocation/invoking": "Rendering Net Worth Trend",
+            "openai/widgetAccessible": true,
+            "ui": {
+              "resourceUri": "ui://metabind/render/G00by8Ue3H7x0Ch0C5sV"
+            },
+            "ui/resourceUri": "ui://metabind/render/G00by8Ue3H7x0Ch0C5sV"
+          },
+          "digest": "sha256:d53949d3610f53c4b17d74abfff7e0eb10bc2988b3db7132ed8ef5a7172ebe97"
+        },
+        {
+          "name": "spending_breakdown",
+          "title": "Spending Breakdown",
+          "description": "Render spending_breakdown: Spending split by category for a period: a composition bar plus a ranked category list. It loads its own data — pass the period alone for the whole picture, which is what a broad 'where did my money go' question wants. Use highlight only on a follow-up about particular categories; it dims everything else, so on an opening question it hides most of the answer.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "description": "Spending split by category for a period: a composition bar plus a ranked category list. It loads its own data — pass the period alone for the whole picture, which is what a broad 'where did my money go' question wants. Use highlight only on a follow-up about particular categories; it dims everything else, so on an opening question it hides most of the answer.",
+            "properties": {
+              "drillPrompt": {
+                "default": "",
+                "description": "What tapping a category should ask, when the question had an angle worth carrying. Write it as the user would say it and put {category} where the name goes: 'Show me the odd {category} transactions', 'Where can I cut back on {category}?'. Set it when the card answers something pointed — unusual spending, what to cut, why something moved — so the follow-up inherits that instead of resetting to a plain list. Omit it for a broad 'where did my money go', where a plain list is what a tap should give.",
+                "type": "string"
+              },
+              "highlight": {
+                "description": "OMIT THIS unless the user asked about specific categories. Leaving it empty is the normal, correct view: the whole picture, nothing dimmed. A broad opening question — 'where did my money go', 'show me my spending', 'how did I do this month' — wants the whole picture, so pass period alone. Only emphasise on a FOLLOW-UP that is genuinely about particular categories ('what should I cut', 'is dining out of hand', 'why is it higher than last month'), where you name them: ['Food & Dining','Subscriptions']. Everything else then dims and the hero reports their combined total. Matching is forgiving ('dining' finds 'Food & Dining').",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "nextSteps": {
+                "description": "One short follow-up the user might ask next, in the form icon|question — 'calendar|Show me last month'. Phrase the question the way the user would say it, and take the icon from the table in the app instructions; any other name renders blank. Always supply 2-3. The card itself ignores them.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "note": {
+                "default": "",
+                "description": "Usually omit this. Optional one-line insight rendered inside the card. Only pass it when you ALREADY have the figures in hand from a call you made for another reason — never make an extra tool call just to write a note, because that round trip delays the card itself. When you do add one, say something the card does not already show (what drove a change, what to watch), in one sentence, and never guess a number.",
+                "type": "string"
+              },
+              "period": {
+                "default": "mtd",
+                "description": "Window: 7d, 30d, mtd (this month so far), lastMonth (the whole previous calendar month), 3mo, 6mo, ytd, 1y or all.",
+                "type": "string"
+              }
+            },
+            "required": [],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Spending Breakdown"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "openai/outputTemplate": "ui://metabind/render/FRNwwKfW5EFKDOC79WhB",
+            "openai/toolInvocation/invoked": "Rendered Spending Breakdown",
+            "openai/toolInvocation/invoking": "Rendering Spending Breakdown",
+            "openai/widgetAccessible": true,
+            "ui": {
+              "resourceUri": "ui://metabind/render/FRNwwKfW5EFKDOC79WhB"
+            },
+            "ui/resourceUri": "ui://metabind/render/FRNwwKfW5EFKDOC79WhB"
+          },
+          "digest": "sha256:1dde842309f2e384e11aed8dff7e2fb8f75f24197146a6d4111d6ebec11ab2ca"
+        },
+        {
+          "name": "subscriptions",
+          "title": "Subscriptions",
+          "description": "Render subscriptions: Recurring charges: total monthly cost and a row per subscription with its cadence, next charge date, and New / price-increase flags. It loads its own data.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "description": "Recurring charges: total monthly cost and a row per subscription with its cadence, next charge date, and New / price-increase flags. It loads its own data.",
+            "properties": {
+              "nextSteps": {
+                "description": "One short follow-up the user might ask next, in the form icon|question — 'calendar|Show me last month'. Phrase the question the way the user would say it, and take the icon from the table in the app instructions; any other name renders blank. Always supply 2-3. The card itself ignores them.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "note": {
+                "default": "",
+                "description": "Usually omit this. Optional one-line insight rendered inside the card. Only pass it when you ALREADY have the figures in hand from a call you made for another reason — never make an extra tool call just to write a note, because that round trip delays the card itself. When you do add one, say something the card does not already show (what drove a change, what to watch), in one sentence, and never guess a number.",
+                "type": "string"
+              },
+              "status": {
+                "default": "active",
+                "description": "'active' lists current subscriptions; 'all' also includes recently cancelled ones.",
+                "enum": ["active", "all"],
+                "type": "string"
+              },
+              "view": {
+                "default": "all",
+                "description": "Which cut to open on. 'all' is every recurring charge, biggest first — the answer to 'what am I paying for'. 'repriced' is only the ones whose price moved, which is what 'which went up' asks. 'new' is only the recently started. 'unusual' is both of those together, for a general 'anything odd'. Match the cut to the question: a price question answered with the full list makes the user hunt for the answer. The header keeps reporting the full count, so narrowing hides nothing.",
+                "enum": ["all", "unusual", "new", "repriced"],
+                "type": "string"
+              },
+              "views": {
+                "description": "Which cuts to offer as segments. Omit and the card offers All alongside whichever cut you opened on. Pair the specific cut with 'all' so the user can get back to the full picture — ['all','repriced'] for a price question, ['all','new'] for a what's-new one.",
+                "items": {
+                  "enum": ["all", "unusual", "new", "repriced"],
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "required": [],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Subscriptions"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "openai/outputTemplate": "ui://metabind/render/6ybfNM5ZnGmHq2qc4B06",
+            "openai/toolInvocation/invoked": "Rendered Subscriptions",
+            "openai/toolInvocation/invoking": "Rendering Subscriptions",
+            "openai/widgetAccessible": true,
+            "ui": {
+              "resourceUri": "ui://metabind/render/6ybfNM5ZnGmHq2qc4B06"
+            },
+            "ui/resourceUri": "ui://metabind/render/6ybfNM5ZnGmHq2qc4B06"
+          },
+          "digest": "sha256:6a705272ea203023a32d33c302486009cc42b5f56b30c69a29bc0787f1c05c60"
+        },
+        {
+          "name": "transaction_list",
+          "title": "Transaction List",
+          "description": "Render transaction_list: Individual purchases for a category or a merchant: the window total plus the matching transactions. It loads its own data. Plain terms like 'restaurants', 'groceries' or 'gas' resolve to categories; omit both filters for all spending. Do NOT use this when the user asks how much they spent over the last 3, 6 or 12 months — that is a period comparison, so use trend_card with chartStyle:'bar' instead.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "description": "Individual purchases for a category or a merchant: the window total plus the matching transactions. It loads its own data. Plain terms like 'restaurants', 'groceries' or 'gas' resolve to categories; omit both filters for all spending. Do NOT use this when the user asks how much they spent over the last 3, 6 or 12 months — that is a period comparison, so use trend_card with chartStyle:'bar' instead.",
+            "properties": {
+              "category": {
+                "default": "",
+                "description": "Category or plain term, e.g. 'Food & Dining', 'restaurants', 'rent', 'gas'. Omit for all categories.",
+                "type": "string"
+              },
+              "endDate": {
+                "default": "",
+                "description": "Window end, YYYY-MM-DD.",
+                "type": "string"
+              },
+              "limit": {
+                "default": 0,
+                "description": "Max transactions to load. Raise past the default 20 only if the user wants the full list.",
+                "type": "integer"
+              },
+              "merchant": {
+                "default": "",
+                "description": "Single store or brand, e.g. 'Whole Foods', 'Netflix'.",
+                "type": "string"
+              },
+              "nextSteps": {
+                "description": "One short follow-up the user might ask next, in the form icon|question — 'calendar|Show me last month'. Phrase the question the way the user would say it, and take the icon from the table in the app instructions; any other name renders blank. Always supply 2-3. The card itself ignores them.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "note": {
+                "default": "",
+                "description": "Usually omit this. Optional one-line insight rendered inside the card. Only pass it when you ALREADY have the figures in hand from a call you made for another reason — never make an extra tool call just to write a note, because that round trip delays the card itself. When you do add one, say something the card does not already show (what drove a change, what to watch), in one sentence, and never guess a number.",
+                "type": "string"
+              },
+              "period": {
+                "default": "",
+                "description": "Window: 7d, 30d, mtd (this month so far), lastMonth (the whole previous calendar month), 3mo, 6mo, ytd, 1y or all. Ignored when startDate/endDate are given. Defaults to mtd.",
+                "type": "string"
+              },
+              "startDate": {
+                "default": "",
+                "description": "Window start, YYYY-MM-DD.",
+                "type": "string"
+              },
+              "view": {
+                "default": "recent",
+                "description": "Which cut of the window to open on. 'recent' is newest-first, the plain list. 'largest' leads with the biggest charges. 'unusual' shows only the charges well above what that merchant or category normally costs — this is the answer to \"anything odd this month\", not a spending breakdown. The user can switch between the offered cuts on the card without asking again, so pick the one that answers the question and leave the rest to them. Use `views` to change which cuts are offered.",
+                "enum": ["recent", "largest", "unusual"],
+                "type": "string"
+              },
+              "views": {
+                "description": "Which cuts to offer as segments on the card. Omit for all three, which is usually right — the user can then explore without asking again. Narrow it only when a cut would be meaningless for what was asked: a single-merchant list has little to call unusual, and a one-week window has little to rank. Listing a single cut drops the control entirely and renders a plain list, so use that when the question has exactly one sensible answer.",
+                "items": {
+                  "enum": ["recent", "largest", "unusual"],
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "required": [],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Transaction List"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "openai/outputTemplate": "ui://metabind/render/odW75D9oJpH781J4brvd",
+            "openai/toolInvocation/invoked": "Rendered Transaction List",
+            "openai/toolInvocation/invoking": "Rendering Transaction List",
+            "openai/widgetAccessible": true,
+            "ui": {
+              "resourceUri": "ui://metabind/render/odW75D9oJpH781J4brvd"
+            },
+            "ui/resourceUri": "ui://metabind/render/odW75D9oJpH781J4brvd"
+          },
+          "digest": "sha256:e04cfec4b029ff5ab39ef7b21f7da59a18062a332817e232c6410e95204093b5"
+        },
+        {
+          "name": "trend_card",
+          "title": "Trend Card",
+          "description": "Render trend_card: Any metric over time that has no dedicated card — one category's spend by month, a series you computed. Points are {label, value} in display order. Set upIsGood=false for cost-like metrics. Use chartStyle:'bar' whenever the user compares periods — month by month, or over the last 3/6/12 months; give each point a `series` name (repeating the label once per series) to stack them with a legend. Pass `items` to list the composition behind the number.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "description": "Any metric over time that has no dedicated card — one category's spend by month, a series you computed. Points are {label, value} in display order. Set upIsGood=false for cost-like metrics. Use chartStyle:'bar' whenever the user compares periods — month by month, or over the last 3/6/12 months; give each point a `series` name (repeating the label once per series) to stack them with a legend. Pass `items` to list the composition behind the number.",
+            "properties": {
+              "change": {
+                "default": 0,
+                "description": "The change over the period, in the same unit as `current`. Send it together with `start` whenever you have them: the card leads with this figure, and left out it has to work back from `change_pct`, which is close but not the real number.",
+                "type": "number"
+              },
+              "change_pct": {
+                "default": 0,
+                "type": "number"
+              },
+              "chartStyle": {
+                "default": "line",
+                "description": "'bar' draws discrete bars on a labelled x axis — better for comparing periods against each other, and the only style that stacks series. 'line' is the continuous trend.",
+                "enum": ["line", "bar"],
+                "type": "string"
+              },
+              "current": {
+                "default": 0,
+                "type": "number"
+              },
+              "items": {
+                "description": "Optional rows under the chart — the composition behind the number (accounts behind a net worth, categories behind a month's spend). Each is { name, detail, value, color?, prompts? }. `color` is a named colour for the dot ('blue', 'green', …); omit it and rows are coloured in order. `prompts` are follow-up questions offered when the row is tapped — each string is shown as the menu label AND sent to the assistant verbatim, so keep them short and self-contained ('How has my Brokerage changed?', not 'changed?'). OMIT `prompts` unless a row needs something its name cannot imply: left out, the card builds its own drill-down from `name`, which saves you writing the same sentence once per row.",
+                "items": {
+                  "properties": {
+                    "color": {
+                      "type": "string"
+                    },
+                    "detail": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "prompts": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "value": {
+                      "type": "number"
+                    }
+                  },
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "nextSteps": {
+                "description": "One short follow-up the user might ask next, in the form icon|question — 'calendar|Show me last month'. Phrase the question the way the user would say it, and take the icon from the table in the app instructions; any other name renders blank. Always supply 2-3. The card itself ignores them.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "note": {
+                "default": "",
+                "description": "Usually omit this. Optional one-line insight rendered inside the card. Only pass it when you ALREADY have the figures in hand from a call you made for another reason — never make an extra tool call just to write a note, because that round trip delays the card itself. When you do add one, say something the card does not already show (what drove a change, what to watch), in one sentence, and never guess a number.",
+                "type": "string"
+              },
+              "periodLabel": {
+                "default": "Past 12 months",
+                "type": "string"
+              },
+              "points": {
+                "items": {
+                  "properties": {
+                    "label": {
+                      "type": "string"
+                    },
+                    "series": {
+                      "type": "string"
+                    },
+                    "value": {
+                      "type": "number"
+                    }
+                  },
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "start": {
+                "default": 0,
+                "type": "number"
+              },
+              "title": {
+                "default": "Trend",
+                "type": "string"
+              },
+              "upIsGood": {
+                "default": true,
+                "description": "false for cost-like metrics: an increase renders red, a decrease green.",
+                "type": "boolean"
+              },
+              "valueFormat": {
+                "default": "currency",
+                "description": "How the hero value and change are formatted.",
+                "enum": ["currency", "number"],
+                "type": "string"
+              },
+              "valueSuffix": {
+                "default": "",
+                "description": "Optional unit appended to values, e.g. ' subs' or '/mo'.",
+                "type": "string"
+              }
+            },
+            "required": [],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Trend Card"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "openai/outputTemplate": "ui://metabind/render/6aVV4rQSArw84zns8PEP",
+            "openai/toolInvocation/invoked": "Rendered Trend Card",
+            "openai/toolInvocation/invoking": "Rendering Trend Card",
+            "openai/widgetAccessible": true,
+            "ui": {
+              "resourceUri": "ui://metabind/render/6aVV4rQSArw84zns8PEP"
+            },
+            "ui/resourceUri": "ui://metabind/render/6aVV4rQSArw84zns8PEP"
+          },
+          "digest": "sha256:5338de4496b09d607698c86a9c98b8672e516654657b82121fa94c4c8075be9d"
+        }
+      ],
+      "resources": [
+        {
+          "uri": "ui://metabind/render/G00by8Ue3H7x0Ch0C5sV",
+          "name": "Renderer: net_worth_trend",
+          "description": "Client-side renderer for NetWorthTrend layout using package 0.0.49",
+          "mimeType": "text/html;profile=mcp-app",
+          "meta": {
+            "openai/ui": {
+              "availableDisplayModes": ["inline", "fullscreen"],
+              "preferredDisplayMode": "inline"
+            },
+            "openai/widgetCSP": {
+              "connect_domains": ["https://cdn.metabind.ai"],
+              "resource_domains": ["https://cdn.metabind.ai"]
+            },
+            "ui": {
+              "csp": {
+                "connectDomains": ["https://cdn.metabind.ai"],
+                "resourceDomains": ["https://cdn.metabind.ai"]
+              }
+            }
+          },
+          "digest": "sha256:75366384c03646a38c60803e16ec2c11993a3d67bf0a61808bbd5fe7673ad155"
+        },
+        {
+          "uri": "ui://metabind/render/FRNwwKfW5EFKDOC79WhB",
+          "name": "Renderer: spending_breakdown",
+          "description": "Client-side renderer for SpendingBreakdown layout using package 0.0.49",
+          "mimeType": "text/html;profile=mcp-app",
+          "meta": {
+            "openai/ui": {
+              "availableDisplayModes": ["inline", "fullscreen"],
+              "preferredDisplayMode": "inline"
+            },
+            "openai/widgetCSP": {
+              "connect_domains": ["https://cdn.metabind.ai"],
+              "resource_domains": ["https://cdn.metabind.ai"]
+            },
+            "ui": {
+              "csp": {
+                "connectDomains": ["https://cdn.metabind.ai"],
+                "resourceDomains": ["https://cdn.metabind.ai"]
+              }
+            }
+          },
+          "digest": "sha256:555815f8ea3d945592b8eb838bd0e462cbda2031c50c361be3ea2b3a91964ee2"
+        },
+        {
+          "uri": "ui://metabind/render/6ybfNM5ZnGmHq2qc4B06",
+          "name": "Renderer: subscriptions",
+          "description": "Client-side renderer for Subscriptions layout using package 0.0.49",
+          "mimeType": "text/html;profile=mcp-app",
+          "meta": {
+            "openai/ui": {
+              "availableDisplayModes": ["inline", "fullscreen"],
+              "preferredDisplayMode": "inline"
+            },
+            "openai/widgetCSP": {
+              "connect_domains": ["https://cdn.metabind.ai"],
+              "resource_domains": ["https://cdn.metabind.ai"]
+            },
+            "ui": {
+              "csp": {
+                "connectDomains": ["https://cdn.metabind.ai"],
+                "resourceDomains": ["https://cdn.metabind.ai"]
+              }
+            }
+          },
+          "digest": "sha256:21840f24c951b71ffd47bcb694ac7ef425f5ae7b0d5d618376103f47c848f6fc"
+        },
+        {
+          "uri": "ui://metabind/render/odW75D9oJpH781J4brvd",
+          "name": "Renderer: transaction_list",
+          "description": "Client-side renderer for TransactionList layout using package 0.0.49",
+          "mimeType": "text/html;profile=mcp-app",
+          "meta": {
+            "openai/ui": {
+              "availableDisplayModes": ["inline", "fullscreen"],
+              "preferredDisplayMode": "inline"
+            },
+            "openai/widgetCSP": {
+              "connect_domains": ["https://cdn.metabind.ai"],
+              "resource_domains": ["https://cdn.metabind.ai"]
+            },
+            "ui": {
+              "csp": {
+                "connectDomains": ["https://cdn.metabind.ai"],
+                "resourceDomains": ["https://cdn.metabind.ai"]
+              }
+            }
+          },
+          "digest": "sha256:391a5aba747f0f59dc92a15adf57ffcd7d554ae7867c1f4827de1b8be301f526"
+        },
+        {
+          "uri": "ui://metabind/render/6aVV4rQSArw84zns8PEP",
+          "name": "Renderer: trend_card",
+          "description": "Client-side renderer for TrendCard layout using package 0.0.49",
+          "mimeType": "text/html;profile=mcp-app",
+          "meta": {
+            "openai/ui": {
+              "availableDisplayModes": ["inline", "fullscreen"],
+              "preferredDisplayMode": "inline"
+            },
+            "openai/widgetCSP": {
+              "connect_domains": ["https://cdn.metabind.ai"],
+              "resource_domains": ["https://cdn.metabind.ai"]
+            },
+            "ui": {
+              "csp": {
+                "connectDomains": ["https://cdn.metabind.ai"],
+                "resourceDomains": ["https://cdn.metabind.ai"]
+              }
+            }
+          },
+          "digest": "sha256:c74b295f8b45c5f62c68fe6dd066026866452e76638d02486cde8f6a6a2b7bcc"
+        }
+      ],
+      "digest": "sha256:998de85c22d7b73ecb584dabc52b7d6f123a98df18aba4395a14c15762b74910"
+    }
+  }
+}

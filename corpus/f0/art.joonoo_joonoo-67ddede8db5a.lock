@@ -1,0 +1,324 @@
+{
+  "lockfileVersion": 2,
+  "subjects": {
+    "art.joonoo/joonoo": {
+      "kind": "mcp-server",
+      "source": {
+        "client": "manual",
+        "file": "registry.modelcontextprotocol.io"
+      },
+      "transport": {
+        "type": "http",
+        "url": "https://joonoo.art/api/mcp"
+      },
+      "protocol": {
+        "era": "legacy",
+        "version": "2025-11-25"
+      },
+      "serverInfo": {
+        "name": "joonoo",
+        "version": "1.0.0"
+      },
+      "capabilities": {
+        "tools": {
+          "listChanged": true
+        }
+      },
+      "instructions": "You are connected to Joonoo, a personalized children's book maker. This connector creates a FREE illustrated family cover in this conversation, then offers to turn it into a full personalized storybook.\n\n## End-to-end flow\n\n1. Call `list_cover_themes` and let the user pick a theme (or suggest one based on what they tell you about their family).\n2. Ask for the user's email and a title for their cover, then call `start_family_cover` with { email, themeId, title }. It returns a `slug`, an `uploadUrl`, a private `ownerKey` (keep it; never show it to the user; pass it to every `check_cover_status` call as { slug, ownerKey }), and `nextSteps` text — relay the upload link to the user verbatim (read it aloud / paste it) so they can open it on their phone or computer and upload a family photo. Tell them a verification code is being emailed to them.\n3. When the user reports the code, call `verify_cover_email` with { slug, code }.\n   - If the code has expired, the error will say so explicitly — call `resend_cover_code` with { slug } to send a fresh one, then ask the user to check email again and retry verification. This is the NORMAL case, not a rare edge case: the photo-upload device-hop routinely takes longer than the 10-minute code window.\n4. Generation takes about 60 seconds once BOTH the email is verified AND the photo is uploaded (whichever finishes second kicks it off). Do not tight-loop `check_cover_status`. Only poll it when the user actually asks \"is it ready yet?\" or similar — otherwise wait for them to ask.\n5. When `check_cover_status` reports `status: \"ready\"`, the response includes the cover image itself so it renders inline in the conversation — show it to the user as the reveal moment; that's the product.\n\n## After the reveal\n\nOnce the cover is revealed, present the full-book option: tell the user they can turn this cover into a complete personalized storybook at the `makeBookUrl` returned by `check_cover_status`, and lead with that link/CTA. Joonoo does not currently sell merchandise (mugs, posters, prints of the cover) — do not offer it; if the user asks, say it isn't available right now.\n\n## Other notes\n\n- Tools never return or ask for payment details.\n- If something fails, relay the tool's error message to the user in plain language rather than inventing your own explanation.\n\n## Comics\n\nTo make a comic: create_comic_preview → give the user uploadUrl → poll get_comic_status until preview_ready → show them the link → purchase_comic for a Stripe checkout link. Keep ownerKey private. purchase_comic buys the digital PDF only; if the user wants a printed comic, tell them printed copies can be ordered on the website at the comic link. Comics made through this connector are 8 or 16 pages; the 24-page square comic (with an 8×8 hardcover option) is ordered on the website, not here.\n",
+      "tools": [
+        {
+          "name": "check_cover_status",
+          "title": "Check free cover status",
+          "description": "Check the status of a free family cover request. When ready, the response includes the cover image itself so it renders inline in the conversation, plus a shareUrl. Pass the ownerKey that start_family_cover returned to also get makeBookUrl for the full-book upsell (only the creator of the cover gets it).",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "ownerKey": {
+                "maxLength": 200,
+                "type": "string"
+              },
+              "slug": {
+                "pattern": "^[A-Za-z0-9]{12}$",
+                "type": "string"
+              }
+            },
+            "required": ["slug"],
+            "type": "object"
+          },
+          "annotations": {
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:e62c811a1be1e511de87e5e3eac9a347b5d27232c2da3e3a9fe62b470c67f31c"
+        },
+        {
+          "name": "create_comic_preview",
+          "title": "Create a personalized comic",
+          "description": "Start a personalized comic starring the user's family (1-4 heroes). Returns an uploadUrl for the user to upload a family photo (with every hero in it), a private ownerKey, and nextSteps. List heroes in the order they stand in the photo, from left to right. An 8-page comic is offered only in lower-income countries; elsewhere (or if unsure) the comic may be made at 16 pages. The preview is free; the full comic is a digital PDF bought with purchase_comic.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "colorMode": {
+                "enum": ["full-color", "screentone"],
+                "type": "string"
+              },
+              "heroes": {
+                "description": "The heroes (the first is the main character). List heroes in the order they stand in the photo, from left to right.",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "age": {
+                      "maximum": 99,
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "gender": {
+                      "enum": ["girl", "boy", "woman", "man", "person"],
+                      "type": "string"
+                    },
+                    "name": {
+                      "maxLength": 40,
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": ["name"],
+                  "type": "object"
+                },
+                "maxItems": 4,
+                "minItems": 1,
+                "type": "array"
+              },
+              "language": {
+                "description": "Comic language code, one of: en, es, fr, de, it, pt, nl, sv, da, no, fi. Defaults to en.",
+                "type": "string"
+              },
+              "pageCount": {
+                "enum": [8, 16],
+                "type": "number"
+              },
+              "storyIdea": {
+                "maxLength": 500,
+                "type": "string"
+              },
+              "subStyle": {
+                "enum": ["shonen", "shojo", "chibi", "kodomo", "superhero", "cartoon", "european"],
+                "type": "string"
+              },
+              "title": {
+                "maxLength": 80,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": ["heroes", "pageCount", "subStyle", "title"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "openWorldHint": true,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:15bdb478c4901ffa95c1cf95fb67d9fd8dbfbbea5915636c0a892024a1c37e59"
+        },
+        {
+          "name": "get_comic_status",
+          "title": "Check comic status",
+          "description": "Check a comic started with create_comic_preview. Pass the slug and the private ownerKey. Returns status (awaiting_photo, creating_preview, preview_ready, drawing, ready or failed), a link to view the comic once it exists, and nextSteps.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "ownerKey": {
+                "maxLength": 200,
+                "type": "string"
+              },
+              "slug": {
+                "pattern": "^[A-Za-z0-9]{12}$",
+                "type": "string"
+              }
+            },
+            "required": ["ownerKey", "slug"],
+            "type": "object"
+          },
+          "annotations": {
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:a9203368f57ac9e18f3fa1e29d784616d41b6c67cb1175a7eadbea81e50a30fa"
+        },
+        {
+          "name": "list_cover_themes",
+          "title": "List cover themes",
+          "description": "List the illustrated themes available for a free family cover (e.g. Superhero Family, Space Adventure). Use this to help the user pick a theme before calling start_family_cover.",
+          "inputSchema": {
+            "properties": {},
+            "type": "object"
+          },
+          "annotations": {
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:26d199c6b2954471ef72b6823eb7c2cab0006c83bf50611c423acf99d532329c"
+        },
+        {
+          "name": "purchase_comic",
+          "title": "Buy the full comic",
+          "description": "Buy the full personalized comic (digital PDF, emailed) once get_comic_status reports preview_ready. Pass slug, ownerKey and the email the PDF should go to. Returns a Stripe checkoutUrl for the user to pay in their own browser — this tool never sees card details. This tool buys the digital PDF only; printed copies can be ordered on the website.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "email": {
+                "format": "email",
+                "type": "string"
+              },
+              "ownerKey": {
+                "maxLength": 200,
+                "type": "string"
+              },
+              "slug": {
+                "pattern": "^[A-Za-z0-9]{12}$",
+                "type": "string"
+              }
+            },
+            "required": ["email", "ownerKey", "slug"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "openWorldHint": true,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:de2feafa21db273fff17101dddddeb562167d89625978866afd98adbaeed29ac"
+        },
+        {
+          "name": "resend_cover_code",
+          "title": "Resend cover verification code",
+          "description": "Re-send a fresh 6-digit verification code for a pending free cover (the previous code expired or was never received). Use this whenever verify_cover_email reports an expired code.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "slug": {
+                "pattern": "^[A-Za-z0-9]{12}$",
+                "type": "string"
+              }
+            },
+            "required": ["slug"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "openWorldHint": true,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:34f76db1978eb057d0b4b7aa3e4a837075b21dbe9f1619781ec05d863894788e"
+        },
+        {
+          "name": "start_family_cover",
+          "title": "Start a free family cover",
+          "description": "Start generating a free illustrated family cover. Validates the title, creates the cover request, and returns an uploadUrl (a photo-upload link to relay to the user) plus nextSteps guidance. A verification code is emailed to the user separately.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "email": {
+                "format": "email",
+                "type": "string"
+              },
+              "themeId": {
+                "type": "string"
+              },
+              "title": {
+                "type": "string"
+              }
+            },
+            "required": ["email", "themeId", "title"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "openWorldHint": true,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:4d2901af1fd1e2a6ce7879d2d1fd9a8fa4e910797698504a0a20a374f1015b94"
+        },
+        {
+          "name": "verify_cover_email",
+          "title": "Verify cover email code",
+          "description": "Verify the 6-digit code the user received by email for their free cover request. On success this may kick off generation (if the photo has already been uploaded).",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "code": {
+                "pattern": "^\\d{6}$",
+                "type": "string"
+              },
+              "slug": {
+                "pattern": "^[A-Za-z0-9]{12}$",
+                "type": "string"
+              }
+            },
+            "required": ["code", "slug"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:dfc70df9a3cff1f1aca93896e4f5d979248a46305f6ac9e205b635c69a15b35d"
+        }
+      ],
+      "digest": "sha256:be67270342d324036928edf64ac8017f9885a98c39cab2739fd5be38a4a2ccee"
+    }
+  }
+}

@@ -1,0 +1,1525 @@
+{
+  "lockfileVersion": 2,
+  "subjects": {
+    "com.layerhop/mcp": {
+      "kind": "mcp-server",
+      "source": {
+        "client": "manual",
+        "file": "registry.modelcontextprotocol.io"
+      },
+      "transport": {
+        "type": "http",
+        "url": "https://mcp.layerhop.com/mcp"
+      },
+      "protocol": {
+        "era": "legacy",
+        "version": "2025-11-25"
+      },
+      "serverInfo": {
+        "name": "layerhop",
+        "title": "LayerHop",
+        "version": "0.9.0"
+      },
+      "capabilities": {
+        "completions": {},
+        "prompts": {
+          "listChanged": true
+        },
+        "resources": {
+          "listChanged": true
+        },
+        "tools": {
+          "listChanged": true
+        }
+      },
+      "instructions": "LayerHop finds the best-priced route for cross-chain and same-chain token swaps (EVM chains and Solana) across many liquidity providers. The LayerHop MCP server holds no private keys and never signs or broadcasts transactions.\n\nAmounts in tool inputs are HUMAN decimal strings in the token's own units (\"100\" = 100 USDC, \"0.05\" = 0.05 ETH), never base units. Outputs show human amounts; fields named *BaseUnits are integers in the token's smallest unit.\n\nSafe workflow: list_chains / list_tokens if unsure -> get_quote -> show the user output, minimum received, every fee and the ETA -> get explicit confirmation -> prefer giving the user the swapLink (or get_swap_link) so they review and sign in their own wallet on layerhop.com. Only use build_transaction when the user has their own signer and asks for raw transaction data; never ask for or accept private keys or seed phrases.\n\nBefore a user buys or receives a token that is unverified or unfamiliar, call get_token_risk and show any caution or danger reasons. When get_quote fails with NO_ROUTE, the error may list alternatives that do quote (another destination or source token, or two steps through a hub): offer them, never switch silently. Gasless quotes (typed data) and Tron transactions can't be signed or completed through this server: give the user the swap link.\n\nLimit orders (create_limit_order and friends) return UNSIGNED transactions (Solana) or EIP-712 typed data to sign (EVM, CoW Protocol): only the maker's own wallet signs them; submit_limit_order only relays an already-made signature.\n\nDeposit addresses (create_deposit_address and friends, API key required) let a user swap or bridge by just sending a token to an address. When you show one, always tell the user: send ONLY that token on that chain (anything else may be lost), at least $1 worth, and refunds go to refundTo, which must be their own address, never an exchange deposit address. Test-key addresses are fake: never send real funds; use simulate_deposit.",
+      "tools": [
+        {
+          "name": "build_transaction",
+          "title": "Build the unsigned transaction for a quote",
+          "description": "Turn a quoteId from get_quote into the UNSIGNED transaction the user's own wallet must sign: EVM {chainId, to, data, value in wei, optional ERC-20 approval to send first} or Solana {serializedTx base64}. Includes plain-language signing steps. The LayerHop MCP server holds no private keys and never signs or broadcasts transactions. Only use this when the user has their own signer and explicitly wants raw transaction data, after they confirmed the quote; otherwise give them the swap link.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "quoteId": {
+                "description": "quoteId from get_quote (starts with \"q_\"). Quotes expire after a short time (see expiresAt).",
+                "pattern": "^q_",
+                "type": "string"
+              }
+            },
+            "required": ["quoteId"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:04614e61efcd89282bd346b522e682526a493c42982e0dcaca07ae6a77778c45"
+        },
+        {
+          "name": "cancel_limit_order",
+          "title": "Cancel a limit order (unsigned)",
+          "description": "Cancel an open limit order: returns the UNSIGNED cancel transaction (Solana) or the cancellation typed data (EVM, no gas) for the maker's wallet to sign, then submit_limit_order. An order that was never submitted is cancelled at once (nothing to sign). Confirm with the user first. The LayerHop MCP server holds no private keys and never signs or broadcasts transactions.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "description": "Limit order id (starts with \"lo_\").",
+                "pattern": "^lo_",
+                "type": "string"
+              }
+            },
+            "required": ["id"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": true,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:448c5f308bc1287a85c9f4a83fc8163c444ad5bdd0a8cce3d5423d3286be295b"
+        },
+        {
+          "name": "create_deposit_address",
+          "title": "Create a deposit address",
+          "description": "Create an address the user sends tokens to; every deposit is swapped/bridged and delivered as toToken on toChain to recipient. No wallet connection or signing needed. Non-custodial: the address belongs to the liquidity provider (Relay), LayerHop never holds funds. Tell the user: send ONLY srcToken on srcChain to the address (other tokens or chains may be lost for good), at least $1 worth; refundTo must be the user's own address on srcChain, never an exchange (CEX) deposit address. Needs a LayerHop API key; test keys (lh_test_) give a fake sandbox address that must never receive real funds. The LayerHop MCP server holds no private keys and never signs or broadcasts transactions.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "amount": {
+                "description": "HUMAN units of fromToken (\"25\" = 25 USDC). Required when reusable is false (the exact amount to send); otherwise only sizes the estimate. Minimum worth $1.",
+                "type": ["string", "number"]
+              },
+              "fromChain": {
+                "description": "Source (deposit) chain: slug (\"base\", \"solana\", \"ethereum\", \"arbitrum\"...) or numeric chain id (Solana is 7565164). See list_chains.",
+                "type": ["string", "number"]
+              },
+              "fromToken": {
+                "description": "The ONLY token the user may send to the address (source) token: symbol from list_tokens (\"USDC\", \"ETH\", \"SOL\") or the token contract address / SPL mint. Use \"native\" for the chain's gas coin.",
+                "minLength": 1,
+                "type": "string"
+              },
+              "fromTokenDecimals": {
+                "description": "Only needed when fromToken is an address that is not in list_tokens: the token's decimals (e.g. 6 for USDC, 18 for most ERC-20s).",
+                "maximum": 36,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "label": {
+                "description": "Your reference for this address (1-64 chars), filterable in list_deposit_addresses.",
+                "maxLength": 64,
+                "minLength": 1,
+                "type": "string"
+              },
+              "metadata": {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "description": "Up to 20 string key-value pairs stored on the address.",
+                "type": "object"
+              },
+              "recipient": {
+                "description": "Address that receives toToken on toChain.",
+                "minLength": 1,
+                "type": "string"
+              },
+              "refundTo": {
+                "description": "The user's OWN address on fromChain for refunds. NEVER an exchange (CEX) deposit address: refunds never go back to an exchange.",
+                "minLength": 1,
+                "type": "string"
+              },
+              "reusable": {
+                "description": "true (default): reusable for this route with any amount. false: one-time address for exactly `amount`.",
+                "type": "boolean"
+              },
+              "toChain": {
+                "description": "Destination chain: slug (\"base\", \"solana\", \"ethereum\", \"arbitrum\"...) or numeric chain id (Solana is 7565164). See list_chains.",
+                "type": ["string", "number"]
+              },
+              "toToken": {
+                "description": "Token to deliver (destination) token: symbol from list_tokens (\"USDC\", \"ETH\", \"SOL\") or the token contract address / SPL mint. Use \"native\" for the chain's gas coin.",
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": ["fromChain", "fromToken", "recipient", "refundTo", "toChain", "toToken"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": false,
+            "openWorldHint": true,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:e6d0177a2f66c68061f624944b00d27c4fcf263afc005e69adc5421ea881d26c"
+        },
+        {
+          "name": "create_limit_order",
+          "title": "Create a limit order (unsigned)",
+          "description": "Build a limit order: sell sellAmount of sellToken once the market gives at least minReceive of buyToken. Solana (default, Jupiter Trigger): returns an UNSIGNED transaction; LayerHop's fee applies when buyToken is SOL, USDC or USDT. EVM chains with CoW Protocol (Ethereum, Arbitrum, Base, BNB Chain, Polygon, Avalanche, Gnosis, Linea, Plasma, Ink): returns EIP-712 typed data plus the token approval it needs; sellToken must be an ERC-20. Then the maker's own wallet signs and you call submit_limit_order. Worth at least $5. The LayerHop MCP server holds no private keys and never signs or broadcasts transactions. Confirm the price with the user first.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "buyToken": {
+                "description": "Token to buy token: symbol from list_tokens (\"USDC\", \"ETH\", \"SOL\") or the token contract address / SPL mint. Use \"native\" for the chain's gas coin.",
+                "minLength": 1,
+                "type": "string"
+              },
+              "chain": {
+                "description": "Chain of the order (default solana) chain: slug (\"base\", \"solana\", \"ethereum\", \"arbitrum\"...) or numeric chain id (Solana is 7565164). See list_chains.",
+                "type": ["string", "number"]
+              },
+              "expiresInMinutes": {
+                "description": "Cancel automatically after this many minutes. Solana: omit for good-till-cancelled. EVM: default 90 days.",
+                "maximum": 525600,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "minReceive": {
+                "description": "Minimum HUMAN units of buyToken for the whole sellAmount (the limit price is minReceive / sellAmount), e.g. \"0.5\" for 0.5 SOL.",
+                "type": ["string", "number"]
+              },
+              "sellAmount": {
+                "description": "HUMAN units of sellToken to sell, e.g. \"50\" for 50 USDC.",
+                "type": ["string", "number"]
+              },
+              "sellToken": {
+                "description": "Token to sell token: symbol from list_tokens (\"USDC\", \"ETH\", \"SOL\") or the token contract address / SPL mint. Use \"native\" for the chain's gas coin.",
+                "minLength": 1,
+                "type": "string"
+              },
+              "wallet": {
+                "description": "The maker's wallet (Solana base58 or EVM 0x): signs the order and receives buyToken.",
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": ["buyToken", "minReceive", "sellAmount", "sellToken", "wallet"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": false,
+            "openWorldHint": true,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:382fdac49c14b7c024cd5ed7e0965bfe401d58dc11619f1f896afcecae1fc4a0"
+        },
+        {
+          "name": "disable_deposit_address",
+          "title": "Disable a deposit address",
+          "description": "Disable a deposit address: LayerHop stops tracking it (no more orders or webhooks for it). The provider may still process funds sent to it later, so the user must stop using it. Cannot be undone. Confirm with the user first. Needs a LayerHop API key.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "description": "Deposit address id (starts with \"da_\").",
+                "pattern": "^da_",
+                "type": "string"
+              }
+            },
+            "required": ["id"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": true,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:23849a7782451c885f7a45c6ee55ae67180a2d7268df61419fecbcdee2f0a2ae"
+        },
+        {
+          "name": "get_deposit_address",
+          "title": "Get a deposit address and its deposits",
+          "description": "Get one deposit address with its 20 most recent deposits (orders, quoteId starting with dep_): amount deposited and delivered, status (submitted, pending, filled, refunded, failed) and tx hashes. Tell the user: send ONLY srcToken on srcChain to the address (other tokens or chains may be lost for good), at least $1 worth; refundTo must be the user's own address on srcChain, never an exchange (CEX) deposit address. Needs a LayerHop API key; test keys (lh_test_) give a fake sandbox address that must never receive real funds. Read-only.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "description": "Deposit address id (starts with \"da_\").",
+                "pattern": "^da_",
+                "type": "string"
+              }
+            },
+            "required": ["id"],
+            "type": "object"
+          },
+          "annotations": {
+            "openWorldHint": true,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:6c259dc38b1f0683e6b566e37b90debe050b81d88adfe1a58b6a436940c56730"
+        },
+        {
+          "name": "get_limit_order",
+          "title": "Get a limit order",
+          "description": "Get one limit order with its fills (each fill is an order whose quoteId starts with lof_). Read-only.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "description": "Limit order id (starts with \"lo_\").",
+                "pattern": "^lo_",
+                "type": "string"
+              }
+            },
+            "required": ["id"],
+            "type": "object"
+          },
+          "annotations": {
+            "openWorldHint": true,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:631a4dd7e5411e4495276c5afdf415b521418d4c7c5d0dc2185668a288986308"
+        },
+        {
+          "name": "get_order_status",
+          "title": "Get swap/bridge order status",
+          "description": "Check the status of a swap or bridge after the source transaction was sent: pending, filled (funds delivered), refunded, failed, or unknown (some same-chain providers; check the tx on an explorer). Read-only.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "provider": {
+                "description": "The provider of the quote that was executed (the `provider` field from get_quote / build_transaction).",
+                "enum": ["jupiter", "relay", "debridge", "mayan", "zerox", "kyberswap", "odos", "lifi", "mock"],
+                "type": "string"
+              },
+              "txHash": {
+                "description": "Source-chain transaction hash (EVM) or signature (Solana).",
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": ["provider", "txHash"],
+            "type": "object"
+          },
+          "annotations": {
+            "openWorldHint": true,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:4f7b70288798380bc782f0aa24ecf2fa1476dc97fd898673a3c3ca5136cfd040"
+        },
+        {
+          "name": "get_quote",
+          "title": "Get swap/bridge quotes",
+          "description": "Get the best price to swap or bridge tokens, within one chain or across chains (EVM <-> Solana). Asks every liquidity provider and returns the best quote plus alternatives with human-readable amounts, minimum received after slippage, fees (LayerHop fee, partner fee, provider fee, gas) and ETA. Returns a quoteId (valid until expiresAt) and a layerhop.com swapLink a human can open to review and sign. Read-only: The LayerHop MCP server holds no private keys and never signs or broadcasts transactions. Always show the user the fees and output and get confirmation before proceeding.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "amount": {
+                "description": "Amount to send in HUMAN units of fromToken as a decimal string, e.g. \"100\" for 100 USDC or \"0.05\" for 0.05 ETH. NOT base units/wei/lamports. Must be greater than 0.",
+                "type": ["string", "number"]
+              },
+              "fromChain": {
+                "description": "Source chain: slug (\"base\", \"solana\", \"ethereum\", \"arbitrum\"...) or numeric chain id (Solana is 7565164). See list_chains.",
+                "type": ["string", "number"]
+              },
+              "fromToken": {
+                "description": "Token to send (source) token: symbol from list_tokens (\"USDC\", \"ETH\", \"SOL\") or the token contract address / SPL mint. Use \"native\" for the chain's gas coin.",
+                "minLength": 1,
+                "type": "string"
+              },
+              "fromTokenDecimals": {
+                "description": "Only needed when fromToken is an address that is not in list_tokens: the token's decimals (e.g. 6 for USDC, 18 for most ERC-20s).",
+                "maximum": 36,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "gasless": {
+                "description": "Optional gasless swap (same EVM chain, ERC-20 input, where the API enables it): the user signs EIP-712 typed data instead of a transaction and the network fee is taken from fromToken. This server cannot sign or submit typed data for the user, so the user finishes it via the swap link or their own app.",
+                "type": "boolean"
+              },
+              "recipient": {
+                "description": "Address that receives funds on the destination chain. Defaults to sender when both chains use the same VM; REQUIRED for EVM <-> Solana.",
+                "type": "string"
+              },
+              "sender": {
+                "description": "Wallet address that sends the funds on the source chain (0x... for EVM, base58 for Solana). Only used to build the quote; no access is needed.",
+                "minLength": 1,
+                "type": "string"
+              },
+              "slippageBps": {
+                "description": "Max slippage in basis points (1 bp = 0.01%). Default 50 (= 0.5%).",
+                "maximum": 5000,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "toChain": {
+                "description": "Destination chain: slug (\"base\", \"solana\", \"ethereum\", \"arbitrum\"...) or numeric chain id (Solana is 7565164). See list_chains.",
+                "type": ["string", "number"]
+              },
+              "toToken": {
+                "description": "Token to receive (destination) token: symbol from list_tokens (\"USDC\", \"ETH\", \"SOL\") or the token contract address / SPL mint. Use \"native\" for the chain's gas coin.",
+                "minLength": 1,
+                "type": "string"
+              },
+              "toTokenDecimals": {
+                "description": "Only needed when toToken is an address that is not in list_tokens: the token's decimals (e.g. 6 for USDC, 18 for most ERC-20s).",
+                "maximum": 36,
+                "minimum": 0,
+                "type": "integer"
+              }
+            },
+            "required": ["amount", "fromChain", "fromToken", "sender", "toChain", "toToken"],
+            "type": "object"
+          },
+          "annotations": {
+            "openWorldHint": true,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:8726460f3a584e6cd4e3f26af68934505785c63fbb5006572f622b447b498f9e"
+        },
+        {
+          "name": "get_swap_link",
+          "title": "Get a layerhop.com swap link",
+          "description": "Create a https://layerhop.com/swap link prefilled with the swap, which the user opens to review the live quote and fees and sign in their own wallet. This is the default, safest way to execute a swap. The LayerHop MCP server holds no private keys and never signs or broadcasts transactions. The amount is in human units.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "amount": {
+                "description": "Amount to send in HUMAN units of fromToken as a decimal string, e.g. \"100\" for 100 USDC or \"0.05\" for 0.05 ETH. NOT base units/wei/lamports. Must be greater than 0.",
+                "type": ["string", "number"]
+              },
+              "fromChain": {
+                "description": "Source chain: slug (\"base\", \"solana\", \"ethereum\", \"arbitrum\"...) or numeric chain id (Solana is 7565164). See list_chains.",
+                "type": ["string", "number"]
+              },
+              "fromToken": {
+                "description": "Token to send (source) token: symbol from list_tokens (\"USDC\", \"ETH\", \"SOL\") or the token contract address / SPL mint. Use \"native\" for the chain's gas coin.",
+                "minLength": 1,
+                "type": "string"
+              },
+              "recipient": {
+                "description": "Optional destination address to prefill (the user can still edit it).",
+                "type": "string"
+              },
+              "slippageBps": {
+                "description": "Max slippage in basis points (1 bp = 0.01%). Default 50 (= 0.5%).",
+                "maximum": 5000,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "toChain": {
+                "description": "Destination chain: slug (\"base\", \"solana\", \"ethereum\", \"arbitrum\"...) or numeric chain id (Solana is 7565164). See list_chains.",
+                "type": ["string", "number"]
+              },
+              "toToken": {
+                "description": "Token to receive (destination) token: symbol from list_tokens (\"USDC\", \"ETH\", \"SOL\") or the token contract address / SPL mint. Use \"native\" for the chain's gas coin.",
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": ["fromChain", "fromToken", "toChain", "toToken"],
+            "type": "object"
+          },
+          "annotations": {
+            "openWorldHint": false,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:71e82895183e2c6f88e36616f43f8a7480dfc6033b210d6861f3536f7e17cdce"
+        },
+        {
+          "name": "get_token_risk",
+          "title": "Check a token for risks",
+          "description": "Safety report for a token before the user buys or receives it: honeypot (can't sell), buy/sell/transfer taxes, owner powers (mint, blacklist, pause, freeze), unpublished code, few holders, and fake majors (a token calling itself USDC/ETH/SOL at the wrong address). level is ok, caution, danger or unknown (no source answered; never block a swap on unknown alone). On danger, warn the user and get explicit confirmation before get_quote. Read-only.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "chain": {
+                "description": "The token's chain: slug (\"base\", \"solana\", \"ethereum\", \"arbitrum\"...) or numeric chain id (Solana is 7565164). See list_chains.",
+                "type": ["string", "number"]
+              },
+              "token": {
+                "description": "The token to check: symbol or token: symbol from list_tokens (\"USDC\", \"ETH\", \"SOL\") or the token contract address / SPL mint. Use \"native\" for the chain's gas coin.",
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": ["chain", "token"],
+            "type": "object"
+          },
+          "annotations": {
+            "openWorldHint": true,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:8f05704ce539368391fee99311a6f3d41dde5ee83c0ba1f74a437a5d2c783ab5"
+        },
+        {
+          "name": "list_chains",
+          "title": "List supported chains",
+          "description": "List every blockchain LayerHop can swap from or to: slug, numeric chain id, name, VM type (evm or svm = Solana) and native coin. Read-only.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "properties": {},
+            "type": "object"
+          },
+          "annotations": {
+            "openWorldHint": true,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:eca9f4614204e3b5c863766ed1bb9c5aab313fd62ec59d5537366693e5fa4cab"
+        },
+        {
+          "name": "list_deposit_addresses",
+          "title": "List deposit addresses",
+          "description": "List the deposit addresses of the API key's account and mode (live or test), newest first: address, route, status, deposit count. Needs a LayerHop API key. Read-only.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "cursor": {
+                "description": "nextCursor from a previous call, for the next page.",
+                "type": "string"
+              },
+              "label": {
+                "description": "Only addresses with this label.",
+                "maxLength": 64,
+                "minLength": 1,
+                "type": "string"
+              },
+              "limit": {
+                "description": "Max addresses to return (default set by the API).",
+                "maximum": 100,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "status": {
+                "description": "Only addresses with this status.",
+                "enum": ["active", "disabled"],
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "annotations": {
+            "openWorldHint": true,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:f61c3665e9f2434ab8c7cf9139f984d707812e8f27e8d0548776d2e13141dc7d"
+        },
+        {
+          "name": "list_limit_orders",
+          "title": "List limit orders",
+          "description": "List limit orders (Solana: Jupiter Trigger; EVM: CoW Protocol) of a wallet, or of the API key's account without a wallet: what is sold, the minimum received, status (built, open, filled, cancelled, expired, failed) and fills. Read-only.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "cursor": {
+                "description": "nextCursor from a previous call, for the next page.",
+                "type": "string"
+              },
+              "limit": {
+                "description": "Max orders to return.",
+                "maximum": 100,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "status": {
+                "description": "Only orders with this status.",
+                "enum": ["built", "open", "filled", "cancelled", "expired", "failed"],
+                "type": "string"
+              },
+              "wallet": {
+                "description": "Wallet (Solana base58 or EVM 0x) whose limit orders to list. Without it: the API key's account (needs a key).",
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "annotations": {
+            "openWorldHint": true,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:b3cee6fa1bd4ef2e047244aa1604a54bbae256e13cafcdbbfc0368553760bda9"
+        },
+        {
+          "name": "list_orders",
+          "title": "List orders for a wallet",
+          "description": "List LayerHop orders (swaps built or submitted through LayerHop) where the address is the sender or recipient, newest first, with status. Public data (addresses only). Read-only.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "address": {
+                "description": "Wallet address (EVM 0x... or Solana base58).",
+                "minLength": 1,
+                "type": "string"
+              },
+              "cursor": {
+                "description": "nextCursor from a previous list_orders call, for the next page.",
+                "type": "string"
+              },
+              "limit": {
+                "description": "Max orders to return (default set by the API).",
+                "maximum": 100,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "status": {
+                "description": "Only orders with this status.",
+                "enum": ["built", "submitted", "pending", "filled", "refunded", "failed", "expired", "dropped"],
+                "type": "string"
+              }
+            },
+            "required": ["address"],
+            "type": "object"
+          },
+          "annotations": {
+            "openWorldHint": true,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:f1670b75a64ae14c40373d5f5d7d5b9c01e522f9e6b52f292b97597843073517"
+        },
+        {
+          "name": "list_tokens",
+          "title": "List tokens on a chain",
+          "description": "List LayerHop's built-in tokens on one chain (symbol, contract address or mint, decimals). Symbols can be used directly in get_quote; other tokens can be quoted by address. Read-only.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "chain": {
+                "description": "The chain: slug (\"base\", \"solana\", \"ethereum\", \"arbitrum\"...) or numeric chain id (Solana is 7565164). See list_chains.",
+                "type": ["string", "number"]
+              }
+            },
+            "required": ["chain"],
+            "type": "object"
+          },
+          "annotations": {
+            "openWorldHint": true,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:83142c7ba6dde65a3bdd13df7547e4469e06ff6dc3484e235095f6015e231b62"
+        },
+        {
+          "name": "lookup_token",
+          "title": "Look up a token by address",
+          "description": "Get one token's symbol, name, decimals, USD price and verified flag from its contract address or SPL mint. The chain is optional: LayerHop finds it (Solana for a mint, else the EVM chain where the token has the most liquidity). verified false means it is on no curated list: confirm the address with the user before swapping. Read-only.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "address": {
+                "description": "Token contract address (EVM 0x...) or SPL mint (Solana).",
+                "minLength": 1,
+                "type": "string"
+              },
+              "chain": {
+                "description": "Optional: the token's chain: slug (\"base\", \"solana\", \"ethereum\", \"arbitrum\"...) or numeric chain id (Solana is 7565164). See list_chains.",
+                "type": ["string", "number"]
+              }
+            },
+            "required": ["address"],
+            "type": "object"
+          },
+          "annotations": {
+            "openWorldHint": true,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:ac115a20b74f46eb0ef14d247bc5bb82bab0c1ab4249d5c0081bf8fad928f244"
+        },
+        {
+          "name": "refresh_deposit_address",
+          "title": "Check a deposit address for deposits now",
+          "description": "Ask LayerHop to check a deposit address for new deposits right away (instead of waiting for the next scheduled check). Call it when the user says they sent funds, then call get_deposit_address after ~15-30 s. Needs a LayerHop API key.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "description": "Deposit address id (starts with \"da_\").",
+                "pattern": "^da_",
+                "type": "string"
+              }
+            },
+            "required": ["id"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:386830686e41935bab64061240b8896e0bb07af05f52c51b9275effb8a7c1dc9"
+        },
+        {
+          "name": "report_submitted",
+          "title": "Report a broadcast transaction",
+          "description": "Tell LayerHop that the user's wallet broadcast the transaction for a quoteId, so the order is tracked (status, webhooks). Call this once after broadcasting, with the EVM tx hash (0x + 64 hex) or Solana signature. Idempotent. Does not sign or send anything.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "quoteId": {
+                "description": "quoteId from get_quote (starts with \"q_\"). Quotes expire after a short time (see expiresAt).",
+                "pattern": "^q_",
+                "type": "string"
+              },
+              "txHash": {
+                "description": "Source-chain transaction hash (EVM 0x...) or Solana signature (base58).",
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": ["quoteId", "txHash"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:4a9268f88d093ccefae357cc6d75fc5f2a197be7a8dc3818e76fb0a5557dcef5"
+        },
+        {
+          "name": "simulate_deposit",
+          "title": "Simulate a deposit (test mode only)",
+          "description": "TEST MODE ONLY (lh_test_ key and a test deposit address): record a fake deposit so the integration can be tested end to end; it becomes a test order that settles with webhooks. The amount decides the outcome: base units ending in 4001 -> refunded, 4002 -> failed, anything else -> filled. Moves no real funds. Fails with a live key.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "amount": {
+                "description": "Deposit amount in HUMAN units of the address token (\"25\" = 25 USDC). Give this or amountBaseUnits.",
+                "type": ["string", "number"]
+              },
+              "amountBaseUnits": {
+                "description": "Deposit amount in base units (e.g. \"25004001\" to test a refund for a 6-decimal token). Give this or amount.",
+                "pattern": "^\\d+$",
+                "type": "string"
+              },
+              "id": {
+                "description": "Deposit address id (starts with \"da_\").",
+                "pattern": "^da_",
+                "type": "string"
+              }
+            },
+            "required": ["id"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": false,
+            "openWorldHint": true,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:9890a62d7811e37670642e7d326edbd5901fea2e093320a51cf91e9db6e201e1"
+        },
+        {
+          "name": "simulate_transaction",
+          "title": "Dry-run a quote's transaction",
+          "description": "Build the transaction for a quoteId and dry-run it on-chain (EVM eth_call + gas estimate from the sender; Solana simulateTransaction) without sending anything or recording an order. Reports whether it would succeed, gas / compute units, whether an ERC-20 approval is still needed, and the error if it would fail. Read-only: The LayerHop MCP server holds no private keys and never signs or broadcasts transactions.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "quoteId": {
+                "description": "quoteId from get_quote (starts with \"q_\"). Quotes expire after a short time (see expiresAt).",
+                "pattern": "^q_",
+                "type": "string"
+              }
+            },
+            "required": ["quoteId"],
+            "type": "object"
+          },
+          "annotations": {
+            "openWorldHint": true,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:e3f3e3107b2760e0478e48a6be3aeafbd4ab2c869e4909a339133b1ba9b09b43"
+        },
+        {
+          "name": "submit_limit_order",
+          "title": "Submit a signed limit order or cancellation",
+          "description": "Send a limit order's create or cancel step AFTER the maker's own wallet signed it (from create_limit_order or cancel_limit_order): the signed Solana transaction, or the EIP-712 signature of an EVM order. This only relays what the wallet signed; The LayerHop MCP server holds no private keys and never signs or broadcasts transactions.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "description": "Limit order id (starts with \"lo_\").",
+                "pattern": "^lo_",
+                "type": "string"
+              },
+              "signature": {
+                "description": "EVM: the wallet's eth_signTypedData_v4 signature of typedData.",
+                "pattern": "^0x[0-9a-fA-F]{130}$",
+                "type": "string"
+              },
+              "signedTransaction": {
+                "description": "Solana: the wallet-signed transaction, base64.",
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": ["id"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:a32dcf3c916f1315d92ffb3ce2ba695753c497142e20c538331d97da41ae39aa"
+        }
+      ],
+      "resources": [
+        {
+          "uri": "layerhop://tokens/0g-mainnet",
+          "name": "0G Mainnet tokens",
+          "title": "LayerHop tokens per chain",
+          "description": "Built-in token list for one chain (JSON): symbol, address/mint, decimals.",
+          "mimeType": "application/json",
+          "digest": "sha256:37621f0115b4fdafd4db001c50805d93432cc113401032b3526dee8474ee1f96"
+        },
+        {
+          "uri": "layerhop://tokens/abstract",
+          "name": "Abstract tokens",
+          "title": "LayerHop tokens per chain",
+          "description": "Built-in token list for one chain (JSON): symbol, address/mint, decimals.",
+          "mimeType": "application/json",
+          "digest": "sha256:d1ef02074d9c0699d5b720574435f519983bd4830d07cce985560ebc9f7ca92b"
+        },
+        {
+          "uri": "layerhop://tokens/apechain",
+          "name": "ApeChain tokens",
+          "title": "LayerHop tokens per chain",
+          "description": "Built-in token list for one chain (JSON): symbol, address/mint, decimals.",
+          "mimeType": "application/json",
+          "digest": "sha256:afc148fe419b0db8496839fcc766eb8596f00ddbd32019336544c4fd2e2821c3"
+        },
+        {
+          "uri": "layerhop://tokens/arbitrum-nova",
+          "name": "Arbitrum Nova tokens",
+          "title": "LayerHop tokens per chain",
+          "description": "Built-in token list for one chain (JSON): symbol, address/mint, decimals.",
+          "mimeType": "application/json",
+          "digest": "sha256:d14582207e41fd8ef1b0b758d42ff141469d7b84bb7bb9faea56f136e544a6c0"
+        },
+        {
+          "uri": "layerhop://tokens/arbitrum",
+          "name": "Arbitrum tokens",
+          "title": "LayerHop tokens per chain",
+          "description": "Built-in token list for one chain (JSON): symbol, address/mint, decimals.",
+          "mimeType": "application/json",
+          "digest": "sha256:8a27054e0ee117bfc437be4fad523951eaa52a495816d51cb18f946e789e75f4"
+        },
+        {
+          "uri": "layerhop://tokens/arc",
+          "name": "Arc tokens",
+          "title": "LayerHop tokens per chain",
+          "description": "Built-in token list for one chain (JSON): symbol, address/mint, decimals.",
+          "mimeType": "application/json",
+          "digest": "sha256:933190bc3025f6b1e8d0356dd0f4e8dbf3e26cc59f68a7eb9396661897c2ae5c"
+        },
+        {
+          "uri": "layerhop://tokens/avalanche",
+          "name": "Avalanche tokens",
+          "title": "LayerHop tokens per chain",
+          "description": "Built-in token list for one chain (JSON): symbol, address/mint, decimals.",
+          "mimeType": "application/json",
+          "digest": "sha256:bfac069b0aa1c1b9ff01f1a13fb108fcf00cada38345e3fbe41824f602b358bf"
+        },
+        {
+          "uri": "layerhop://tokens/bsc",
+          "name": "BNB Chain tokens",
+          "title": "LayerHop tokens per chain",
+          "description": "Built-in token list for one chain (JSON): symbol, address/mint, decimals.",
+          "mimeType": "application/json",
+          "digest": "sha256:404f056c1308bf30cee95490c6987c0e360776d87543e079854ea4881fc832ea"
+        },
+        {
+          "uri": "layerhop://tokens/bob",
+          "name": "BOB tokens",
+          "title": "LayerHop tokens per chain",
+          "description": "Built-in token list for one chain (JSON): symbol, address/mint, decimals.",
+          "mimeType": "application/json",
+          "digest": "sha256:a8d33e47cf1dd3664044c73375be52a6f5571f33b7719e356ded24832128e249"
+        },
+        {
+          "uri": "layerhop://tokens/base",
+          "name": "Base tokens",
+          "title": "LayerHop tokens per chain",
+          "description": "Built-in token list for one chain (JSON): symbol, address/mint, decimals.",
+          "mimeType": "application/json",
+          "digest": "sha256:518884bdc43f5786937e55b00fceb2301b3991d9e1640840b55b771b2aec5e88"
+        },
+        {
+          "uri": "layerhop://tokens/berachain",
+          "name": "Berachain tokens",
+          "title": "LayerHop tokens per chain",
+          "description": "Built-in token list for one chain (JSON): symbol, address/mint, decimals.",
+          "mimeType": "application/json",
+          "digest": "sha256:8945244f8693e6c30772953a3cfd8e1aff4bb5e82eaba882466530d8491af7c5"
+        },
+        {
+          "uri": "layerhop://tokens/blast",
+          "name": "Blast tokens",
+          "title": "LayerHop tokens per chain",
+          "description": "Built-in token list for one chain (JSON): symbol, address/mint, decimals.",
+          "mimeType": "application/json",
+          "digest": "sha256:02d6b2e7374e6ba317009d9c4d65f8d89a849ac237dbc4271f283173a99f7320"
+        },
+        {
+          "uri": "layerhop://tokens/boba",
+          "name": "Boba Network tokens",
+          "title": "LayerHop tokens per chain",
+          "description": "Built-in token list for one chain (JSON): symbol, address/mint, decimals.",
+          "mimeType": "application/json",
+          "digest": "sha256:0bb1ba64bf13e463e9995f8da0b434c8efcaaa3887419ea67dc70e6b3515aec6"
+        },
+        {
+          "uri": "layerhop://tokens/celo",
+          "name": "Celo tokens",
+          "title": "LayerHop tokens per chain",
+          "description": "Built-in token list for one chain (JSON): symbol, address/mint, decimals.",
+          "mimeType": "application/json",
+          "digest": "sha256:98ae8ae2c235811a391fec24cc5ea2fe84c933698f711a8afb8abd186fefe72c"
+        },
+        {
+          "uri": "layerhop://tokens/cronos",
+          "name": "Cronos tokens",
+          "title": "LayerHop tokens per chain",
+          "description": "Built-in token list for one chain (JSON): symbol, address/mint, decimals.",
+          "mimeType": "application/json",
+          "digest": "sha256:1e456eaac6b1748f25df714e7a7d355697927d5377b3fed71207d7ca68bdf285"
+        },
+        {
+          "uri": "layerhop://tokens/doma",
+          "name": "Doma tokens",
+          "title": "LayerHop tokens per chain",
+          "description": "Built-in token list for one chain (JSON): symbol, address/mint, decimals.",
+          "mimeType": "application/json",
+          "digest": "sha256:d68a8157dac3c0e1f6d3dd4c5f1663a23b965b5a3fdae548851f200660471a13"
+        },
+        {
+          "uri": "layerhop://tokens/elysium",
+          "name": "Elysium tokens",
+          "title": "LayerHop tokens per chain",
+          "description": "Built-in token list for one chain (JSON): symbol, address/mint, decimals.",
+          "mimeType": "application/json",
+          "digest": "sha256:00b76431f0fdf3eb80b5cb3cae214dc7f0b9c5d6f02cd727832a266080efb829"
+        },
+        {
+          "uri": "layerhop://tokens/ethereum",
+          "name": "Ethereum tokens",
+          "title": "LayerHop tokens per chain",
+          "description": "Built-in token list for one chain (JSON): symbol, address/mint, decimals.",
+          "mimeType": "application/json",
+          "digest": "sha256:1633a807e9f737af6c04a83c2011af981bc582024b05aba7fdf71a229c402eee"
+        },
+        {
+          "uri": "layerhop://tokens/etherlink",
+          "name": "Etherlink tokens",
+          "title": "LayerHop tokens per chain",
+          "description": "Built-in token list for one chain (JSON): symbol, address/mint, decimals.",
+          "mimeType": "application/json",
+          "digest": "sha256:3866eb29587d4bbd7d00d9342c768d41e0a48dad7907a82fc518834ad1641fe8"
+        },
+        {
+          "uri": "layerhop://tokens/fuse",
+          "name": "FUSE tokens",
+          "title": "LayerHop tokens per chain",
+          "description": "Built-in token list for one chain (JSON): symbol, address/mint, decimals.",
+          "mimeType": "application/json",
+          "digest": "sha256:ddec31e4823c352497a95a01c16e5a93f854161f69de25843b0220984bf5c556"
+        },
+        {
+          "uri": "layerhop://tokens/flare",
+          "name": "Flare tokens",
+          "title": "LayerHop tokens per chain",
+          "description": "Built-in token list for one chain (JSON): symbol, address/mint, decimals.",
+          "mimeType": "application/json",
+          "digest": "sha256:09cfa7385d4143cbd7202ea6b1c076c30ae94976b04372784915cc3c7db2e749"
+        },
+        {
+          "uri": "layerhop://tokens/flow-evm",
+          "name": "Flow EVM tokens",
+          "title": "LayerHop tokens per chain",
+          "description": "Built-in token list for one chain (JSON): symbol, address/mint, decimals.",
+          "mimeType": "application/json",
+          "digest": "sha256:4e2fd473fe64aa6647108377df6d75f2f63daf25b8d7a1b63662481f1a3ab5ea"
+        },
+        {
+          "uri": "layerhop://tokens/fraxtal",
+          "name": "Fraxtal tokens",
+          "title": "LayerHop tokens per chain",
+          "description": "Built-in token list for one chain (JSON): symbol, address/mint, decimals.",
+          "mimeType": "application/json",
+          "digest": "sha256:c329468c32d88b6f8480c4aaa84a285ab6203090c5f6e533d62bb1490ea6a474"
+        },
+        {
+          "uri": "layerhop://tokens/gensyn",
+          "name": "Gensyn tokens",
+          "title": "LayerHop tokens per chain",
+          "description": "Built-in token list for one chain (JSON): symbol, address/mint, decimals.",
+          "mimeType": "application/json",
+          "digest": "sha256:ed1b0607fcdab79c756663c4cef90a2a0394e734598bde1352b0328040e7b881"
+        },
+        {
+          "uri": "layerhop://tokens/gnosis",
+          "name": "Gnosis tokens",
+          "title": "LayerHop tokens per chain",
+          "description": "Built-in token list for one chain (JSON): symbol, address/mint, decimals.",
+          "mimeType": "application/json",
+          "digest": "sha256:efff84a079eae6da227fb9bfc0a1bd00954afcaa19ef9d3e2f6c721d90231d99"
+        },
+        {
+          "uri": "layerhop://tokens/hemi",
+          "name": "Hemi tokens",
+          "title": "LayerHop tokens per chain",
+          "description": "Built-in token list for one chain (JSON): symbol, address/mint, decimals.",
+          "mimeType": "application/json",
+          "digest": "sha256:54bf878bf8e3556561daaec9ac3288f3cf1be3776f311bb035272e83a296076a"
+        },
+        {
+          "uri": "layerhop://tokens/hyperevm",
+          "name": "HyperEVM tokens",
+          "title": "LayerHop tokens per chain",
+          "description": "Built-in token list for one chain (JSON): symbol, address/mint, decimals.",
+          "mimeType": "application/json",
+          "digest": "sha256:f7913e9f0ac6f5acaa93d8cd9e745cf59e69197b030ea38f3ee05ee1e3be589d"
+        },
+        {
+          "uri": "layerhop://tokens/hyperliquid",
+          "name": "Hyperliquid tokens",
+          "title": "LayerHop tokens per chain",
+          "description": "Built-in token list for one chain (JSON): symbol, address/mint, decimals.",
+          "mimeType": "application/json",
+          "digest": "sha256:453ebdd68ac3a012ed331f4e85b9964ce5cea7998667cf1444efec2049d155ff"
+        },
+        {
+          "uri": "layerhop://tokens/immutable-zkevm",
+          "name": "Immutable zkEVM tokens",
+          "title": "LayerHop tokens per chain",
+          "description": "Built-in token list for one chain (JSON): symbol, address/mint, decimals.",
+          "mimeType": "application/json",
+          "digest": "sha256:2144d5fee23c7b3d704283605326037ad5663642535d6012400a3dc964aff287"
+        },
+        {
+          "uri": "layerhop://tokens/injective",
+          "name": "Injective tokens",
+          "title": "LayerHop tokens per chain",
+          "description": "Built-in token list for one chain (JSON): symbol, address/mint, decimals.",
+          "mimeType": "application/json",
+          "digest": "sha256:bc10db3b6ba1c1f5ebc79884c94e97c1b26b562fcc4b1f7b28002f77ce5b710e"
+        },
+        {
+          "uri": "layerhop://tokens/ink",
+          "name": "Ink tokens",
+          "title": "LayerHop tokens per chain",
+          "description": "Built-in token list for one chain (JSON): symbol, address/mint, decimals.",
+          "mimeType": "application/json",
+          "digest": "sha256:333ae4326c514503967319f279d758de7ccac584e08c08f6b1fd726c46abe98b"
+        },
+        {
+          "uri": "layerhop://tokens/kaia",
+          "name": "Kaia tokens",
+          "title": "LayerHop tokens per chain",
+          "description": "Built-in token list for one chain (JSON): symbol, address/mint, decimals.",
+          "mimeType": "application/json",
+          "digest": "sha256:e3d7094f251840637c83ca4b28a06e0b0bae52af41350acd8d835f26b94cac36"
+        },
+        {
+          "uri": "layerhop://tokens/katana",
+          "name": "Katana tokens",
+          "title": "LayerHop tokens per chain",
+          "description": "Built-in token list for one chain (JSON): symbol, address/mint, decimals.",
+          "mimeType": "application/json",
+          "digest": "sha256:bc65ac6bebe3f3260b1f4aecbc35b097fa0841a68e76064ff306d38cddab6b25"
+        },
+        {
+          "uri": "layerhop://tokens/linea",
+          "name": "Linea tokens",
+          "title": "LayerHop tokens per chain",
+          "description": "Built-in token list for one chain (JSON): symbol, address/mint, decimals.",
+          "mimeType": "application/json",
+          "digest": "sha256:ad6650212d90096e96b6136e482731fe4a7c74aa450edb265f3e33b546d4f4ba"
+        },
+        {
+          "uri": "layerhop://tokens/manta-pacific",
+          "name": "Manta Pacific tokens",
+          "title": "LayerHop tokens per chain",
+          "description": "Built-in token list for one chain (JSON): symbol, address/mint, decimals.",
+          "mimeType": "application/json",
+          "digest": "sha256:9a099b80d94d29d18be8c8be6526b2ae6014174a0f83744e8d9c3e49d6e46f6d"
+        },
+        {
+          "uri": "layerhop://tokens/mantle",
+          "name": "Mantle tokens",
+          "title": "LayerHop tokens per chain",
+          "description": "Built-in token list for one chain (JSON): symbol, address/mint, decimals.",
+          "mimeType": "application/json",
+          "digest": "sha256:5ebfea6eaccc5f3dfcc508d5d9fb0ff5f928ce5ee807b6573fd6e6b18f1f481a"
+        },
+        {
+          "uri": "layerhop://tokens/megaeth",
+          "name": "MegaETH tokens",
+          "title": "LayerHop tokens per chain",
+          "description": "Built-in token list for one chain (JSON): symbol, address/mint, decimals.",
+          "mimeType": "application/json",
+          "digest": "sha256:36cdbfecf3bfc9b51cf9d2583c34aba8221770474599aff808ae7059453806f1"
+        },
+        {
+          "uri": "layerhop://tokens/metis",
+          "name": "Metis tokens",
+          "title": "LayerHop tokens per chain",
+          "description": "Built-in token list for one chain (JSON): symbol, address/mint, decimals.",
+          "mimeType": "application/json",
+          "digest": "sha256:60693c9d2b892b93bce20b25929d2f579d0d605f8e571942036c9ffa112f7be0"
+        },
+        {
+          "uri": "layerhop://tokens/mode",
+          "name": "Mode tokens",
+          "title": "LayerHop tokens per chain",
+          "description": "Built-in token list for one chain (JSON): symbol, address/mint, decimals.",
+          "mimeType": "application/json",
+          "digest": "sha256:d33c88796d4ed788df5105ac1a2c3269f351aebaa03896042380fc09e3658c16"
+        },
+        {
+          "uri": "layerhop://tokens/monad",
+          "name": "Monad tokens",
+          "title": "LayerHop tokens per chain",
+          "description": "Built-in token list for one chain (JSON): symbol, address/mint, decimals.",
+          "mimeType": "application/json",
+          "digest": "sha256:9b39477e6f1ec8930647b9f677f9ab5b833f121070fd8ac1214343cb2842c3b7"
+        },
+        {
+          "uri": "layerhop://tokens/morph",
+          "name": "Morph tokens",
+          "title": "LayerHop tokens per chain",
+          "description": "Built-in token list for one chain (JSON): symbol, address/mint, decimals.",
+          "mimeType": "application/json",
+          "digest": "sha256:7954c4efa7412c56e4924c2fb943ba39c778fc43738ce533658c6cf17669051e"
+        },
+        {
+          "uri": "layerhop://tokens/mythos",
+          "name": "Mythos tokens",
+          "title": "LayerHop tokens per chain",
+          "description": "Built-in token list for one chain (JSON): symbol, address/mint, decimals.",
+          "mimeType": "application/json",
+          "digest": "sha256:392e4e14a2b2c583bd45c00cc7399e315e609525500ae89a61e2cbb976586c7a"
+        },
+        {
+          "uri": "layerhop://tokens/optimism",
+          "name": "Optimism tokens",
+          "title": "LayerHop tokens per chain",
+          "description": "Built-in token list for one chain (JSON): symbol, address/mint, decimals.",
+          "mimeType": "application/json",
+          "digest": "sha256:189c422f160e087b4fac908225d6b6cb74e574a5263c6e434deb89fee271e77f"
+        },
+        {
+          "uri": "layerhop://tokens/pharos-mainnet",
+          "name": "Pharos Mainnet tokens",
+          "title": "LayerHop tokens per chain",
+          "description": "Built-in token list for one chain (JSON): symbol, address/mint, decimals.",
+          "mimeType": "application/json",
+          "digest": "sha256:66fced333cfd563ca8f9b0eb2df8ad247b05ca332d6a0525f8450658f6ff416a"
+        },
+        {
+          "uri": "layerhop://tokens/plasma",
+          "name": "Plasma tokens",
+          "title": "LayerHop tokens per chain",
+          "description": "Built-in token list for one chain (JSON): symbol, address/mint, decimals.",
+          "mimeType": "application/json",
+          "digest": "sha256:fbd9a7101cd475e7d8fed81098019150c626b938f20e5c5ec64dbaa6dfddc5c0"
+        },
+        {
+          "uri": "layerhop://tokens/plume",
+          "name": "Plume tokens",
+          "title": "LayerHop tokens per chain",
+          "description": "Built-in token list for one chain (JSON): symbol, address/mint, decimals.",
+          "mimeType": "application/json",
+          "digest": "sha256:67e058b59774b9e9dba5dc6815f437ca9abacc9b63a02e9737bb01e289cf471b"
+        },
+        {
+          "uri": "layerhop://tokens/polygon",
+          "name": "Polygon tokens",
+          "title": "LayerHop tokens per chain",
+          "description": "Built-in token list for one chain (JSON): symbol, address/mint, decimals.",
+          "mimeType": "application/json",
+          "digest": "sha256:57b76bb0ec5b1dae242fed09a45da0326a60fc62870c9fcdb3d7a63276036e81"
+        },
+        {
+          "uri": "layerhop://tokens/robinhood",
+          "name": "Robinhood Chain tokens",
+          "title": "LayerHop tokens per chain",
+          "description": "Built-in token list for one chain (JSON): symbol, address/mint, decimals.",
+          "mimeType": "application/json",
+          "digest": "sha256:854fffd48620f106c8ef39ca1b149446f83fb759d411bb8c59440084effb85b5"
+        },
+        {
+          "uri": "layerhop://tokens/ronin",
+          "name": "Ronin tokens",
+          "title": "LayerHop tokens per chain",
+          "description": "Built-in token list for one chain (JSON): symbol, address/mint, decimals.",
+          "mimeType": "application/json",
+          "digest": "sha256:499bdd79f73c74dca3650eb0e247994af486fd32d8308584062d703aecf6b8e1"
+        },
+        {
+          "uri": "layerhop://tokens/rootstock",
+          "name": "Rootstock tokens",
+          "title": "LayerHop tokens per chain",
+          "description": "Built-in token list for one chain (JSON): symbol, address/mint, decimals.",
+          "mimeType": "application/json",
+          "digest": "sha256:30ca35f364126a121640be6c79e0faf478da6ce40228658c87cb4aef3c0ebe9d"
+        },
+        {
+          "uri": "layerhop://tokens/scroll",
+          "name": "Scroll tokens",
+          "title": "LayerHop tokens per chain",
+          "description": "Built-in token list for one chain (JSON): symbol, address/mint, decimals.",
+          "mimeType": "application/json",
+          "digest": "sha256:a8bce1d590e4a4afa69c81082c3d8f50a532f7b3a6eb27feb7a347a11abe7c72"
+        },
+        {
+          "uri": "layerhop://tokens/sei",
+          "name": "Sei tokens",
+          "title": "LayerHop tokens per chain",
+          "description": "Built-in token list for one chain (JSON): symbol, address/mint, decimals.",
+          "mimeType": "application/json",
+          "digest": "sha256:1a83e074c7a98570cc03c9a0e3edd1663409ae5f7c5c3844e5f86ddb692a7707"
+        },
+        {
+          "uri": "layerhop://tokens/shape",
+          "name": "Shape tokens",
+          "title": "LayerHop tokens per chain",
+          "description": "Built-in token list for one chain (JSON): symbol, address/mint, decimals.",
+          "mimeType": "application/json",
+          "digest": "sha256:9b4979a34a870639516aaa4f225cd7d12c02f0ca5a42e7328553ac8dd1c93043"
+        },
+        {
+          "uri": "layerhop://tokens/solana",
+          "name": "Solana tokens",
+          "title": "LayerHop tokens per chain",
+          "description": "Built-in token list for one chain (JSON): symbol, address/mint, decimals.",
+          "mimeType": "application/json",
+          "digest": "sha256:e3b53fb1ea4883c869ececca5b7217daf00fcea86af9f3e8803a861f5eb57aab"
+        },
+        {
+          "uri": "layerhop://tokens/somnia",
+          "name": "Somnia tokens",
+          "title": "LayerHop tokens per chain",
+          "description": "Built-in token list for one chain (JSON): symbol, address/mint, decimals.",
+          "mimeType": "application/json",
+          "digest": "sha256:51185af653f4e0168db8f2fb8f5f9d30604182d14af4b842d24638e273a84b38"
+        },
+        {
+          "uri": "layerhop://tokens/soneium",
+          "name": "Soneium tokens",
+          "title": "LayerHop tokens per chain",
+          "description": "Built-in token list for one chain (JSON): symbol, address/mint, decimals.",
+          "mimeType": "application/json",
+          "digest": "sha256:0942069b3df7cedcc4c4442d13581146ff8b56ea2e114ededc77c47d4a924d0f"
+        },
+        {
+          "uri": "layerhop://tokens/sonic",
+          "name": "Sonic tokens",
+          "title": "LayerHop tokens per chain",
+          "description": "Built-in token list for one chain (JSON): symbol, address/mint, decimals.",
+          "mimeType": "application/json",
+          "digest": "sha256:d22b0607a44f6a245866f7c9fbe1e937cb070343fa54bac4544bc4adfb2cdb15"
+        },
+        {
+          "uri": "layerhop://tokens/stable",
+          "name": "Stable tokens",
+          "title": "LayerHop tokens per chain",
+          "description": "Built-in token list for one chain (JSON): symbol, address/mint, decimals.",
+          "mimeType": "application/json",
+          "digest": "sha256:d9a1ce5e80ee1ad0b605398fe12aefe20e3dd541cf96c05f55690078f3fdf695"
+        },
+        {
+          "uri": "layerhop://tokens/telos",
+          "name": "Telos tokens",
+          "title": "LayerHop tokens per chain",
+          "description": "Built-in token list for one chain (JSON): symbol, address/mint, decimals.",
+          "mimeType": "application/json",
+          "digest": "sha256:ca0fb5806247e41b148dd899308a78082d0851bd94c60575b7b7807e108ebce0"
+        },
+        {
+          "uri": "layerhop://tokens/tempo",
+          "name": "Tempo tokens",
+          "title": "LayerHop tokens per chain",
+          "description": "Built-in token list for one chain (JSON): symbol, address/mint, decimals.",
+          "mimeType": "application/json",
+          "digest": "sha256:51b46008aacb1c39fbe344524180baa7f9ded41ae4784582a403b5b9357ccdaf"
+        },
+        {
+          "uri": "layerhop://tokens/tron",
+          "name": "Tron tokens",
+          "title": "LayerHop tokens per chain",
+          "description": "Built-in token list for one chain (JSON): symbol, address/mint, decimals.",
+          "mimeType": "application/json",
+          "digest": "sha256:051af4aa1eaa09fbc5e8c72c24ae7c00190cd0c049b265a06f3d9daf8efd7bc3"
+        },
+        {
+          "uri": "layerhop://tokens/unichain",
+          "name": "Unichain tokens",
+          "title": "LayerHop tokens per chain",
+          "description": "Built-in token list for one chain (JSON): symbol, address/mint, decimals.",
+          "mimeType": "application/json",
+          "digest": "sha256:eed35465cd73dee0f834426b0dceb1b15e46532d48ab51ae0c1d678ea986d0eb"
+        },
+        {
+          "uri": "layerhop://tokens/vana",
+          "name": "Vana tokens",
+          "title": "LayerHop tokens per chain",
+          "description": "Built-in token list for one chain (JSON): symbol, address/mint, decimals.",
+          "mimeType": "application/json",
+          "digest": "sha256:1fd86020297e4e94b87ec63caa2a36da46ef10bcb45c0db1ca45d0cb4433341b"
+        },
+        {
+          "uri": "layerhop://tokens/viction",
+          "name": "Viction tokens",
+          "title": "LayerHop tokens per chain",
+          "description": "Built-in token list for one chain (JSON): symbol, address/mint, decimals.",
+          "mimeType": "application/json",
+          "digest": "sha256:9012dc6a7bc9f857230c1dc28dac73b237fad22c95b9a402b1756721dc8ce663"
+        },
+        {
+          "uri": "layerhop://tokens/world-chain",
+          "name": "World Chain tokens",
+          "title": "LayerHop tokens per chain",
+          "description": "Built-in token list for one chain (JSON): symbol, address/mint, decimals.",
+          "mimeType": "application/json",
+          "digest": "sha256:6ffbc49c063c3c7c0bb8b21a66b43b1989d4948296cd3345c317be0f9ea5b0af"
+        },
+        {
+          "uri": "layerhop://tokens/xlayer",
+          "name": "X Layer tokens",
+          "title": "LayerHop tokens per chain",
+          "description": "Built-in token list for one chain (JSON): symbol, address/mint, decimals.",
+          "mimeType": "application/json",
+          "digest": "sha256:2c755d52bb72c8218c1382f72c6e7787136c836586b3230e79a722c43a60fb39"
+        },
+        {
+          "uri": "layerhop://tokens/xdc",
+          "name": "XDC tokens",
+          "title": "LayerHop tokens per chain",
+          "description": "Built-in token list for one chain (JSON): symbol, address/mint, decimals.",
+          "mimeType": "application/json",
+          "digest": "sha256:fe547d30ae849873e7d604b73da9e540b35e33c2cfdb6e57d44818eada298a94"
+        },
+        {
+          "uri": "layerhop://tokens/zircuit",
+          "name": "Zircuit tokens",
+          "title": "LayerHop tokens per chain",
+          "description": "Built-in token list for one chain (JSON): symbol, address/mint, decimals.",
+          "mimeType": "application/json",
+          "digest": "sha256:21158983ed075e22da0dfc872b3321afd832b2197b581c0e022b51e7350f3940"
+        },
+        {
+          "uri": "layerhop://tokens/zora",
+          "name": "Zora tokens",
+          "title": "LayerHop tokens per chain",
+          "description": "Built-in token list for one chain (JSON): symbol, address/mint, decimals.",
+          "mimeType": "application/json",
+          "digest": "sha256:4b5fcb2384236110e3ed49c55bed85b2bf3ae4ae9bc2d86e18fb0a5cc0c93aeb"
+        },
+        {
+          "uri": "layerhop://chains",
+          "name": "chains",
+          "title": "LayerHop chains",
+          "description": "Every chain LayerHop supports (JSON).",
+          "mimeType": "application/json",
+          "digest": "sha256:76f9502cdbc2a8773aaaea524e1448370ae87af1bb253837947d4746381cc03d"
+        },
+        {
+          "uri": "https://docs.layerhop.com/llms.txt",
+          "name": "docs-llms-txt",
+          "title": "LayerHop docs (llms.txt)",
+          "description": "Index of the LayerHop developer docs for LLMs. Full text: llms-full.txt on the same site.",
+          "mimeType": "text/plain",
+          "digest": "sha256:684b2b0a98f66488deca5353803b1d4ef457f9ab0b414cc5e9937695db043b28"
+        },
+        {
+          "uri": "layerhop://tokens/zksync",
+          "name": "zkSync Era tokens",
+          "title": "LayerHop tokens per chain",
+          "description": "Built-in token list for one chain (JSON): symbol, address/mint, decimals.",
+          "mimeType": "application/json",
+          "digest": "sha256:df5b307e1331538826bd340956d04f2a396631921354af844b9d587ff236c473"
+        }
+      ],
+      "resourceTemplates": [
+        {
+          "uriTemplate": "layerhop://tokens/{chain}",
+          "name": "tokens",
+          "title": "LayerHop tokens per chain",
+          "description": "Built-in token list for one chain (JSON): symbol, address/mint, decimals.",
+          "mimeType": "application/json",
+          "digest": "sha256:c7a332a65e11c7a2bc4eae6aae64e0500bd3f336491cc335f69b37f0b4d3dba7"
+        }
+      ],
+      "prompts": [
+        {
+          "name": "swap_assistant",
+          "title": "Safe swap assistant",
+          "description": "Guide the user through a cross-chain or same-chain swap safely: quote, show every fee, confirm, then hand off a swap link to sign in their own wallet.",
+          "arguments": [
+            {
+              "name": "request",
+              "description": "What the user wants, e.g. \"swap 100 USDC on Base to SOL on Solana\".",
+              "required": false
+            }
+          ],
+          "digest": "sha256:02009e5c7499dc1da0393c391d83ff1420386f17a6cac64e47c4801a32a66b15"
+        }
+      ],
+      "digest": "sha256:274c55023b60f972c649643cf95b6b79cddd6a17ae560c9afe9318dc5ffa9b8e"
+    }
+  }
+}

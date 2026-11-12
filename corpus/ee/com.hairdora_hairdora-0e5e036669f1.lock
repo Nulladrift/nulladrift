@@ -1,0 +1,3403 @@
+{
+  "lockfileVersion": 2,
+  "subjects": {
+    "com.hairdora/hairdora": {
+      "kind": "mcp-server",
+      "source": {
+        "client": "manual",
+        "file": "registry.modelcontextprotocol.io"
+      },
+      "transport": {
+        "type": "http",
+        "url": "https://mcp.hairdora.com/mcp"
+      },
+      "protocol": {
+        "era": "modern",
+        "version": "2026-07-28",
+        "supportedVersions": ["2026-07-28"]
+      },
+      "serverInfo": {
+        "name": "hairdora-mcp",
+        "title": "HairDora",
+        "version": "0.2.0"
+      },
+      "capabilities": {
+        "extensions": {
+          "io.modelcontextprotocol/skills": {}
+        },
+        "resources": {
+          "listChanged": false
+        },
+        "tools": {
+          "listChanged": false
+        }
+      },
+      "instructions": "# Salon operations with HairDora\n\nThis skill drives the HairDora MCP connector. The user must connect HairDora\nand authorize an account with live access to the intended organization. If\nauthorization fails, ask the user to connect HairDora. Never request, embed,\nor repeat an API key, password, OAuth token, payment credential, or webhook\nsecret.\n\n## What the connector changes\n\nThe read tools change nothing. Six tools write, as the signed-in member, with\nthat member's HairDora role: `book_appointment`, `reschedule_appointment`,\n`cancel_appointment`, `create_client`, `update_client` and\n`set_inventory_quantity`. HairDora's own rules apply to every write: a\nstylist sees and changes only what their role allows, and the plan's monthly\nappointment limit counts bookings made here.\n\nIf those six tools are missing, the connection was authorized to read only\n(every connection made before November 2026 was). Ask the user to disconnect\nHairDora and connect it again, allowing HairDora to create and update data.\n\nConfirm every write with the user before calling it: who, which salon, when,\nand what will change. Booking, moving and cancelling reach the client: a\nbooking schedules the salon's reminder messages, a move moves them, and a\ncancellation sends the salon's cancellation message when the salon set one up.\nSay so when you ask.\n\nThe connector cannot delete anything, take or refund payments, send a\nmessage of its own, change reminder or template settings, create a repeating\nseries of appointments, change services, prices, staff or roles, or touch\nexpenses. Direct the user to the HairDora app for those.\n\nIt never returns a client's phone number, email, address or notes. When\nsomeone asks for them, or to export them, say the connector does not share\ncontact details and that the HairDora app shows them.\n\n## Resource identifiers\n\nKeep these identifiers distinct:\n\n- `salonId` selects an owned salon. A write may leave it out when the account\n  has one salon.\n- `clientId` names one client; `appointmentId` one appointment;\n  `inventoryItemId` one stock item.\n- `providerIds` are the stylist ids `list_providers` returns.\n- `serviceIds` are the service ids `list_services` returns.\n- `lastEditTime` is a record's version. Moving or cancelling an appointment,\n  updating a client and setting a stock quantity take it as\n  `expectedLastEditTime` and are refused with `conflict` when the record\n  changed since it was read.\n- `requestId` is a unique id you choose for each new booking or client, such\n  as a UUID. Calling again with the same `requestId` returns the first result\n  instead of booking or adding twice.\n\nResolve a name with a list tool, then reuse the exact returned id. Never guess\nan id, treat an opaque id as authority, or reuse an id from another\norganization. Cross-tenant salon, client, and appointment ids return not found\nor an authorization error. For availability and providers, the connector must\nfinish its owned-salon check before using the product's public booking route.\n\n## Available tools\n\n| Tool                     | Use it when someone asks…                                                                                                                             |\n| ------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------- |\n| `list_salons`            | which salons they run, with the ids that narrow other reads to one salon                                                                              |\n| `get_salon`              | for a salon's opening hours, address, phone, timezone or appointment length                                                                           |\n| `get_salon_availability` | when there are free slots (the salon's booking window, up to 14 days with openings)                                                                   |\n| `list_providers`         | which stylists or hairdressers can be booked, with the ids a booking takes                                                                            |\n| `list_clients`           | who the clients are, or for a client's id by name (up to 100)                                                                                         |\n| `get_client`             | about one client's language or salon                                                                                                                  |\n| `list_appointments`      | how many appointments there are on a day or in a period, how many were canceled or no-shows, when a client is booked, or which bookings a stylist has |\n| `get_appointment`        | what services one booking includes and their prices                                                                                                   |\n| `list_calendar_events`   | when the salon is closed or has extra opening hours, or a stylist or chair is blocked                                                                 |\n| `list_services`          | what a cut, colour or other service costs                                                                                                             |\n| `list_payments`          | which payments were taken or whether a client paid; never moves funds                                                                                 |\n| `list_quotes`            | which client quotes are pending, approved or rejected (no amounts)                                                                                    |\n| `list_inventory_items`   | how much of a product is in stock, or what is running low                                                                                             |\n| `show_salon_overview`    | for a one-card overview of one salon                                                                                                                  |\n| `book_appointment`       | to book a client in                                                                                                                                   |\n| `reschedule_appointment` | to move an appointment to another day or time                                                                                                         |\n| `cancel_appointment`     | to cancel an appointment                                                                                                                              |\n| `create_client`          | to add a new client                                                                                                                                   |\n| `update_client`          | to change a client's name, phone, email or language                                                                                                   |\n| `set_inventory_quantity` | to correct or update a stock count                                                                                                                    |\n\n`list_clients`, `list_appointments`, `list_calendar_events`, `list_services`,\n`list_payments`, `list_quotes` and `list_inventory_items` accept a maximum\nresult limit of 100 and return `hasMore`. Defaults are 20 except services and\nstock, which default to 50. `list_salons` and `list_providers` are capped at 100. Report `hasMore` rather than claiming completeness. The overview caps\ncounted clients at 100, appointment previews at 8, and service previews at 12;\na `+` count is a lower bound.\n\n`get_salon_availability` accepts no custom date window. It follows the salon's\nown online-booking window (by default from two hours ahead to six months\nahead) and returns the first 14 days that have openings. Do not extrapolate\nbeyond the days it returns. It summarizes each day with slot count\nand first/last slot; it does not identify who occupies unavailable time.\n\nProvider roles are organization-wide, not proof that a provider works at the\nselected salon. `list_providers` returns ids and names only, with no contact,\nrole record, avatar, or personal schedule.\n\n## Booking workflow\n\n1. Find the client with `list_clients` and its `search` (any words of their\n   name, ignoring case and accents). If they are not there, offer to add them\n   with `create_client`, then use the id it returns.\n2. Use `get_salon` for the salon's timezone and usual appointment length, and\n   `get_salon_availability` when the user has no time in mind.\n3. Use `list_services` for the services asked for, and `list_providers` when\n   the salon has several stylists and the user named one or must choose.\n4. Confirm the client, salon, local day and time, services and stylist with\n   the user, then call `book_appointment` with a new `requestId`. Give\n   `startTime` with the salon's UTC offset. Leave `durationMinutes` out for\n   the salon's usual length.\n5. Report the booked time in the salon's timezone, and that the salon's\n   reminders will reach the client.\n\n`book_appointment` books only stylists with the hairdresser role and only a\nclient of the same salon. With several stylists and none named, it answers\n`provider_required`: ask which one. `plan_limit_reached` means the salon's\nmonthly appointment limit is used up; the owner can upgrade in the app.\n\n## Moving or cancelling an appointment\n\n1. Find the appointment with `list_appointments` (by client and day) or\n   `get_appointment`, and keep its `id` and `lastEditTime`. A stylist's\n   bookings are those whose `providerIds` hold the stylist's id from\n   `list_providers`; move or cancel them one at a time, each confirmed.\n2. Confirm the change with the user, then call `reschedule_appointment` (the\n   client, stylist, services and length stay the same unless a new\n   `durationMinutes` is given) or `cancel_appointment`. Cancelling keeps the\n   appointment as canceled; it never deletes it.\n3. On `conflict`, read the appointment again, tell the user what changed, and\n   ask again before retrying with the new `lastEditTime`.\n\nOnly requested and booked appointments can be moved or canceled. One the\nclient attended or missed stays as it is.\n\n## Clients\n\n`create_client` needs a name; phone, email and language are optional. The\nphone and email are saved for the salon's messages but never returned. Use\n`update_client` with the client's `lastEditTime` to change a name, phone,\nemail or language; only the fields given change.\n\n## Stock\n\n`list_inventory_items` shows each item's unit, quantity, minimum and whether\nit is at or below its minimum. `set_inventory_quantity` replaces the stored\nquantity with the number given: when the user reports a change (\"we used\ntwo\"), work out the new total from the quantity you read, confirm it, and send\nthat total with the item's `lastEditTime`.\n\n## When the answer is lost\n\n`delivery_unknown` means the connection dropped after the request was sent,\nso the change may have been saved. For a booking or a new client, retry with\nthe same `requestId`: a record already saved is returned instead of written\ntwice. For anything else, read the record again before deciding to retry.\n\n## Personal-data boundary\n\nClient display names and pseudonymous client/appointment/quote/payment\nlinkages are personal data. Use them only when the requested workflow needs to\nresolve a client or connect that client's records. Do not repeat more names or\nidentifiers than needed in the answer.\n\nSafe results may include:\n\n- salon ids, display names, public business contact/location, locale,\n  currency, timezone, opening hours, and scheduling settings;\n- client display name and pseudonymous id, salon link, language, and edit\n  time;\n- appointment ids, client/salon links, times, status, edit time, stylist ids\n  and bounded service summaries;\n- stylist ids and display names;\n- calendar type, scope, blocking/opening effect, all-day flag, and times;\n- service ids, names, prices, and salon links;\n- stock item ids, names, units, quantities and minimums; and\n- quote/payment ids, client/salon links, status, time, amount, and currency.\n\nThe connector intentionally never returns:\n\n- client email, phone, address, or other contact/profile fields, even right\n  after you sent them;\n- client, appointment, quote, payment, stock or calendar free-text notes;\n- service/color history or private calendar titles and reasons;\n- chair, role, or organization ids;\n- cardholder data, processor/customer ids, credentials, payment errors,\n  discounts, or staff commission splits; or\n- arbitrary metadata, internal integrations, or unbounded raw documents.\n\nDo not infer or reconstruct excluded fields. Ask for a client's phone or email\nonly to add or update that client, and never to answer a question. Do not ask\nthe user to paste notes, card data, processor ids, or credentials into chat.\n\n## Salon capacity audit\n\n1. Use `list_salons` unless the exact owned salon id is already available.\n2. Call `get_salon` for timezone, opening hours, appointment duration, and\n   business configuration.\n3. Call `list_calendar_events` with that salon and a bounded time window.\n   Interpret `BLOCK` versus `OPEN`; titles, notes, staff/chair ids, and private\n   reasons are unavailable.\n4. Call `get_salon_availability`; it returns the salon's own booking window.\n5. Optionally use `list_appointments` with the same window to describe booked\n   workload without exposing notes or contacts.\n6. Distinguish configured hours, explicit blocks, booked appointments, and\n   remaining summarized availability. Do not invent the cause of a block.\n\n## Service, quote, and payment-status workflow\n\nUse `list_services` for the catalog and prices. A price is operational\nmetadata, not proof of the final charged amount.\n\nFor one resolved client, `list_quotes` can show pseudonymous quote ids, status,\nand time. It does not return line items, discounts, contact details, or notes.\nThe status filter is applied within a bounded upstream window; when `hasMore`\nis true, do not claim that the filtered set is globally complete.\n\n`list_payments` can show pseudonymous payment/client/salon ids, time, amount,\ncurrency, and status. It cannot charge, refund, transfer, retry, settle, or\notherwise move funds. It omits cardholder data, processor/customer ids,\ncredentials, errors, discounts, notes, and commission splits. Treat a status\nas HairDora's recorded operational state, not independent proof of bank\nsettlement.\n\n## Interactive views\n\n`show_salon_overview` renders a bounded salon card. Its model-visible and\nrendered result omits client names and client/appointment ids. Explain lower\nbounds, schedule patterns, or next safe checks instead of restating every\nvisible value.\n\n`get_appointment` renders the appointment-detail card. The card omits the\nappointment note and all contact/payment fields. Use its client or salon\nreference for another safe read only when the user's request requires it.\n",
+      "tools": [
+        {
+          "name": "book_appointment",
+          "title": "Book a salon appointment",
+          "description": "Use this when someone asks to book a client in at their salon. Returns the new appointment with its time, stylist and services; it takes the salon's usual length, chair and reminders, so the salon's reminder messages go to the client. Not for finding free slots.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "clientId": {
+                "description": "Id of the client, from list_clients or create_client.",
+                "maxLength": 24,
+                "minLength": 24,
+                "pattern": "^[0-9a-f]{24}$",
+                "type": "string"
+              },
+              "durationMinutes": {
+                "description": "Length in minutes. Leave it out for the salon's usual length.",
+                "maximum": 480,
+                "minimum": 5,
+                "type": "integer"
+              },
+              "note": {
+                "description": "A note for the salon team.",
+                "maxLength": 2000,
+                "type": "string"
+              },
+              "providerIds": {
+                "description": "Ids of the stylists who take it, from list_providers. Leave it out when the salon has one stylist or the user is the stylist.",
+                "items": {
+                  "maxLength": 24,
+                  "minLength": 24,
+                  "pattern": "^[0-9a-f]{24}$",
+                  "type": "string"
+                },
+                "maxItems": 5,
+                "type": "array"
+              },
+              "requestId": {
+                "description": "A unique id you choose for this booking, such as a UUID. Calling again with the same requestId returns the first booking instead of booking twice.",
+                "maxLength": 64,
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9_-]{1,64}$",
+                "type": "string"
+              },
+              "salonId": {
+                "description": "Id of the salon, from list_salons. Leave it out when the user has one salon.",
+                "maxLength": 24,
+                "minLength": 24,
+                "pattern": "^[0-9a-f]{24}$",
+                "type": "string"
+              },
+              "serviceIds": {
+                "description": "Ids of the services booked, from list_services.",
+                "items": {
+                  "maxLength": 24,
+                  "minLength": 24,
+                  "pattern": "^[0-9a-f]{24}$",
+                  "type": "string"
+                },
+                "maxItems": 20,
+                "type": "array"
+              },
+              "startTime": {
+                "description": "Start as an ISO 8601 time with the salon's UTC offset, such as 2026-11-20T10:00:00+01:00.",
+                "format": "date-time",
+                "maxLength": 40,
+                "type": "string"
+              }
+            },
+            "required": ["clientId", "requestId", "startTime"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "appointment": {
+                "additionalProperties": false,
+                "properties": {
+                  "clientId": {
+                    "anyOf": [
+                      {
+                        "maxLength": 24,
+                        "minLength": 24,
+                        "pattern": "^[0-9a-f]{24}$",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "endTime": {
+                    "anyOf": [
+                      {
+                        "maxLength": 40,
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "id": {
+                    "anyOf": [
+                      {
+                        "maxLength": 24,
+                        "minLength": 24,
+                        "pattern": "^[0-9a-f]{24}$",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "lastEditTime": {
+                    "anyOf": [
+                      {
+                        "maxLength": 40,
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "providerIds": {
+                    "items": {
+                      "maxLength": 24,
+                      "minLength": 24,
+                      "pattern": "^[0-9a-f]{24}$",
+                      "type": "string"
+                    },
+                    "maxItems": 10,
+                    "type": "array"
+                  },
+                  "reminderCount": {
+                    "maximum": 100000,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "salonId": {
+                    "anyOf": [
+                      {
+                        "maxLength": 24,
+                        "minLength": 24,
+                        "pattern": "^[0-9a-f]{24}$",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "serviceCount": {
+                    "maximum": 100000,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "services": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "id": {
+                          "anyOf": [
+                            {
+                              "maxLength": 24,
+                              "minLength": 24,
+                              "pattern": "^[0-9a-f]{24}$",
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "name": {
+                          "maxLength": 200,
+                          "type": "string"
+                        },
+                        "price": {
+                          "anyOf": [
+                            {
+                              "maximum": 1000000000,
+                              "minimum": -1000000000,
+                              "type": "number"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      },
+                      "required": ["id", "name", "price"],
+                      "type": "object"
+                    },
+                    "maxItems": 20,
+                    "type": "array"
+                  },
+                  "startTime": {
+                    "anyOf": [
+                      {
+                        "maxLength": 40,
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "status": {
+                    "anyOf": [
+                      {
+                        "enum": ["REQUESTED", "SCHEDULED", "CLIENT_ARRIVED", "NO_SHOW", "CANCELED"],
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": ["clientId", "endTime", "id", "lastEditTime", "providerIds", "reminderCount", "salonId", "serviceCount", "services", "startTime", "status"],
+                "type": "object"
+              },
+              "status": {
+                "enum": ["booked", "already_booked"],
+                "type": "string"
+              }
+            },
+            "required": ["appointment", "status"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": true,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": false,
+            "title": "Book a salon appointment"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "meta": {
+            "securitySchemes": [
+              {
+                "scopes": ["hairdora:write"],
+                "type": "oauth2"
+              }
+            ]
+          },
+          "digest": "sha256:f422dffe850b5026c1e0f4e2cc2c7cb4612f4ecc6795b2d5cbb90402194c4f45"
+        },
+        {
+          "name": "cancel_appointment",
+          "title": "Cancel a salon appointment",
+          "description": "Use this when someone asks to cancel a client's appointment. Returns the appointment as canceled, kept rather than deleted, and whether the salon's cancellation message goes to the client. Not for moving an appointment to another time.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "appointmentId": {
+                "description": "Id of the appointment, from list_appointments.",
+                "maxLength": 24,
+                "minLength": 24,
+                "pattern": "^[0-9a-f]{24}$",
+                "type": "string"
+              },
+              "expectedLastEditTime": {
+                "description": "The lastEditTime from get_appointment or list_appointments. An appointment changed since then is refused.",
+                "format": "date-time",
+                "maxLength": 40,
+                "type": "string"
+              }
+            },
+            "required": ["appointmentId", "expectedLastEditTime"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "appointment": {
+                "additionalProperties": false,
+                "properties": {
+                  "clientId": {
+                    "anyOf": [
+                      {
+                        "maxLength": 24,
+                        "minLength": 24,
+                        "pattern": "^[0-9a-f]{24}$",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "endTime": {
+                    "anyOf": [
+                      {
+                        "maxLength": 40,
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "id": {
+                    "anyOf": [
+                      {
+                        "maxLength": 24,
+                        "minLength": 24,
+                        "pattern": "^[0-9a-f]{24}$",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "lastEditTime": {
+                    "anyOf": [
+                      {
+                        "maxLength": 40,
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "providerIds": {
+                    "items": {
+                      "maxLength": 24,
+                      "minLength": 24,
+                      "pattern": "^[0-9a-f]{24}$",
+                      "type": "string"
+                    },
+                    "maxItems": 10,
+                    "type": "array"
+                  },
+                  "reminderCount": {
+                    "maximum": 100000,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "salonId": {
+                    "anyOf": [
+                      {
+                        "maxLength": 24,
+                        "minLength": 24,
+                        "pattern": "^[0-9a-f]{24}$",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "serviceCount": {
+                    "maximum": 100000,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "services": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "id": {
+                          "anyOf": [
+                            {
+                              "maxLength": 24,
+                              "minLength": 24,
+                              "pattern": "^[0-9a-f]{24}$",
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "name": {
+                          "maxLength": 200,
+                          "type": "string"
+                        },
+                        "price": {
+                          "anyOf": [
+                            {
+                              "maximum": 1000000000,
+                              "minimum": -1000000000,
+                              "type": "number"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      },
+                      "required": ["id", "name", "price"],
+                      "type": "object"
+                    },
+                    "maxItems": 20,
+                    "type": "array"
+                  },
+                  "startTime": {
+                    "anyOf": [
+                      {
+                        "maxLength": 40,
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "status": {
+                    "anyOf": [
+                      {
+                        "enum": ["REQUESTED", "SCHEDULED", "CLIENT_ARRIVED", "NO_SHOW", "CANCELED"],
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": ["clientId", "endTime", "id", "lastEditTime", "providerIds", "reminderCount", "salonId", "serviceCount", "services", "startTime", "status"],
+                "type": "object"
+              },
+              "clientNotification": {
+                "enum": ["configured", "not_configured", "unknown"],
+                "type": "string"
+              },
+              "status": {
+                "enum": ["canceled", "already_canceled"],
+                "type": "string"
+              }
+            },
+            "required": ["appointment", "clientNotification", "status"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": true,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": false,
+            "title": "Cancel a salon appointment"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "meta": {
+            "securitySchemes": [
+              {
+                "scopes": ["hairdora:write"],
+                "type": "oauth2"
+              }
+            ]
+          },
+          "digest": "sha256:894eb4c272269f7791914eec221337d90bdd79d5ed617fae1e4460f818aa886d"
+        },
+        {
+          "name": "create_client",
+          "title": "Add a salon client",
+          "description": "Use this when someone asks to add a new client to a salon. Returns the client's id, name, salon and language; the phone and email given are saved but never returned. Not for changing an existing client.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "email": {
+                "description": "Email address.",
+                "maxLength": 254,
+                "type": "string"
+              },
+              "language": {
+                "description": "Language for their messages, as a code such as en, it or pt-BR. Defaults to the salon language.",
+                "maxLength": 10,
+                "type": "string"
+              },
+              "name": {
+                "description": "The client's full name.",
+                "maxLength": 160,
+                "minLength": 1,
+                "type": "string"
+              },
+              "phone": {
+                "description": "Mobile number, with the country code when known.",
+                "maxLength": 40,
+                "type": "string"
+              },
+              "requestId": {
+                "description": "A unique id you choose for this client, such as a UUID. Calling again with the same requestId returns the first client instead of adding a second one.",
+                "maxLength": 64,
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9_-]{1,64}$",
+                "type": "string"
+              },
+              "salonId": {
+                "description": "Id of the salon, from list_salons. Leave it out when the user has one salon.",
+                "maxLength": 24,
+                "minLength": 24,
+                "pattern": "^[0-9a-f]{24}$",
+                "type": "string"
+              }
+            },
+            "required": ["name", "requestId"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "client": {
+                "additionalProperties": false,
+                "properties": {
+                  "id": {
+                    "anyOf": [
+                      {
+                        "maxLength": 24,
+                        "minLength": 24,
+                        "pattern": "^[0-9a-f]{24}$",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "language": {
+                    "anyOf": [
+                      {
+                        "maxLength": 16,
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "lastEditTime": {
+                    "anyOf": [
+                      {
+                        "maxLength": 40,
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "name": {
+                    "maxLength": 200,
+                    "type": "string"
+                  },
+                  "salonId": {
+                    "anyOf": [
+                      {
+                        "maxLength": 24,
+                        "minLength": 24,
+                        "pattern": "^[0-9a-f]{24}$",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": ["id", "language", "lastEditTime", "name", "salonId"],
+                "type": "object"
+              },
+              "status": {
+                "enum": ["created", "already_created"],
+                "type": "string"
+              }
+            },
+            "required": ["client", "status"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": true,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": false,
+            "title": "Add a salon client"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": false
+          },
+          "meta": {
+            "securitySchemes": [
+              {
+                "scopes": ["hairdora:write"],
+                "type": "oauth2"
+              }
+            ]
+          },
+          "digest": "sha256:2e7a9d16a6d1d3b8e7e22f2d639be948b5b33ac932845dbca54666387332eb25"
+        },
+        {
+          "name": "get_appointment",
+          "title": "Get appointment details",
+          "description": "Use this when someone asks what services a specific appointment includes, their prices, or the appointment's status. Returns one appointment's client, salon and stylist ids, times, status and up to 50 booked services with prices. Not for finding bookings by date.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "appointmentId": {
+                "description": "Id of one appointment, as the appointment list returns it (24 lowercase hex characters)",
+                "pattern": "^[0-9a-f]{24}$",
+                "type": "string"
+              }
+            },
+            "required": ["appointmentId"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "appointment": {
+                "anyOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "clientId": {
+                        "anyOf": [
+                          {
+                            "pattern": "^[0-9a-f]{24}$",
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "endTime": {
+                        "anyOf": [
+                          {
+                            "maxLength": 32,
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "id": {
+                        "pattern": "^[0-9a-f]{24}$",
+                        "type": "string"
+                      },
+                      "lastEditTime": {
+                        "anyOf": [
+                          {
+                            "maxLength": 32,
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ],
+                        "description": "Version to pass as expectedLastEditTime when moving or cancelling this appointment"
+                      },
+                      "providerIds": {
+                        "description": "Stylists booked on it, as list_providers ids",
+                        "items": {
+                          "pattern": "^[0-9a-f]{24}$",
+                          "type": "string"
+                        },
+                        "maxItems": 10,
+                        "type": "array"
+                      },
+                      "salonId": {
+                        "anyOf": [
+                          {
+                            "pattern": "^[0-9a-f]{24}$",
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "serviceCount": {
+                        "maximum": 10000,
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      "services": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "id": {
+                              "anyOf": [
+                                {
+                                  "pattern": "^[0-9a-f]{24}$",
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "The service, as list_services and book_appointment name it"
+                            },
+                            "name": {
+                              "maxLength": 200,
+                              "type": "string"
+                            },
+                            "price": {
+                              "type": ["number", "null"]
+                            }
+                          },
+                          "required": ["id", "name", "price"],
+                          "type": "object"
+                        },
+                        "maxItems": 50,
+                        "type": "array"
+                      },
+                      "servicesTruncated": {
+                        "type": "boolean"
+                      },
+                      "startTime": {
+                        "anyOf": [
+                          {
+                            "maxLength": 32,
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "status": {
+                        "anyOf": [
+                          {
+                            "enum": ["SCHEDULED", "CLIENT_ARRIVED", "NO_SHOW", "CANCELED"],
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      }
+                    },
+                    "required": ["clientId", "endTime", "id", "lastEditTime", "providerIds", "salonId", "serviceCount", "services", "servicesTruncated", "startTime", "status"],
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "One booking with up to 50 booked services and their prices; null when not found. Free-text notes, reminders, contact details, organization data and payment data are excluded."
+              },
+              "status": {
+                "enum": ["found", "not-found"],
+                "type": "string"
+              }
+            },
+            "required": ["appointment", "status"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Get appointment details"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "openai/outputTemplate": "ui://hairdora/appointment-detail-v1.html",
+            "openai/toolInvocation/invoked": "HairDora appointment ready.",
+            "openai/toolInvocation/invoking": "Loading HairDora appointment…",
+            "securitySchemes": [
+              {
+                "scopes": ["hairdora:read"],
+                "type": "oauth2"
+              }
+            ],
+            "ui": {
+              "resourceUri": "ui://hairdora/appointment-detail-v1.html"
+            },
+            "ui/resourceUri": "ui://hairdora/appointment-detail-v1.html"
+          },
+          "digest": "sha256:c48ffb43af9e770c0ea005958a8cd56f0e7f85b7435d28c676307e65b662384d"
+        },
+        {
+          "name": "get_client",
+          "title": "Get client details",
+          "description": "Use this when someone asks about one salon client, such as their preferred language or which salon they belong to. Returns the client's name, salon, language and last edit time. Not for the client's email, phone or booking history.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "clientId": {
+                "description": "Id of one client, as the client list returns it (24 lowercase hex characters)",
+                "pattern": "^[0-9a-f]{24}$",
+                "type": "string"
+              }
+            },
+            "required": ["clientId"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "client": {
+                "anyOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "id": {
+                        "pattern": "^[0-9a-f]{24}$",
+                        "type": "string"
+                      },
+                      "language": {
+                        "anyOf": [
+                          {
+                            "maxLength": 16,
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "lastEditTime": {
+                        "anyOf": [
+                          {
+                            "maxLength": 32,
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "name": {
+                        "maxLength": 200,
+                        "type": "string"
+                      },
+                      "salonId": {
+                        "anyOf": [
+                          {
+                            "pattern": "^[0-9a-f]{24}$",
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      }
+                    },
+                    "required": ["id", "language", "lastEditTime", "name", "salonId"],
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Name, salon, language and edit time only; null when not found. Email, phone, address, operator notes, service and colour history, organization data and other profile fields are excluded."
+              },
+              "status": {
+                "enum": ["found", "not-found"],
+                "type": "string"
+              }
+            },
+            "required": ["client", "status"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Get client details"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "securitySchemes": [
+              {
+                "scopes": ["hairdora:read"],
+                "type": "oauth2"
+              }
+            ]
+          },
+          "digest": "sha256:986a28c24d9a7beaa5d1831a3d9457bc5e843a88f0def0a0ed7ac31b58feec60"
+        },
+        {
+          "name": "get_salon",
+          "title": "Get salon details and opening hours",
+          "description": "Use this when someone asks for one salon's opening hours, address, phone, website, timezone or default appointment length. Returns that salon's business settings with up to 14 opening-hour rows, Monday first. Not for free booking slots.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "salonId": {
+                "description": "Id of one of the user's salons, as the salon list returns it (24 lowercase hex characters)",
+                "pattern": "^[0-9a-f]{24}$",
+                "type": "string"
+              }
+            },
+            "required": ["salonId"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "salon": {
+                "anyOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "appointmentDuration": {
+                        "anyOf": [
+                          {
+                            "exclusiveMinimum": 0,
+                            "maximum": 1440,
+                            "type": "integer"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ],
+                        "description": "Default appointment length in minutes"
+                      },
+                      "city": {
+                        "anyOf": [
+                          {
+                            "maxLength": 200,
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "countryCode": {
+                        "anyOf": [
+                          {
+                            "pattern": "^[A-Z]{2}$",
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "currency": {
+                        "anyOf": [
+                          {
+                            "pattern": "^[A-Z]{3}$",
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "defaultLocale": {
+                        "anyOf": [
+                          {
+                            "maxLength": 16,
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "firstDayOfTheWeek": {
+                        "anyOf": [
+                          {
+                            "enum": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"],
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "id": {
+                        "pattern": "^[0-9a-f]{24}$",
+                        "type": "string"
+                      },
+                      "name": {
+                        "maxLength": 200,
+                        "type": "string"
+                      },
+                      "openingHours": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "close": {
+                              "anyOf": [
+                                {
+                                  "pattern": "^\\d{1,2}:\\d{2}$",
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "day": {
+                              "anyOf": [
+                                {
+                                  "enum": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"],
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "open": {
+                              "anyOf": [
+                                {
+                                  "pattern": "^\\d{1,2}:\\d{2}$",
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            }
+                          },
+                          "required": ["close", "day", "open"],
+                          "type": "object"
+                        },
+                        "maxItems": 14,
+                        "type": "array"
+                      },
+                      "openingHoursTruncated": {
+                        "description": "True when the salon has more than 14 opening-hour rows",
+                        "type": "boolean"
+                      },
+                      "phone": {
+                        "anyOf": [
+                          {
+                            "maxLength": 32,
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "postalCode": {
+                        "anyOf": [
+                          {
+                            "maxLength": 32,
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "state": {
+                        "anyOf": [
+                          {
+                            "maxLength": 200,
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "street": {
+                        "anyOf": [
+                          {
+                            "maxLength": 200,
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "timezone": {
+                        "anyOf": [
+                          {
+                            "maxLength": 64,
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "website": {
+                        "anyOf": [
+                          {
+                            "maxLength": 2048,
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      }
+                    },
+                    "required": ["appointmentDuration", "city", "countryCode", "currency", "defaultLocale", "firstDayOfTheWeek", "id", "name", "openingHours", "openingHoursTruncated", "phone", "postalCode", "state", "street", "timezone", "website"],
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Business settings of the salon; null when not found. Organization ids, payment configuration, credentials, integrations, reminders, staff data and internal metadata are excluded."
+              },
+              "status": {
+                "enum": ["found", "not-found"],
+                "type": "string"
+              }
+            },
+            "required": ["salon", "status"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Get salon details and opening hours"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "securitySchemes": [
+              {
+                "scopes": ["hairdora:read"],
+                "type": "oauth2"
+              }
+            ]
+          },
+          "digest": "sha256:83ad5c493668c872641c9dca1e7d675255348a900e2e9931d1da058d37a2e45e"
+        },
+        {
+          "name": "get_salon_availability",
+          "title": "Find free appointment slots",
+          "description": "Use this when someone asks when their hair salon has free appointment slots or the next opening. Returns, per day, how many online-booking slots are open plus the first start and last end time, for the next 14 days that have openings (no client or stylist names). Not for making a booking.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "salonId": {
+                "description": "Id of one of the user's salons, as the salon list returns it (24 lowercase hex characters)",
+                "pattern": "^[0-9a-f]{24}$",
+                "type": "string"
+              }
+            },
+            "required": ["salonId"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "days": {
+                "description": "One row per day with open online-booking slots inside the salon's booking window, in date order. Slot counts and times only; who holds a booked time is never exposed.",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "day": {
+                      "anyOf": [
+                        {
+                          "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "firstSlot": {
+                      "anyOf": [
+                        {
+                          "maxLength": 32,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "Start time of the first open slot that day"
+                    },
+                    "lastSlot": {
+                      "anyOf": [
+                        {
+                          "maxLength": 32,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "End time of the last open slot that day"
+                    },
+                    "slotCount": {
+                      "maximum": 1440,
+                      "minimum": 0,
+                      "type": "integer"
+                    }
+                  },
+                  "required": ["day", "firstSlot", "lastSlot", "slotCount"],
+                  "type": "object"
+                },
+                "maxItems": 14,
+                "type": "array"
+              },
+              "status": {
+                "enum": ["found", "salon-not-found", "no-availability"],
+                "type": "string"
+              }
+            },
+            "required": ["days", "status"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Find free appointment slots"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "securitySchemes": [
+              {
+                "scopes": ["hairdora:read"],
+                "type": "oauth2"
+              }
+            ]
+          },
+          "digest": "sha256:dde767f205b13969ca9f23a077d13249555185023fb616c2046b6a0ee0586d42"
+        },
+        {
+          "name": "list_appointments",
+          "title": "List salon appointments",
+          "description": "Use this when someone asks how many appointments are booked on a day or in a period, how many were canceled or no-shows, when a client is booked, or which bookings a stylist has. Returns appointments across all the user's salons, or just one, with id, client, salon and stylist ids, times and status for any date window, latest first, up to 100. Not for the services inside an appointment.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "clientId": {
+                "description": "Only appointments of this client, by an id from the client list",
+                "pattern": "^[0-9a-f]{24}$",
+                "type": "string"
+              },
+              "endTime": {
+                "description": "Only appointments ending before this ISO 8601 time",
+                "maxLength": 32,
+                "type": "string"
+              },
+              "limit": {
+                "description": "Maximum number of appointments to return (default 20, maximum 100)",
+                "exclusiveMinimum": 0,
+                "maximum": 100,
+                "type": "integer"
+              },
+              "salonId": {
+                "description": "Only appointments at this salon, by an id from the user's salon list; every salon when absent",
+                "pattern": "^[0-9a-f]{24}$",
+                "type": "string"
+              },
+              "startTime": {
+                "description": "Only appointments starting at or after this ISO 8601 time",
+                "maxLength": 32,
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "appointments": {
+                "description": "Bookings, latest start first. Free-text notes, reminders, contact details, organization data and payment details are excluded.",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "clientId": {
+                      "anyOf": [
+                        {
+                          "pattern": "^[0-9a-f]{24}$",
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "endTime": {
+                      "anyOf": [
+                        {
+                          "maxLength": 32,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "id": {
+                      "pattern": "^[0-9a-f]{24}$",
+                      "type": "string"
+                    },
+                    "lastEditTime": {
+                      "anyOf": [
+                        {
+                          "maxLength": 32,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "Version to pass as expectedLastEditTime when moving or cancelling it"
+                    },
+                    "providerIds": {
+                      "description": "Stylists booked on it, as list_providers ids",
+                      "items": {
+                        "pattern": "^[0-9a-f]{24}$",
+                        "type": "string"
+                      },
+                      "maxItems": 10,
+                      "type": "array"
+                    },
+                    "salonId": {
+                      "anyOf": [
+                        {
+                          "pattern": "^[0-9a-f]{24}$",
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "startTime": {
+                      "anyOf": [
+                        {
+                          "maxLength": 32,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "status": {
+                      "anyOf": [
+                        {
+                          "enum": ["SCHEDULED", "CLIENT_ARRIVED", "NO_SHOW", "CANCELED"],
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": ["clientId", "endTime", "id", "lastEditTime", "providerIds", "salonId", "startTime", "status"],
+                  "type": "object"
+                },
+                "maxItems": 100,
+                "type": "array"
+              },
+              "count": {
+                "maximum": 100,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "hasMore": {
+                "type": "boolean"
+              }
+            },
+            "required": ["appointments", "count", "hasMore"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "List salon appointments"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "securitySchemes": [
+              {
+                "scopes": ["hairdora:read"],
+                "type": "oauth2"
+              }
+            ]
+          },
+          "digest": "sha256:b6848631a06b081bd5ce0af93297dd35fcd26e3cba6d88c98ee8f3c23e1fc874"
+        },
+        {
+          "name": "list_calendar_events",
+          "title": "List closures, days off and blocked time",
+          "description": "Use this when someone asks when their salon is closed or has extra opening hours, or when a stylist or chair is blocked for holidays, vacations, sick days, training or meetings. Returns blocks and extra openings with salon, type, scope, effect, all-day flag and times for all salons unless one is given, earliest first (no titles or notes). Not for client appointments.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "endTime": {
+                "description": "Only events ending before this ISO 8601 time",
+                "maxLength": 32,
+                "type": "string"
+              },
+              "limit": {
+                "description": "Maximum number of calendar events to return (default 20, maximum 100)",
+                "exclusiveMinimum": 0,
+                "maximum": 100,
+                "type": "integer"
+              },
+              "salonId": {
+                "description": "Only blocks for this salon, by an id from the user's salon list; every salon when absent",
+                "pattern": "^[0-9a-f]{24}$",
+                "type": "string"
+              },
+              "startTime": {
+                "description": "Only events starting at or after this ISO 8601 time",
+                "maxLength": 32,
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "count": {
+                "maximum": 100,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "events": {
+                "description": "Closures, days off and extra openings, earliest first. Free-text titles and notes, chair ids, staff ids, organization data and private reasons are excluded.",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "allDay": {
+                      "type": "boolean"
+                    },
+                    "effect": {
+                      "anyOf": [
+                        {
+                          "enum": ["BLOCK", "OPEN"],
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "BLOCK removes bookable time; OPEN adds hours on a normally closed time"
+                    },
+                    "endTime": {
+                      "anyOf": [
+                        {
+                          "maxLength": 32,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "id": {
+                      "pattern": "^[0-9a-f]{24}$",
+                      "type": "string"
+                    },
+                    "salonId": {
+                      "anyOf": [
+                        {
+                          "pattern": "^[0-9a-f]{24}$",
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "scope": {
+                      "anyOf": [
+                        {
+                          "enum": ["CHAIR", "PROVIDER", "SALON"],
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "SALON: the whole salon; PROVIDER: one or more stylists; CHAIR: one chair"
+                    },
+                    "startTime": {
+                      "anyOf": [
+                        {
+                          "maxLength": 32,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "type": {
+                      "anyOf": [
+                        {
+                          "enum": ["COURSE", "MEETING", "VACATION", "SICK", "HOLIDAY", "MAINTENANCE", "OTHER"],
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": ["allDay", "effect", "endTime", "id", "salonId", "scope", "startTime", "type"],
+                  "type": "object"
+                },
+                "maxItems": 100,
+                "type": "array"
+              },
+              "hasMore": {
+                "type": "boolean"
+              }
+            },
+            "required": ["count", "events", "hasMore"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "List closures, days off and blocked time"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "securitySchemes": [
+              {
+                "scopes": ["hairdora:read"],
+                "type": "oauth2"
+              }
+            ]
+          },
+          "digest": "sha256:94a8526346b94eaa7522f7a889c76ade24797ca226b736599f6fe1e65eab79c3"
+        },
+        {
+          "name": "list_clients",
+          "title": "Look up salon clients",
+          "description": "Use this when someone asks who their clients are, or needs a client's id to book them or to look up their appointments, payments or quotes. Returns up to 100 clients (20 by default) across all the user's salons or one, with id, name, salon and last edit time, optionally only those whose name matches. Not for a client's email, phone or notes.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "limit": {
+                "description": "Maximum number of clients to return (default 20, maximum 100)",
+                "exclusiveMinimum": 0,
+                "maximum": 100,
+                "type": "integer"
+              },
+              "salonId": {
+                "description": "Only clients of this salon, by an id from the user's salon list; every salon when absent",
+                "pattern": "^[0-9a-f]{24}$",
+                "type": "string"
+              },
+              "search": {
+                "description": "Only clients whose name contains these words, in any order, ignoring case and accents",
+                "maxLength": 100,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "clients": {
+                "description": "Clients with the ids needed to look up their bookings, payments and quotes. Email, phone, address, operator notes, service and colour history, organization data and other profile fields are excluded.",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "id": {
+                      "pattern": "^[0-9a-f]{24}$",
+                      "type": "string"
+                    },
+                    "lastEditTime": {
+                      "anyOf": [
+                        {
+                          "maxLength": 32,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "name": {
+                      "maxLength": 200,
+                      "type": "string"
+                    },
+                    "salonId": {
+                      "anyOf": [
+                        {
+                          "pattern": "^[0-9a-f]{24}$",
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": ["id", "lastEditTime", "name", "salonId"],
+                  "type": "object"
+                },
+                "maxItems": 100,
+                "type": "array"
+              },
+              "count": {
+                "maximum": 100,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "hasMore": {
+                "type": "boolean"
+              }
+            },
+            "required": ["clients", "count", "hasMore"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Look up salon clients"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "securitySchemes": [
+              {
+                "scopes": ["hairdora:read"],
+                "type": "oauth2"
+              }
+            ]
+          },
+          "digest": "sha256:1bd304ac2d56f2efe0709a0ecfa6e208fe593e9a86737401925a4aa9c539aabf"
+        },
+        {
+          "name": "list_inventory_items",
+          "title": "Check salon stock",
+          "description": "Use this when someone asks how much of a product is left in the salon's stock or what is running low. Returns up to 100 stock items with unit, quantity, minimum and a low-stock flag. Not for retail prices.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "limit": {
+                "description": "Maximum number of items (default 50, maximum 100).",
+                "maximum": 100,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "lowStockOnly": {
+                "description": "Only items at or below their minimum quantity.",
+                "type": "boolean"
+              },
+              "salonId": {
+                "description": "Id of the salon, from list_salons. Leave it out when the user has one salon.",
+                "maxLength": 24,
+                "minLength": 24,
+                "pattern": "^[0-9a-f]{24}$",
+                "type": "string"
+              },
+              "search": {
+                "description": "Only items whose name contains these words.",
+                "maxLength": 100,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "count": {
+                "maximum": 100000,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "hasMore": {
+                "type": "boolean"
+              },
+              "items": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "id": {
+                      "anyOf": [
+                        {
+                          "maxLength": 24,
+                          "minLength": 24,
+                          "pattern": "^[0-9a-f]{24}$",
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "lastEditTime": {
+                      "anyOf": [
+                        {
+                          "maxLength": 40,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "lowStock": {
+                      "type": "boolean"
+                    },
+                    "minimumQuantity": {
+                      "anyOf": [
+                        {
+                          "maximum": 1000000000,
+                          "minimum": 0,
+                          "type": "number"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "name": {
+                      "maxLength": 200,
+                      "type": "string"
+                    },
+                    "quantity": {
+                      "anyOf": [
+                        {
+                          "maximum": 1000000000,
+                          "minimum": 0,
+                          "type": "number"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "salonId": {
+                      "anyOf": [
+                        {
+                          "maxLength": 24,
+                          "minLength": 24,
+                          "pattern": "^[0-9a-f]{24}$",
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "unit": {
+                      "anyOf": [
+                        {
+                          "maxLength": 40,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": ["id", "lastEditTime", "lowStock", "minimumQuantity", "name", "quantity", "salonId", "unit"],
+                  "type": "object"
+                },
+                "maxItems": 100,
+                "type": "array"
+              },
+              "salonId": {
+                "maxLength": 24,
+                "minLength": 24,
+                "pattern": "^[0-9a-f]{24}$",
+                "type": "string"
+              }
+            },
+            "required": ["count", "hasMore", "items", "salonId"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Check salon stock"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "securitySchemes": [
+              {
+                "scopes": ["hairdora:read"],
+                "type": "oauth2"
+              }
+            ]
+          },
+          "digest": "sha256:f78fc3ea4a1e6a483a4a6d347ba6f79f7d2b1a7f0a362d4b357415556d0ff115"
+        },
+        {
+          "name": "list_payments",
+          "title": "List salon payments",
+          "description": "Use this when someone asks what payments their salon took, whether a client paid, or how much came in over a period. Returns payment records with id, client and salon ids, date, amount, currency and status for any date window and all salons unless one is given, newest first, up to 100 (no card details). Not for charging or refunding a client.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "clientId": {
+                "description": "Only payments from this client, by an id from the client list",
+                "pattern": "^[0-9a-f]{24}$",
+                "type": "string"
+              },
+              "endTime": {
+                "description": "Only payments ending before this ISO 8601 time",
+                "maxLength": 32,
+                "type": "string"
+              },
+              "limit": {
+                "description": "Maximum number of payments to return (default 20, maximum 100)",
+                "exclusiveMinimum": 0,
+                "maximum": 100,
+                "type": "integer"
+              },
+              "salonId": {
+                "description": "Only payments at this salon, by an id from the user's salon list; every salon when absent",
+                "pattern": "^[0-9a-f]{24}$",
+                "type": "string"
+              },
+              "startTime": {
+                "description": "Only payments starting at or after this ISO 8601 time",
+                "maxLength": 32,
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "count": {
+                "maximum": 100,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "hasMore": {
+                "type": "boolean"
+              },
+              "payments": {
+                "description": "Payment records, newest first; this tool cannot charge, refund or move funds. Cardholder data, processor and customer ids, credentials, errors, discounts, staff commission splits, operator notes and organization data are excluded.",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "amount": {
+                      "type": ["number", "null"]
+                    },
+                    "clientId": {
+                      "anyOf": [
+                        {
+                          "pattern": "^[0-9a-f]{24}$",
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "currency": {
+                      "anyOf": [
+                        {
+                          "pattern": "^[A-Z]{3}$",
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "id": {
+                      "pattern": "^[0-9a-f]{24}$",
+                      "type": "string"
+                    },
+                    "salonId": {
+                      "anyOf": [
+                        {
+                          "pattern": "^[0-9a-f]{24}$",
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "startTime": {
+                      "anyOf": [
+                        {
+                          "maxLength": 32,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "status": {
+                      "anyOf": [
+                        {
+                          "enum": ["CANCELED", "FAILED", "SUCCEEDED"],
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": ["amount", "clientId", "currency", "id", "salonId", "startTime", "status"],
+                  "type": "object"
+                },
+                "maxItems": 100,
+                "type": "array"
+              }
+            },
+            "required": ["count", "hasMore", "payments"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "List salon payments"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "securitySchemes": [
+              {
+                "scopes": ["hairdora:read"],
+                "type": "oauth2"
+              }
+            ]
+          },
+          "digest": "sha256:280aa0b5cc9f4f313ec3489062a24cd7e5e1fa287a0830227f159e87760f0f92"
+        },
+        {
+          "name": "list_providers",
+          "title": "List stylists who take appointments",
+          "description": "Use this when someone asks which stylists or hairdressers work at their salon or can be booked, or which stylist to book a client with. Returns up to 100 hairdresser ids and display names from the organization that owns the salon (no contact details or schedules). Not for stylists' days off.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "salonId": {
+                "description": "Id of one of the user's salons, as the salon list returns it (24 lowercase hex characters)",
+                "pattern": "^[0-9a-f]{24}$",
+                "type": "string"
+              }
+            },
+            "required": ["salonId"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "count": {
+                "maximum": 100,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "hasMore": {
+                "type": "boolean"
+              },
+              "providers": {
+                "description": "Ids and display names of organization members with the hairdresser role; roles are organization-wide, not per salon. The ids are the ones the salon's public booking page already shows. Contact details, avatar URLs, role records, schedules and organization data are excluded.",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "displayName": {
+                      "maxLength": 200,
+                      "type": "string"
+                    },
+                    "id": {
+                      "anyOf": [
+                        {
+                          "pattern": "^[0-9a-f]{24}$",
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "The id book_appointment takes in providerIds"
+                    }
+                  },
+                  "required": ["displayName", "id"],
+                  "type": "object"
+                },
+                "maxItems": 100,
+                "type": "array"
+              },
+              "status": {
+                "enum": ["found", "salon-not-found"],
+                "type": "string"
+              }
+            },
+            "required": ["count", "hasMore", "providers", "status"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "List stylists who take appointments"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "securitySchemes": [
+              {
+                "scopes": ["hairdora:read"],
+                "type": "oauth2"
+              }
+            ]
+          },
+          "digest": "sha256:b0aa65d831f98f5fc01063d1293bb1ff13371b5fefc77433a2ada0e5027326b6"
+        },
+        {
+          "name": "list_quotes",
+          "title": "List client quotes",
+          "description": "Use this when someone asks about price quotes given to salon clients, such as which are pending, approved or rejected. Returns quotes with id, client and salon ids, status and date for all salons unless one is given, newest first, up to 100; the status filter applies within that page. Not for quote amounts or line items.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "clientId": {
+                "description": "Only quotes for this client, by an id from the client list",
+                "pattern": "^[0-9a-f]{24}$",
+                "type": "string"
+              },
+              "endTime": {
+                "description": "Only quotes ending before this ISO 8601 time",
+                "maxLength": 32,
+                "type": "string"
+              },
+              "limit": {
+                "description": "Maximum number of quotes to return (default 20, maximum 100)",
+                "exclusiveMinimum": 0,
+                "maximum": 100,
+                "type": "integer"
+              },
+              "salonId": {
+                "description": "Only quotes from this salon, by an id from the user's salon list; every salon when absent",
+                "pattern": "^[0-9a-f]{24}$",
+                "type": "string"
+              },
+              "startTime": {
+                "description": "Only quotes starting at or after this ISO 8601 time",
+                "maxLength": 32,
+                "type": "string"
+              },
+              "status": {
+                "description": "Only quotes with this status: DRAFT, PENDING, REJECTED or APPROVED. Applied within the fetched page of newest quotes",
+                "enum": ["DRAFT", "PENDING", "REJECTED", "APPROVED"],
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "count": {
+                "maximum": 100,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "hasMore": {
+                "type": "boolean"
+              },
+              "quotes": {
+                "description": "Quotes, newest first. Free-text notes, quoted line details and amounts, discounts, contact details and organization data are excluded.",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "clientId": {
+                      "anyOf": [
+                        {
+                          "pattern": "^[0-9a-f]{24}$",
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "id": {
+                      "pattern": "^[0-9a-f]{24}$",
+                      "type": "string"
+                    },
+                    "salonId": {
+                      "anyOf": [
+                        {
+                          "pattern": "^[0-9a-f]{24}$",
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "startTime": {
+                      "anyOf": [
+                        {
+                          "maxLength": 32,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "status": {
+                      "anyOf": [
+                        {
+                          "enum": ["DRAFT", "PENDING", "REJECTED", "APPROVED"],
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": ["clientId", "id", "salonId", "startTime", "status"],
+                  "type": "object"
+                },
+                "maxItems": 100,
+                "type": "array"
+              }
+            },
+            "required": ["count", "hasMore", "quotes"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "List client quotes"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "securitySchemes": [
+              {
+                "scopes": ["hairdora:read"],
+                "type": "oauth2"
+              }
+            ]
+          },
+          "digest": "sha256:638189db8d6e88fb5325ed86166e45eecb4d8b6f529fff98428ea387f5e975ba"
+        },
+        {
+          "name": "list_salons",
+          "title": "List your salons",
+          "description": "Use this when someone asks which hair salons they run in HairDora, or a salon's id is needed. Returns up to 100 salons with id, name, currency, default language and last edit time. Not for a salon's address, phone or opening hours.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {},
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "count": {
+                "maximum": 100,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "hasMore": {
+                "description": "True when the organization has more than 100 salons",
+                "type": "boolean"
+              },
+              "salons": {
+                "description": "Salons in the signed-in organization. Contact, address, payment, organization and configuration fields are excluded.",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "currency": {
+                      "anyOf": [
+                        {
+                          "pattern": "^[A-Z]{3}$",
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "defaultLocale": {
+                      "anyOf": [
+                        {
+                          "maxLength": 16,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "id": {
+                      "pattern": "^[0-9a-f]{24}$",
+                      "type": "string"
+                    },
+                    "lastEditTime": {
+                      "anyOf": [
+                        {
+                          "maxLength": 32,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "name": {
+                      "maxLength": 200,
+                      "type": "string"
+                    }
+                  },
+                  "required": ["currency", "defaultLocale", "id", "lastEditTime", "name"],
+                  "type": "object"
+                },
+                "maxItems": 100,
+                "type": "array"
+              }
+            },
+            "required": ["count", "hasMore", "salons"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "List your salons"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "securitySchemes": [
+              {
+                "scopes": ["hairdora:read"],
+                "type": "oauth2"
+              }
+            ]
+          },
+          "digest": "sha256:6452d37f29be002271444d416f39d1a0fa391fd22b738b5917a9f6db6f6c3de3"
+        },
+        {
+          "name": "list_services",
+          "title": "Look up service prices",
+          "description": "Use this when someone asks what their salon charges for a cut, colour, blow-dry or other service, or what services it offers. Returns services with id, name, price and salon for all their salons unless one is given, 50 by default and up to 100. Not for what a particular client had done.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "limit": {
+                "description": "Maximum number of services to return (default 50, maximum 100)",
+                "exclusiveMinimum": 0,
+                "maximum": 100,
+                "type": "integer"
+              },
+              "salonId": {
+                "description": "Only services of this salon, by an id from the user's salon list; every salon when absent",
+                "pattern": "^[0-9a-f]{24}$",
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "count": {
+                "maximum": 100,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "hasMore": {
+                "type": "boolean"
+              },
+              "services": {
+                "description": "Services the salon offers, with prices. Internal metadata and organization data are excluded.",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "id": {
+                      "pattern": "^[0-9a-f]{24}$",
+                      "type": "string"
+                    },
+                    "name": {
+                      "maxLength": 200,
+                      "type": "string"
+                    },
+                    "price": {
+                      "description": "Price in the salon's currency",
+                      "type": ["number", "null"]
+                    },
+                    "salonId": {
+                      "anyOf": [
+                        {
+                          "pattern": "^[0-9a-f]{24}$",
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": ["id", "name", "price", "salonId"],
+                  "type": "object"
+                },
+                "maxItems": 100,
+                "type": "array"
+              }
+            },
+            "required": ["count", "hasMore", "services"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Look up service prices"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "securitySchemes": [
+              {
+                "scopes": ["hairdora:read"],
+                "type": "oauth2"
+              }
+            ]
+          },
+          "digest": "sha256:5b9dc47e58183a04de28664e5a041e892834cf44c8b6c73d84ab053d8fa22fe7"
+        },
+        {
+          "name": "open_hairdora",
+          "title": "HairDora Salon Scheduling",
+          "description": "Use this when someone wants to open HairDora and browse their salons, upcoming appointment previews, service prices and booking availability in an interactive sidebar. Returns up to 100 salons to start from (no client names, contact details or private notes). Not for booking, cancelling or charging for appointments.",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {},
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "additionalProperties": false,
+            "properties": {
+              "items": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "defaultLocale": {
+                      "anyOf": [
+                        {
+                          "maxLength": 32,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "id": {
+                      "anyOf": [
+                        {
+                          "maxLength": 200,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "locales": {
+                      "items": {
+                        "maxLength": 32,
+                        "type": "string"
+                      },
+                      "maxItems": 100,
+                      "type": "array"
+                    },
+                    "logoUrl": {
+                      "anyOf": [
+                        {
+                          "maxLength": 2048,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "name": {
+                      "maxLength": 200,
+                      "type": "string"
+                    },
+                    "subtitle": {
+                      "maxLength": 300,
+                      "type": "string"
+                    }
+                  },
+                  "required": ["defaultLocale", "id", "locales", "logoUrl", "name", "subtitle"],
+                  "type": "object"
+                },
+                "maxItems": 100,
+                "type": "array"
+              },
+              "truncated": {
+                "type": "boolean"
+              }
+            },
+            "required": ["items", "truncated"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "icons": [
+            {
+              "src": "data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20100%20100%22%3E%3Cpath%20fill%3D%22currentColor%22%20d%3D%22M35.59%2059.15L35.59%2059.15Q32.54%2058.87%2029.31%2058.34Q26.08%2057.80%2023.24%2057.02L23.24%2057.02Q23.10%2056.95%2022.60%2056.81Q22.10%2056.67%2022.10%2056.53L22.10%2056.53Q22.10%2056.31%2022.60%2056.24Q23.10%2056.17%2023.24%2056.17L23.24%2056.17Q24.66%2056.03%2026.86%2055.99Q29.06%2055.96%2030.48%2056.17L30.48%2056.17Q31.83%2056.38%2033.64%2056.53Q35.45%2056.67%2037.30%2056.60Q39.14%2056.53%2040.88%2056.24Q42.62%2055.96%2043.90%2055.39L43.90%2055.39Q44.47%2055.18%2045.18%2054.54Q45.89%2053.90%2046.24%2053.26L46.24%2053.26Q43.97%2054.75%2041.20%2055.11Q38.43%2055.46%2035.42%2055.25Q32.40%2055.04%2029.31%2054.61Q26.22%2054.18%2023.24%2054.04L23.24%2054.04Q21.32%2053.97%2019.30%2054.18Q17.28%2054.40%2015.40%2055.04Q13.51%2055.67%2011.95%2056.74Q10.39%2057.80%209.40%2059.37L9.40%2059.37Q9.25%2059.72%209.29%2059.47Q9.32%2059.22%209.32%2059.08L9.32%2059.08Q9.89%2056.24%2011.99%2054.79Q14.08%2053.33%2016.57%2052.55L16.57%2052.55Q17.49%2048.72%2018.70%2044.95Q19.90%2041.19%2020.93%2037.64Q21.96%2034.09%2022.64%2030.75Q23.31%2027.42%2023.24%2024.29L23.24%2024.29Q23.31%2024.15%2023.28%2024.01Q23.24%2023.87%2023.38%2023.87L23.38%2023.87Q23.52%2023.80%2023.56%2024.04Q23.60%2024.29%2023.60%2024.36L23.60%2024.36Q24.52%2027.49%2024.31%2030.86Q24.09%2034.23%2023.28%2037.71Q22.46%2041.19%2021.29%2044.78Q20.12%2048.36%2019.12%2051.98L19.12%2051.98L20.97%2051.77Q21.32%2050.14%2021.71%2048.43Q22.10%2046.73%2022.53%2045.45L22.53%2045.45Q22.67%2045.02%2022.99%2043.71Q23.31%2042.40%2023.67%2040.55Q24.02%2038.71%2024.41%2036.58Q24.80%2034.45%2025.05%2032.46Q25.30%2030.47%2025.34%2028.84Q25.37%2027.20%2025.16%2026.28L25.16%2026.28Q25.16%2025.64%2025.23%2025.64L25.23%2025.64Q25.37%2025.64%2025.51%2025.82Q25.65%2026.00%2025.73%2026.14L25.73%2026.14Q26.51%2027.35%2026.90%2029.05Q27.29%2030.75%2027.39%2032.64Q27.50%2034.52%2027.32%2036.36Q27.15%2038.21%2026.79%2039.56L26.79%2039.56Q25.94%2042.54%2024.94%2045.66Q23.95%2048.79%2022.81%2051.77L22.81%2051.77L24.02%2051.77L24.38%2051.77Q24.66%2050.56%2025.09%2049.36Q25.51%2048.15%2025.87%2046.94L25.87%2046.94Q26.79%2043.60%2027.71%2040.09Q28.64%2036.58%2028.78%2032.53L28.78%2032.53Q28.78%2032.17%2028.85%2032.17L28.85%2032.17Q28.99%2032.17%2029.03%2032.32Q29.06%2032.46%2029.13%2032.60L29.13%2032.60Q29.77%2034.16%2029.74%2036.58Q29.70%2038.99%2029.28%2041.65Q28.85%2044.31%2028.18%2047.05Q27.50%2049.78%2026.93%2051.98L26.93%2051.98Q29.56%2052.20%2032.01%2052.55Q34.46%2052.91%2036.94%2053.19L36.94%2053.19Q37.87%2049.36%2039.04%2045.63Q40.21%2041.90%2041.24%2038.39Q42.27%2034.87%2042.94%2031.53Q43.62%2028.20%2043.55%2025.14L43.55%2025.14Q43.55%2024.79%2043.69%2024.79L43.69%2024.79Q43.83%2024.79%2043.90%2024.93Q43.97%2025.07%2043.97%2025.14L43.97%2025.14Q44.90%2028.34%2044.65%2031.78Q44.40%2035.23%2043.55%2038.78Q42.69%2042.33%2041.49%2045.98Q40.28%2049.64%2039.29%2053.33L39.29%2053.33Q39.71%2053.47%2040.17%2053.40Q40.64%2053.33%2041.13%2053.33L41.13%2053.33Q41.42%2051.56%2041.91%2049.68Q42.41%2047.79%2042.84%2046.44L42.84%2046.44Q42.98%2046.02%2043.30%2044.71Q43.62%2043.39%2043.97%2041.55Q44.33%2039.70%2044.72%2037.57Q45.11%2035.44%2045.36%2033.42Q45.61%2031.39%2045.64%2029.76Q45.68%2028.13%2045.46%2027.20L45.46%2027.20Q45.32%2026.71%2045.53%2026.64L45.53%2026.64Q45.68%2026.56%2045.82%2026.74Q45.96%2026.92%2046.03%2027.06L46.03%2027.06Q46.81%2028.27%2047.24%2029.97Q47.66%2031.68%2047.77%2033.52Q47.88%2035.37%2047.70%2037.21Q47.52%2039.06%2047.17%2040.41L47.17%2040.41Q46.32%2043.60%2045.18%2046.87Q44.04%2050.14%2042.84%2053.33L42.84%2053.33L44.61%2053.05Q44.97%2051.84%2045.39%2050.53Q45.82%2049.21%2046.17%2047.94L46.17%2047.94Q47.17%2044.53%2048.06%2041.01Q48.94%2037.50%2049.08%2033.52L49.08%2033.52Q49.08%2033.17%2049.08%2033.13Q49.08%2033.10%2049.16%2033.10L49.16%2033.10Q49.30%2033.10%2049.44%2033.52L49.44%2033.52Q50.29%2035.44%2050.08%2038.49Q49.87%2041.55%2049.23%2044.85Q48.59%2048.15%2047.74%2051.24Q46.88%2054.33%2046.46%2056.17L46.46%2056.17Q45.68%2059.58%2044.47%2063.20Q43.26%2066.82%2042.34%2069.52L42.34%2069.52Q42.13%2070.37%2041.77%2070.37L41.77%2070.37Q41.63%2070.30%2041.67%2069.95Q41.70%2069.59%2041.70%2069.24L41.70%2069.24Q41.84%2066.18%2042.30%2063.17Q42.77%2060.15%2043.55%2056.95L43.55%2056.95Q41.77%2058.16%2039.50%2058.73Q37.23%2059.30%2035.59%2059.15ZM21.39%2068.31L21.39%2068.31Q21.54%2064.90%2022.03%2061.64L22.03%2061.64Q20.83%2061.50%2019.66%2061.32Q18.48%2061.14%2017.35%2060.93L17.35%2060.93Q17.06%2064.76%2017.56%2068.49Q18.06%2072.22%2019.69%2075.34L19.69%2075.34Q19.83%2075.63%2019.83%2075.63L19.83%2075.63Q19.83%2075.98%2019.41%2075.63L19.41%2075.63Q16.57%2072.50%2015.75%2068.63Q14.93%2064.76%2015.22%2060.64L15.22%2060.64L13.66%2060.36Q13.30%2060.36%2013.05%2060.22Q12.80%2060.08%2012.80%2059.93L12.80%2059.93Q12.80%2059.79%2013.09%2059.72Q13.37%2059.65%2013.58%2059.58L13.58%2059.58Q17.63%2058.73%2021.68%2058.94Q25.73%2059.15%2029.91%2059.65L29.91%2059.65Q32.54%2059.93%2035.24%2060.15Q37.94%2060.36%2040.92%2059.65L40.92%2059.65Q41.20%2059.58%2041.27%2059.72L41.27%2059.72Q41.27%2059.79%2040.99%2060.08L40.99%2060.08Q39.78%2061.21%2037.72%2061.64L37.72%2061.64Q37.37%2065.47%2037.80%2069.20Q38.22%2072.93%2039.93%2075.63L39.93%2075.63Q40.14%2075.84%2039.93%2075.84L39.93%2075.84Q39.85%2075.84%2039.78%2075.77Q39.71%2075.70%2039.57%2075.63L39.57%2075.63Q38.22%2074.49%2037.41%2072.96Q36.59%2071.44%2036.16%2069.66Q35.74%2067.89%2035.63%2065.93Q35.52%2063.98%2035.59%2061.99L35.59%2061.99Q34.10%2062.14%2032.54%2062.14Q30.98%2062.14%2029.49%2062.06Q28.00%2061.99%2026.65%2061.89Q25.30%2061.78%2024.31%2061.71L24.31%2061.71Q23.74%2063.63%2023.10%2065.37Q22.46%2067.11%2022.03%2068.53L22.03%2068.53Q21.89%2068.88%2021.75%2069.20Q21.61%2069.52%2021.47%2069.38L21.47%2069.38Q21.32%2069.38%2021.36%2069.02Q21.39%2068.67%2021.39%2068.31ZM40.78%2071.51L40.78%2071.51Q41.13%2072.86%2041.42%2073.92Q41.70%2074.99%2042.20%2075.63L42.20%2075.63Q42.27%2075.70%2042.34%2075.80Q42.41%2075.91%2042.27%2075.98L42.27%2075.98Q41.98%2075.98%2041.49%2075.63L41.49%2075.63Q40.71%2075.06%2040.10%2074.35Q39.50%2073.64%2039.14%2071.51L39.14%2071.51Q39.00%2070.66%2039.00%2069.45Q39.00%2068.24%2039.07%2067.14Q39.14%2066.04%2039.32%2065.26Q39.50%2064.48%2039.71%2064.55L39.71%2064.55Q39.85%2064.55%2039.93%2064.90Q40.00%2065.26%2040.07%2065.69Q40.14%2066.11%2040.17%2066.54Q40.21%2066.96%2040.21%2067.18L40.21%2067.18Q40.35%2068.38%2040.46%2069.45Q40.56%2070.51%2040.78%2071.51ZM20.47%2070.58L20.47%2070.58Q20.90%2073.14%2021.82%2075.34L21.82%2075.34Q21.96%2075.84%2021.89%2075.84L21.89%2075.84Q21.54%2075.84%2021.11%2075.41L21.11%2075.41Q20.19%2074.35%2019.73%2073.50Q19.26%2072.64%2018.91%2070.58L18.91%2070.58Q18.77%2069.80%2018.73%2068.60Q18.70%2067.39%2018.77%2066.25Q18.84%2065.12%2019.02%2064.34Q19.19%2063.56%2019.41%2063.56L19.41%2063.56Q19.48%2063.56%2019.58%2063.91Q19.69%2064.27%2019.76%2064.73Q19.83%2065.19%2019.90%2065.65Q19.97%2066.11%2019.97%2066.25L19.97%2066.25Q20.12%2067.46%2020.22%2068.53Q20.33%2069.59%2020.47%2070.58ZM11.81%2059.15L11.81%2059.15Q10.89%2059.65%2010.53%2060.01Q10.18%2060.36%209.68%2060.93L9.68%2060.93Q9.40%2061.28%209.40%2061.14Q9.40%2061.00%209.40%2060.79L9.40%2060.79Q9.68%2059.72%2010.11%2059.08Q10.53%2058.44%2011.53%2057.66L11.53%2057.66Q12.02%2057.24%2012.91%2056.95Q13.80%2056.67%2014.65%2056.56Q15.50%2056.46%2016.14%2056.49Q16.78%2056.53%2016.78%2056.74L16.78%2056.74Q16.78%2056.95%2015.96%2057.31Q15.15%2057.66%2014.93%2057.80L14.93%2057.80Q14.08%2058.16%2013.30%2058.48Q12.52%2058.80%2011.81%2059.15ZM85.22%2050.92L85.22%2050.92Q85.15%2051.13%2084.98%2051.49Q84.80%2051.84%2084.58%2052.23Q84.37%2052.62%2084.16%2052.87Q83.95%2053.12%2083.87%2053.05L83.87%2053.05Q83.87%2053.05%2083.95%2052.69Q84.02%2052.34%2084.12%2051.91Q84.23%2051.49%2084.34%2051.10Q84.44%2050.70%2084.44%2050.56L84.44%2050.56Q85.51%2044.88%2084.44%2040.76Q83.38%2036.65%2080.86%2034.02Q78.34%2031.39%2074.68%2030.11Q71.02%2028.84%2066.98%2028.77L66.98%2028.77Q64.07%2028.77%2061.26%2029.23Q58.46%2029.69%2056.15%2030.40Q53.84%2031.11%2052.24%2031.96Q50.65%2032.81%2050.22%2033.59L50.22%2033.59Q49.72%2034.45%2049.94%2033.38L49.94%2033.38Q50.50%2031.53%2052.95%2029.97Q55.40%2028.41%2058.67%2027.42Q61.94%2026.42%2065.52%2026.10Q69.11%2025.78%2072.02%2026.49L72.02%2026.49Q73.93%2026.92%2075.85%2027.70Q77.77%2028.48%2079.51%2029.58Q81.25%2030.68%2082.70%2032.21Q84.16%2033.74%2085.15%2035.72L85.15%2035.72Q87.07%2039.56%2087.03%2043.64Q87.00%2047.72%2085.22%2050.92ZM89.84%2050.42L89.84%2050.42Q88.49%2054.40%2086.25%2057.59Q84.02%2060.79%2081.46%2063.31Q78.90%2065.83%2076.21%2067.67Q73.51%2069.52%2071.17%2070.80L71.17%2070.80Q70.46%2071.15%2069.96%2071.37Q69.46%2071.58%2069.46%2071.44L69.46%2071.44Q69.32%2071.37%2069.85%2070.98Q70.38%2070.58%2070.95%2070.16L70.95%2070.16Q74.93%2066.96%2078.66%2063.41Q82.38%2059.86%2085.37%2055.32L85.37%2055.32Q86.86%2052.98%2087.64%2050.17Q88.42%2047.37%2088.42%2044.39Q88.42%2041.40%2087.60%2038.49Q86.79%2035.58%2085.08%2033.10L85.08%2033.10Q82.81%2029.83%2079.58%2027.91Q76.35%2026.00%2072.66%2025.25Q68.96%2024.51%2065.06%2024.79Q61.15%2025.07%2057.53%2026.14L57.53%2026.14Q56.97%2026.28%2056.86%2026.35Q56.75%2026.42%2056.68%2026.28L56.68%2026.28Q56.61%2026.14%2056.89%2026.00Q57.18%2025.85%2057.39%2025.71L57.39%2025.71Q58.95%2024.86%2061.44%2024.15Q63.92%2023.44%2067.05%2023.30Q70.17%2023.16%2073.72%2023.83Q77.27%2024.51%2080.89%2026.42L80.89%2026.42Q84.80%2028.55%2086.96%2031.82Q89.13%2035.08%2089.98%2038.53Q90.83%2041.97%2090.69%2045.20Q90.55%2048.43%2089.84%2050.42ZM58.95%2074.77L58.95%2074.77Q58.60%2074.21%2058.07%2072.96Q57.53%2071.72%2057.25%2070.02L57.25%2070.02Q57.11%2069.16%2057.07%2068.10Q57.04%2067.03%2057.11%2066.08Q57.18%2065.12%2057.32%2064.48Q57.46%2063.84%2057.75%2063.84L57.75%2063.84Q57.82%2063.84%2057.92%2064.23Q58.03%2064.62%2058.14%2065.12Q58.24%2065.61%2058.28%2066.08Q58.31%2066.54%2058.31%2066.75L58.31%2066.75Q58.46%2068.60%2058.78%2070.44Q59.10%2072.29%2059.73%2073.99L59.73%2073.99Q62.22%2070.94%2065.41%2067.82Q68.61%2064.69%2071.66%2061.46Q74.72%2058.23%2077.24%2054.82Q79.76%2051.41%2080.89%2047.79L80.89%2047.79Q81.67%2045.31%2081.21%2042.61Q80.75%2039.91%2079.40%2037.71L79.40%2037.71Q78.05%2035.58%2075.57%2034.16Q73.08%2032.74%2070.10%2032.17L70.10%2032.17Q68.89%2031.96%2067.72%2031.82Q66.55%2031.68%2065.27%2031.68L65.27%2031.68Q65.49%2032.74%2065.52%2033.98Q65.56%2035.23%2065.49%2036.43Q65.41%2037.64%2065.27%2038.74Q65.13%2039.84%2064.92%2040.69L64.92%2040.69Q63.92%2044.53%2062.57%2048.40Q61.23%2052.27%2059.73%2055.82L59.73%2055.82Q59.59%2056.03%2059.34%2056.49Q59.10%2056.95%2058.95%2056.95L58.95%2056.95Q58.81%2056.95%2058.81%2056.38Q58.81%2055.82%2058.88%2055.60L58.88%2055.60Q58.95%2054.75%2059.17%2053.51Q59.38%2052.27%2059.63%2050.99Q59.88%2049.71%2060.16%2048.47Q60.44%2047.23%2060.73%2046.37L60.73%2046.37Q60.87%2045.95%2061.26%2044.31Q61.65%2042.68%2062.08%2040.55Q62.50%2038.42%2062.89%2036.04Q63.28%2033.66%2063.43%2031.68L63.43%2031.68L62.57%2031.68Q62.43%2034.45%2061.79%2037.36Q61.15%2040.27%2060.27%2043.21Q59.38%2046.16%2058.42%2049.14Q57.46%2052.12%2056.75%2055.11L56.75%2055.11Q56.61%2055.75%2056.36%2057.31Q56.11%2058.87%2055.97%2060.82Q55.83%2062.77%2055.83%2064.94Q55.83%2067.11%2056.15%2069.06Q56.47%2071.01%2057.11%2072.57Q57.75%2074.13%2058.95%2074.77ZM82.53%2049.85L82.53%2049.85Q80.96%2053.54%2078.23%2056.95Q75.50%2060.36%2072.30%2063.52Q69.11%2066.68%2065.73%2069.52Q62.36%2072.36%2059.59%2074.92L59.59%2074.92Q59.02%2075.41%2058.14%2075.02Q57.25%2074.63%2056.82%2074.06L56.82%2074.06Q55.33%2072.08%2054.62%2069.59Q53.91%2067.11%2053.77%2064.44Q53.63%2061.78%2053.95%2059.05Q54.27%2056.31%2054.91%2053.76L54.91%2053.76Q56.33%2047.86%2058.14%2042.36Q59.95%2036.86%2060.80%2031.89L60.80%2031.89Q56.97%2032.32%2053.95%2033.63Q50.93%2034.94%2049.94%2036.79L49.94%2036.79Q49.94%2036.93%2049.83%2036.93Q49.72%2036.93%2049.87%2036.36L49.87%2036.36Q50.43%2034.37%2052.63%2032.92Q54.84%2031.46%2057.89%2030.65Q60.94%2029.83%2064.46%2029.69Q67.97%2029.55%2071.31%2030.11L71.31%2030.11Q74.93%2030.75%2077.59%2032.85Q80.25%2034.94%2081.78%2037.75Q83.31%2040.55%2083.56%2043.75Q83.80%2046.94%2082.53%2049.85ZM67.26%2033.74L67.26%2033.74Q68.11%2035.58%2067.94%2038.56Q67.76%2041.55%2067.12%2044.78Q66.48%2048.01%2065.66%2050.99Q64.85%2053.97%2064.42%2055.82L64.42%2055.82Q63.57%2059.22%2062.36%2062.63Q61.15%2066.04%2060.37%2068.60L60.37%2068.60Q60.02%2069.59%2059.88%2069.59L59.88%2069.59Q59.66%2069.59%2059.66%2069.20Q59.66%2068.81%2059.66%2068.45L59.66%2068.45Q59.88%2063.20%2061.19%2058.09Q62.50%2052.98%2064.07%2047.72L64.07%2047.72Q64.99%2044.53%2065.84%2041.05Q66.69%2037.57%2066.83%2033.74L66.83%2033.74Q66.83%2033.24%2066.98%2033.17L66.98%2033.17Q67.05%2033.17%2067.12%2033.38Q67.19%2033.59%2067.26%2033.74ZM75.71%2063.20L75.71%2063.20Q75.78%2063.27%2075.43%2063.77Q75.07%2064.27%2074.54%2064.87Q74.01%2065.47%2073.47%2066.08Q72.94%2066.68%2072.73%2066.89L72.73%2066.89Q71.24%2068.38%2069.71%2069.91Q68.18%2071.44%2066.55%2072.50L66.55%2072.50L60.16%2076.55Q60.02%2076.62%2059.77%2076.69Q59.52%2076.76%2059.38%2076.69L59.38%2076.69Q59.24%2076.62%2059.27%2076.48Q59.31%2076.34%2059.38%2076.19L59.38%2076.19Q59.45%2076.05%2059.59%2075.91L59.59%2075.91Q60.80%2075.06%2062.33%2073.78Q63.85%2072.50%2065.49%2071.15L65.49%2071.15Q66.69%2070.23%2068.36%2068.81Q70.03%2067.39%2071.63%2066.11Q73.22%2064.83%2074.40%2063.95Q75.57%2063.06%2075.71%2063.20Z%22%2F%3E%3C%2Fsvg%3E",
+              "mimeType": "image/svg+xml"
+            }
+          ],
+          "meta": {
+            "openai/outputTemplate": "ui://hairdora/workspace-v2.html",
+            "openai/ui": {
+              "entrypoints": [
+                {
+                  "type": "global"
+                }
+              ]
+            },
+            "openai/widgetAccessible": true,
+            "securitySchemes": [
+              {
+                "scopes": ["hairdora:read"],
+                "type": "oauth2"
+              }
+            ],
+            "ui": {
+              "resourceUri": "ui://hairdora/workspace-v2.html"
+            }
+          },
+          "digest": "sha256:058c7d3a75b18a284d34cc08e479d04f76b31238e56cce8e01c14fbfd8de2ac1"
+        },
+        {
+          "name": "reschedule_appointment",
+          "title": "Move a salon appointment",
+          "description": "Use this when someone asks to move an appointment to another day or time. Returns the moved appointment; its client, stylist, services and length stay the same and the client's reminders move with it. Not for cancelling an appointment.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "appointmentId": {
+                "description": "Id of the appointment, from list_appointments.",
+                "maxLength": 24,
+                "minLength": 24,
+                "pattern": "^[0-9a-f]{24}$",
+                "type": "string"
+              },
+              "durationMinutes": {
+                "description": "New length in minutes. Leave it out to keep the current length.",
+                "maximum": 480,
+                "minimum": 5,
+                "type": "integer"
+              },
+              "expectedLastEditTime": {
+                "description": "The lastEditTime from get_appointment or list_appointments. An appointment changed since then is refused.",
+                "format": "date-time",
+                "maxLength": 40,
+                "type": "string"
+              },
+              "startTime": {
+                "description": "New start as an ISO 8601 time with the salon's UTC offset, such as 2026-11-20T15:30:00+01:00.",
+                "format": "date-time",
+                "maxLength": 40,
+                "type": "string"
+              }
+            },
+            "required": ["appointmentId", "expectedLastEditTime", "startTime"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "appointment": {
+                "additionalProperties": false,
+                "properties": {
+                  "clientId": {
+                    "anyOf": [
+                      {
+                        "maxLength": 24,
+                        "minLength": 24,
+                        "pattern": "^[0-9a-f]{24}$",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "endTime": {
+                    "anyOf": [
+                      {
+                        "maxLength": 40,
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "id": {
+                    "anyOf": [
+                      {
+                        "maxLength": 24,
+                        "minLength": 24,
+                        "pattern": "^[0-9a-f]{24}$",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "lastEditTime": {
+                    "anyOf": [
+                      {
+                        "maxLength": 40,
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "providerIds": {
+                    "items": {
+                      "maxLength": 24,
+                      "minLength": 24,
+                      "pattern": "^[0-9a-f]{24}$",
+                      "type": "string"
+                    },
+                    "maxItems": 10,
+                    "type": "array"
+                  },
+                  "reminderCount": {
+                    "maximum": 100000,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "salonId": {
+                    "anyOf": [
+                      {
+                        "maxLength": 24,
+                        "minLength": 24,
+                        "pattern": "^[0-9a-f]{24}$",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "serviceCount": {
+                    "maximum": 100000,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "services": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "id": {
+                          "anyOf": [
+                            {
+                              "maxLength": 24,
+                              "minLength": 24,
+                              "pattern": "^[0-9a-f]{24}$",
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "name": {
+                          "maxLength": 200,
+                          "type": "string"
+                        },
+                        "price": {
+                          "anyOf": [
+                            {
+                              "maximum": 1000000000,
+                              "minimum": -1000000000,
+                              "type": "number"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      },
+                      "required": ["id", "name", "price"],
+                      "type": "object"
+                    },
+                    "maxItems": 20,
+                    "type": "array"
+                  },
+                  "startTime": {
+                    "anyOf": [
+                      {
+                        "maxLength": 40,
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "status": {
+                    "anyOf": [
+                      {
+                        "enum": ["REQUESTED", "SCHEDULED", "CLIENT_ARRIVED", "NO_SHOW", "CANCELED"],
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": ["clientId", "endTime", "id", "lastEditTime", "providerIds", "reminderCount", "salonId", "serviceCount", "services", "startTime", "status"],
+                "type": "object"
+              },
+              "previousStartTime": {
+                "anyOf": [
+                  {
+                    "maxLength": 40,
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "status": {
+                "enum": ["rescheduled"],
+                "type": "string"
+              }
+            },
+            "required": ["appointment", "previousStartTime", "status"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": true,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": false,
+            "title": "Move a salon appointment"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "meta": {
+            "securitySchemes": [
+              {
+                "scopes": ["hairdora:write"],
+                "type": "oauth2"
+              }
+            ]
+          },
+          "digest": "sha256:05a814461eca01629e02f3c7c0d2eab8d71aa57eabb75caf46f9ef93df7eadaf"
+        },
+        {
+          "name": "set_inventory_quantity",
+          "title": "Update a stock quantity",
+          "description": "Use this when someone asks to correct or update how much of a stock item the salon has. Returns the item with its previous and new quantity; the number given replaces the stored one. Not for adding a new stock item.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "expectedLastEditTime": {
+                "description": "The lastEditTime from list_inventory_items. An item changed since then is refused.",
+                "format": "date-time",
+                "maxLength": 40,
+                "type": "string"
+              },
+              "inventoryItemId": {
+                "description": "Id of the stock item, from list_inventory_items.",
+                "maxLength": 24,
+                "minLength": 24,
+                "pattern": "^[0-9a-f]{24}$",
+                "type": "string"
+              },
+              "quantity": {
+                "description": "The quantity now in stock, in the item unit. It replaces the stored quantity; work out the total first when the user gives a change.",
+                "maximum": 1000000000,
+                "minimum": 0,
+                "type": "number"
+              }
+            },
+            "required": ["expectedLastEditTime", "inventoryItemId", "quantity"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "item": {
+                "additionalProperties": false,
+                "properties": {
+                  "id": {
+                    "anyOf": [
+                      {
+                        "maxLength": 24,
+                        "minLength": 24,
+                        "pattern": "^[0-9a-f]{24}$",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "lastEditTime": {
+                    "anyOf": [
+                      {
+                        "maxLength": 40,
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "lowStock": {
+                    "type": "boolean"
+                  },
+                  "minimumQuantity": {
+                    "anyOf": [
+                      {
+                        "maximum": 1000000000,
+                        "minimum": 0,
+                        "type": "number"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "name": {
+                    "maxLength": 200,
+                    "type": "string"
+                  },
+                  "quantity": {
+                    "anyOf": [
+                      {
+                        "maximum": 1000000000,
+                        "minimum": 0,
+                        "type": "number"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "salonId": {
+                    "anyOf": [
+                      {
+                        "maxLength": 24,
+                        "minLength": 24,
+                        "pattern": "^[0-9a-f]{24}$",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "unit": {
+                    "anyOf": [
+                      {
+                        "maxLength": 40,
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": ["id", "lastEditTime", "lowStock", "minimumQuantity", "name", "quantity", "salonId", "unit"],
+                "type": "object"
+              },
+              "previousQuantity": {
+                "anyOf": [
+                  {
+                    "maximum": 1000000000,
+                    "minimum": 0,
+                    "type": "number"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "status": {
+                "enum": ["updated"],
+                "type": "string"
+              }
+            },
+            "required": ["item", "previousQuantity", "status"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": true,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": false,
+            "title": "Update a stock quantity"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": false
+          },
+          "meta": {
+            "securitySchemes": [
+              {
+                "scopes": ["hairdora:write"],
+                "type": "oauth2"
+              }
+            ]
+          },
+          "digest": "sha256:a868a0189d14abd04fd4e460975c0a282f32140faf504fcb2211088ad401db62"
+        },
+        {
+          "name": "show_salon_overview",
+          "title": "Show salon overview",
+          "description": "Use this when someone wants a quick overview or dashboard of one hair salon. Returns an overview card with the salon's details, a client count, the next 8 upcoming appointments with time, status and number of services, and up to 12 services with prices (no client names or contact details). Not for one specific booking.",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "salonId": {
+                "description": "Id of one of the user's salons, as the salon list returns it (24 lowercase hex characters)",
+                "pattern": "^[0-9a-f]{24}$",
+                "type": "string"
+              }
+            },
+            "required": ["salonId"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "additionalProperties": false,
+            "properties": {
+              "appointmentCount": {
+                "maximum": 8,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "appointmentCountIsLowerBound": {
+                "type": "boolean"
+              },
+              "appointments": {
+                "description": "The next upcoming appointments, earliest first",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "serviceCount": {
+                      "maximum": 10000,
+                      "minimum": 0,
+                      "type": "integer"
+                    },
+                    "startTime": {
+                      "anyOf": [
+                        {
+                          "maxLength": 32,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "status": {
+                      "anyOf": [
+                        {
+                          "enum": ["SCHEDULED", "CLIENT_ARRIVED", "NO_SHOW", "CANCELED"],
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": ["serviceCount", "startTime", "status"],
+                  "type": "object"
+                },
+                "maxItems": 8,
+                "type": "array"
+              },
+              "clientCount": {
+                "maximum": 100,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "clientCountIsLowerBound": {
+                "type": "boolean"
+              },
+              "salon": {
+                "anyOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "currency": {
+                        "anyOf": [
+                          {
+                            "pattern": "^[A-Z]{3}$",
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "defaultLocale": {
+                        "anyOf": [
+                          {
+                            "maxLength": 16,
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "id": {
+                        "pattern": "^[0-9a-f]{24}$",
+                        "type": "string"
+                      },
+                      "name": {
+                        "maxLength": 200,
+                        "type": "string"
+                      },
+                      "timezone": {
+                        "anyOf": [
+                          {
+                            "maxLength": 64,
+                            "type": "string"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      }
+                    },
+                    "required": ["currency", "defaultLocale", "id", "name", "timezone"],
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Salon metadata; null when not found. The overview excludes client names, contact details, client and appointment ids, notes, organization data, staff ids, payment data and service history."
+              },
+              "serviceCount": {
+                "maximum": 12,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "serviceCountIsLowerBound": {
+                "type": "boolean"
+              },
+              "services": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "name": {
+                      "maxLength": 200,
+                      "type": "string"
+                    },
+                    "price": {
+                      "anyOf": [
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": ["name", "price"],
+                  "type": "object"
+                },
+                "maxItems": 12,
+                "type": "array"
+              }
+            },
+            "required": ["appointmentCount", "appointmentCountIsLowerBound", "appointments", "clientCount", "clientCountIsLowerBound", "salon", "serviceCount", "serviceCountIsLowerBound", "services"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Show salon overview"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "openai/outputTemplate": "ui://hairdora/salon-overview-v1.html",
+            "openai/toolInvocation/invoked": "HairDora salon overview ready.",
+            "openai/toolInvocation/invoking": "Loading HairDora salon…",
+            "securitySchemes": [
+              {
+                "scopes": ["hairdora:read"],
+                "type": "oauth2"
+              }
+            ],
+            "ui": {
+              "resourceUri": "ui://hairdora/salon-overview-v1.html"
+            },
+            "ui/resourceUri": "ui://hairdora/salon-overview-v1.html"
+          },
+          "digest": "sha256:0f22bbdc1913405b2e9d59652ae4fbad21b2dd067a7f8a7c35dd9b4cf9cc0e42"
+        },
+        {
+          "name": "update_client",
+          "title": "Update a client's details",
+          "description": "Use this when someone asks to change a client's name, phone, email or language. Returns the client's id, name, salon and which fields changed; contact details are never returned. Not for adding a new client.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "clientId": {
+                "description": "Id of the client, from list_clients.",
+                "maxLength": 24,
+                "minLength": 24,
+                "pattern": "^[0-9a-f]{24}$",
+                "type": "string"
+              },
+              "email": {
+                "description": "New email address.",
+                "maxLength": 254,
+                "type": "string"
+              },
+              "expectedLastEditTime": {
+                "description": "The lastEditTime from get_client or list_clients. A client changed since then is refused.",
+                "format": "date-time",
+                "maxLength": 40,
+                "type": "string"
+              },
+              "language": {
+                "description": "New language for their messages, as a code such as en or it.",
+                "maxLength": 10,
+                "type": "string"
+              },
+              "name": {
+                "description": "New full name.",
+                "maxLength": 160,
+                "minLength": 1,
+                "type": "string"
+              },
+              "phone": {
+                "description": "New mobile number, with the country code when known.",
+                "maxLength": 40,
+                "type": "string"
+              }
+            },
+            "required": ["clientId", "expectedLastEditTime"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "changedFields": {
+                "items": {
+                  "enum": ["name", "phone", "email", "language", "dateOfBirth", "address", "color"],
+                  "type": "string"
+                },
+                "maxItems": 7,
+                "type": "array"
+              },
+              "client": {
+                "additionalProperties": false,
+                "properties": {
+                  "id": {
+                    "anyOf": [
+                      {
+                        "maxLength": 24,
+                        "minLength": 24,
+                        "pattern": "^[0-9a-f]{24}$",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "language": {
+                    "anyOf": [
+                      {
+                        "maxLength": 16,
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "lastEditTime": {
+                    "anyOf": [
+                      {
+                        "maxLength": 40,
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "name": {
+                    "maxLength": 200,
+                    "type": "string"
+                  },
+                  "salonId": {
+                    "anyOf": [
+                      {
+                        "maxLength": 24,
+                        "minLength": 24,
+                        "pattern": "^[0-9a-f]{24}$",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": ["id", "language", "lastEditTime", "name", "salonId"],
+                "type": "object"
+              },
+              "status": {
+                "enum": ["updated"],
+                "type": "string"
+              }
+            },
+            "required": ["changedFields", "client", "status"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": true,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": false,
+            "title": "Update a client's details"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": false
+          },
+          "meta": {
+            "securitySchemes": [
+              {
+                "scopes": ["hairdora:write"],
+                "type": "oauth2"
+              }
+            ]
+          },
+          "digest": "sha256:2bba721f82d3b6b31f5d06f3166d4717caced9d20e17860bf0de0a5f0fc392a6"
+        }
+      ],
+      "resources": [
+        {
+          "uri": "skill://hairdora/hairdora/SKILL.md",
+          "name": "hairdora",
+          "title": "hairdora skill",
+          "description": "Read and manage hair-salon data with the `hairdora` CLI — list salons, find and edit clients, read and update the service catalogue, and query, book, reschedule or cancel appointments on app.hairdora.com. Use when asked about salon appointments, a client's booking history, the service price list, salon opening data, or anything involving the `hairdora` command or the HairDora REST API.",
+          "mimeType": "text/markdown",
+          "digest": "sha256:9d58ab57d58fe13acea6d55f26a64f23a98acd80de4329f2b5fde679cdd66e87"
+        },
+        {
+          "uri": "ui://hairdora/appointment-detail-v1.html",
+          "name": "hairdora-appointment-detail",
+          "description": "An inline HairDora view that presents one tenant-scoped appointment.",
+          "mimeType": "text/html;profile=mcp-app",
+          "digest": "sha256:e9215734b7c69e609b29c024a09480afe3f54d6c8e891fe2dff0c7e7ba914fa1"
+        },
+        {
+          "uri": "ui://hairdora/salon-overview-v1.html",
+          "name": "hairdora-salon-overview",
+          "description": "An inline HairDora view that presents a tenant-scoped salon overview.",
+          "mimeType": "text/html;profile=mcp-app",
+          "digest": "sha256:c254298bfeda89780df52289ce700154c96d4141d85684f90167d880b595e86f"
+        },
+        {
+          "uri": "ui://hairdora/workspace-v2.html",
+          "name": "hairdora-workspace",
+          "mimeType": "text/html;profile=mcp-app",
+          "digest": "sha256:fb9ef664df58a15f75e66bee186f42b6ae1856f233606b1a6e9a5bb2cc4756e6"
+        },
+        {
+          "uri": "ui://hairdora/workspace-v1.html",
+          "name": "hairdora-workspace-v1",
+          "mimeType": "text/html;profile=mcp-app",
+          "digest": "sha256:fce93d2531de90f8bb992e285978852c929236243177c8eb1626364dedcd910f"
+        },
+        {
+          "uri": "skill://hairdora/salon-operations/SKILL.md",
+          "name": "salon-operations",
+          "title": "salon-operations skill",
+          "description": "Run a HairDora salon through its connector — read schedules, opening hours, availability, stylists, services, clients, quotes and payment status, and book, move or cancel appointments, add or update clients and check or correct stock. Use when a salon owner or manager asks about free slots, bookings, stylists, closures, prices, clients, quotes, payments or stock, or asks to book, reschedule or cancel a client, add or change a client, or update a stock count.",
+          "mimeType": "text/markdown",
+          "digest": "sha256:5d1a87a486dd6a153346577e541d64b59da3484c2b39c72e688352229a463619"
+        }
+      ],
+      "digest": "sha256:757f8d1b77ccd296f2bd88ff12617e7fc20d52ad0a445e4f6fbc058fa78b8ab7"
+    }
+  }
+}

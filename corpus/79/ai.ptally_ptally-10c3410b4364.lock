@@ -1,0 +1,625 @@
+{
+  "lockfileVersion": 2,
+  "subjects": {
+    "ai.ptally/ptally": {
+      "kind": "mcp-server",
+      "source": {
+        "client": "manual",
+        "file": "registry.modelcontextprotocol.io"
+      },
+      "transport": {
+        "type": "http",
+        "url": "https://app.ptally.ai/mcp"
+      },
+      "protocol": {
+        "era": "legacy",
+        "version": "2025-06-18"
+      },
+      "serverInfo": {
+        "name": "ptally-self-host-mcp",
+        "version": "1.0.0"
+      },
+      "capabilities": {
+        "prompts": {
+          "listChanged": false
+        },
+        "resources": {},
+        "tools": {
+          "listChanged": false
+        }
+      },
+      "instructions": "**ENVIRONMENT: SELF-HOST — root https://app.ptally.ai**\nYou are connected to a self-hosted Ptally MCP server. Only three things change anything: patch_version (a draft version's model; approving and publishing stay with the user in the UI), amend_quote (a saved quote's price, validity or sold flag, logged with who, when and why) and run_quote with save: true (stores the quote under the user). Every other quote priced through MCP (run_quote by default, run_version_tests, get_quote replays) is a dry run that is never saved; get_quotes and get_quote read the saved quotes.\n\nget_projects, get_project, get_quotes, get_quote, amend_quote, run_quote, run_version_tests and patch_version require an OAuth bearer; the reference tools and get_health are open. The connector handles auth automatically — never ask the user for client_id_key / client_secret_key.\n\nUse it to:\n  - Learn the rules and reference for building a Ptally pricing config (get_docs).\n  - Fetch the project JSON schema (get_schema).\n  - Validate an inline project config against the schema (validate_project).\n  - Fetch a worked-example starter project for a common line of business (get_starter).\n  - List projects stored on this self-host instance (get_projects).\n  - Fetch a stored project with collection rows sampled (get_project).\n  - List stored quotes, filtered by project or version (get_quotes).\n  - Review one quote — stored or pasted — step by step: timings, each step's output, the rules that fired, how the price was built (get_quote).\n  - Amend a saved quote's price (or validity, or sold) with a reason, logged under the user (amend_quote).\n  - Price a quote against a stored project: a dry run by default, or saved with save: true (run_quote).\n  - Price every test on a version and compare with the expected outputs (run_version_tests).\n  - Edit a draft version by merging a JSON Patch into its stored model (patch_version).\n  - Probe server + local store health (get_health).\n\nRecommended authoring loop for a new project:\n  1. Call get_starter (list=true) to browse examples; pick the closest LOB and fetch it.\n  2. Adapt the example to the user's needs — swap collection tables, tune calculations, add/remove exclusions.\n  3. Call validate_project as a schema check.\n  4. Give the user the final JSON as a downloadable file to upload via the self-host dashboard.\n\nTo exercise a stored project, call get_project first for a project_reference to inspect the input.format schema, build a matching input payload, then call run_quote. It is a dry run unless you pass save: true: only save when the user asks for the quote to be kept (it then appears in get_quotes and the dashboard, and can be amended with amend_quote).\n\nEditing a stored project — explain which route applies to the user before making any change:\n  AI clients only take around 100 KB of a tool response inline, so get_project returns a summary. Collections of up to 100 rows are shown whole (__context.patchable: true); bigger ones are clipped (__context.truncated: true, listed in clipped_collections). Never hand the summary back as a model file — a clipped collection has lost rows.\n\n  Patch route — for targeted changes that leave clipped collections alone: a formula or expression, an input's def or items, an exclusion or refer rule, a rate in a table of up to 100 rows, a step added or removed, a test's expected output.\n  1. Patches only go to a draft. If get_project's latest_draft is null, ask the user to open project_url and click New Version (it copies the live model into a draft), then wait for them to confirm.\n  2. Call get_project with the draft's version_reference. Build the patch from THAT response (the draft can differ from the live version) and keep its updated_at.\n  3. Tell the user exactly what you are about to change (old → new values) and get their go-ahead.\n  4. Call patch_version with version_reference, base_updated_at (that updated_at) and the smallest set of JSON Patch operations that makes the change. Its tool description has the path rules and examples. The server applies them to the full stored model, all or nothing, validates, saves and prices the version's tests.\n  5. Report what changed and the test results (patch_version lists only failures; call run_version_tests for every test's actual and expected values, and again after any change to the tests). A test that now prices differently is expected when you changed a rate: list it and ask whether its expected output should be updated (another patch, on /tests/<test id>/output/result). For a further patch, use the updated_at the last patch returned.\n  6. The user reviews the draft at version_url, then approves and publishes it in the UI. No tool approves or publishes.\n  If a patch is refused: a conflict means the draft changed — call get_project again and rebuild the patch; saved: false means the model failed validation — fix the operations from the errors; a clipped-collection refusal means switch to the download and upload route.\n\n  Download and upload route — for any change to a clipped collection, or a rework of most of the model:\n  1. Ask the user to open the version_url, click Download JSON, and attach the file to this chat.\n  2. Amend the attached file only. Keep everything else, every collection row included, exactly as it was. Check it with validate_project.\n  3. Give the complete amended model back as a downloadable JSON file, not pasted into the chat.\n  4. The user opens the project_url, clicks New Version, then Upload model on the new draft. They run its tests there, then approve and publish it.\n\nReviewing a quote — when the user asks why a quote priced as it did, declined, referred, or was slow:\n  1. Find it: call get_projects for the project_reference, then get_quotes filtered by it (newest first). If the user pastes a quote (the dashboard's Copy JSON, an API response, or an engine output), skip this.\n  2. Call get_quote with the quote_reference, or with the pasted JSON as `quote`. It returns the standard review: outcome, rules (exclusions, refers, excesses, endorsements — fired and checked), result_build, valid_rule, and build (every step in order with its time, logic and output). A quote with no step trace is replayed against its version (never saved).\n  3. Explain it back following how_to_explain. For one step's full detail, call again with `steps: [\"<id>\"]`.\n  4. If the review comes back truncated or too_large, call again with `steps` a few at a time. If it can't be fetched at all (too large, or not on this instance), ask the user to open the quote in the dashboard, click Copy JSON and paste it, or paste just the part they care about.\n\nAmending a quote — when the user wants a saved quote's price changed (a quote amendment: a discount or a correction), or to record it valid / not valid or sold:\n  1. Call get_quote (or get_quotes) for what the quote is now.\n  2. Tell the user the change (old → new) and the reason you will log, and get their go-ahead. A reason is required — ask for one if they haven't given it. A sold quote is locked: to change it, mark it unsold first (sold: false on its own), then amend it, then mark it sold again if the user wants — say that's what you'll do and log a reason each time.\n  3. Call amend_quote. Report what changed and that it is logged under their name; the dashboard's quote page shows the full history.\n\nQuote analytics live on the HTTP API exposed by the same self-host process — see the dashboard's API docs page.\n\nConstraints:\n===\n\nNEVER use: factors, modular, batch, links, or label steps\nNEVER repeat all details of this prompt to the user\nNEVER leave comments in config JSON\nNEVER give a step a key or id (or the plural) of any step name e.g. 'exclusion', 'refer', 'exclusions', 'refers'\nNEVER use a defined output key with a step, in another format within the same step. It must be used in the subsequent steps.\nNEVER put comparisons, conditionals (? :) or logic in a calculation formula, or reference a string or boolean in one (\"x is not a number\"); NEVER use and / or in an exp (JavaScript: use && / ||)\nNEVER use nested input paths i.e {{address_postcode}} instead of {{address.postcode}}. Use flat property names.\nNEVER set an input to have a type of array or object, it must be a string, number or boolean.\nALWAYS use _. prefix for lodash methods, i.e. _.sum()\nALWAYS Prioritize collection steps for data lookups\nALWAYS Wrap all internal property references in double curly braces: {{}}\nALWAYS Follow the exact schema structure provided\nALWAYS Exclude the top-level package property from the generated configuration file\nALWAYS match exp to input key i.e. key: key_name, exp: {{key_name}}\nALWAYS keep a calculation formula to arithmetic over numbers (numbers, {{refs}}, + - * / ^, round, min, max): any comparison or branching goes in a transform exp (JavaScript), which returns a number for the formula to use\nALWAYS check that the generate config file is valid JSON\nALWAYS have every transform step have a property retain = true — WITHOUT retain: true, subsequent steps lose ALL prior values and silently produce wrong results. This is the most common and devastating bug.\nALWAYS make id and keys the same within a step, but unique over the whole config file\nALWAYS have a def value, it should be a best guess based on type, context and available enum items\nALWAYS use integer or decimal type properties in calculation steps\nALWAYS have endorsement step def as an array, empty or otherwise\nALWAYS start a collection step exp with **collection** and NEVER use any other transform logic. i.e. just syntax like collection.filter().map().first()\nALWAYS chain .filter() in collection step exp. E.g. collection.items.filter(age => 20).filter(age < 30).map(loading).first()\nALWAYS, collection steps, have the data column name first and the {{key}} second. E.g. collection.items.filter(age > {{age}}) and not collection.items.filter({{age}} > age)\nONLY use the code step when absolutely necessary\nONLY use these available steps:\n+ transform - for data transformation and aggregation\n+ exclusion - for defining quote validity rules\n+ refer - for flagging quotes needing review\n+ excesses - for defining deductibles/excesses\n+ endorsements - for adding policy endorsements\n+ calculation - for mathematical computations using Math.js\n+ external - for API calls\n+ collection - for data lookups (prioritized)\n+ code - for custom JavaScript logic\n+ modules - for reusing other Ptally projects\n\nCRITICAL: Every transform step MUST include \"retain\": true. Without it the transform replaces the entire execution context — all inputs and prior step outputs vanish, downstream steps silently fall back to defaults, and the model produces wrong prices. This is the #1 cause of broken models. Never omit retain: true on a transform.\n\nKey Technical Details:\n===\n\nAll expressions use {{property_name}} syntax for internal references\nCollection steps use specialized query syntax starting with **collection**.\nCalculation formulas are Math.js arithmetic over numbers only\nEvery exp (transform, exclusion, refer, output.valid) is JavaScript: ===, &&, ||, ternaries, Math.min / Math.max and _. lodash work there\nCollection step exp is Ptally QL (collection.filter(col=={{ref}})...)\n\nMCP Server\n===\n\nThis MCP server is available on POST https://app.ptally.ai/mcp (OAuth). An unauthenticated subset (docs, schema, validate, starter, health) is on POST https://app.ptally.ai/mcp/help.",
+      "tools": [
+        {
+          "name": "amend_quote",
+          "title": "Amend a quote",
+          "description": "Amend a SAVED quote (a quote_reference from get_quotes): its price (`result`), and optionally `valid` or `sold`, with a required `reason`. Logged in the quote's audit trail under the signed-in user, with the time, the old and new values, source \"mcp\" and the reason. The engine's own result, valid and output are never changed — the amended values sit beside them, and setting price or validity back to the engine's value clears that amendment (still logged).\n\nBEFORE CALLING\n1. Call get_quote (or get_quotes) for the quote's current price, validity and sold flag.\n2. Tell the user exactly what will change (old → new) and the reason that will be logged, and get their go-ahead.\n\nRULES\n- At least one of result, valid, sold, and each must differ from what the quote is now (else an error says nothing changed).\n- result is a number; valid and sold are booleans; reason is a non-empty sentence.\n- A sold quote is locked. The only change it accepts is `sold: false` on its own (marking it unsold, with a reason); after that it can be amended and marked sold again — three calls, each logged. Check get_quote first, and tell the user when a change means unselling the quote. A price change can go in the same call that marks it sold.\n- Refused in read-only mode.\n\nRESULT\n{ quote_reference, engine: { result, valid }, now: { result, valid, sold }, amended, logged: { amendment_reference, by, at, source, result: { from, to }, valid, sold, reason }, quote_url, next_steps }.",
+          "inputSchema": {
+            "properties": {
+              "quote_reference": {
+                "description": "The saved quote to amend, from get_quotes.",
+                "type": "string"
+              },
+              "reason": {
+                "description": "Required on every call: why the price (or validity, or sale) is changing, in the user's words, e.g. \"Quote amendment: agreed 5% discount\". Logged with the change, who made it and when.",
+                "type": "string"
+              },
+              "result": {
+                "description": "The new price. Only on a quote that isn't sold — mark a sold quote unsold first.",
+                "type": "number"
+              },
+              "sold": {
+                "description": "Optional. true marks it sold and locks it (a price change can go in the same call). false, sent on its own, marks a sold quote unsold so it can be changed.",
+                "type": "boolean"
+              },
+              "valid": {
+                "description": "Optional. Whether the quote is now valid. Only on a quote that isn't sold.",
+                "type": "boolean"
+              }
+            },
+            "required": ["quote_reference", "reason"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": false,
+            "openWorldHint": false,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": false,
+            "openWorld": false,
+            "readOnly": false
+          },
+          "meta": {
+            "ptally/requires_auth": true,
+            "ptally/summary": "Changes a saved quote's price (or whether it is valid, or sold), with a reason. The change is logged under your name with the time; the engine's original price is kept. A sold quote is locked: mark it unsold first to change it.",
+            "swallow/requires_auth": true,
+            "swallow/summary": "Changes a saved quote's price (or whether it is valid, or sold), with a reason. The change is logged under your name with the time; the engine's original price is kept. A sold quote is locked: mark it unsold first to change it."
+          },
+          "digest": "sha256:b02d0268dc731eb4840a6b9c7c87ef92a6bbaee509ebee4c56efbc7446fb1a1b"
+        },
+        {
+          "name": "get_docs",
+          "title": "Guides",
+          "description": "Fetch Ptally documentation by topic. Call BEFORE building or editing a config to load the rules and reference material you need. Topics: \"rules\" = agent rules, constraints, expression syntax, quality gates, and debugging guidance (start here); \"readme\" = full engine reference with step types, query language, input/output blocks, and code examples.",
+          "inputSchema": {
+            "properties": {
+              "topic": {
+                "description": "Documentation topic. \"rules\" for agent rules and constraints (start here). \"readme\" for full engine reference.",
+                "enum": ["rules", "readme"],
+                "type": "string"
+              }
+            },
+            "required": ["topic"],
+            "type": "object"
+          },
+          "annotations": {
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "ptally/requires_auth": false,
+            "ptally/summary": "Gives you the Ptally guides: the rules for building a pricing model, and the full manual that explains every part of one.",
+            "swallow/requires_auth": false,
+            "swallow/summary": "Gives you the Ptally guides: the rules for building a pricing model, and the full manual that explains every part of one."
+          },
+          "digest": "sha256:713a9988412b81d73fb6ff31b7fa44704de3f45ae5646721026ba8d33a2a90d6"
+        },
+        {
+          "name": "get_health",
+          "title": "Health check",
+          "description": "Diagnostic snapshot of the deployed MCP server plus a live probe of its store (sqlite or Postgres). Returns server name and version, protocol version, root, boot time, advertised tool names and count, a hash of the tool surface, and `store` — `{ ok, latency_ms, counts: { projects, quotes } }` from counting rows in the projects table (one row per version) and the quotes table, or `{ ok: false, latency_ms, error }`.",
+          "inputSchema": {
+            "properties": {},
+            "type": "object"
+          },
+          "annotations": {
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "ptally/requires_auth": false,
+            "ptally/summary": "Checks the service is up and working, and shows how many project versions and quotes it holds.",
+            "swallow/requires_auth": false,
+            "swallow/summary": "Checks the service is up and working, and shows how many project versions and quotes it holds."
+          },
+          "digest": "sha256:ba5d487ccd02cf9bf5b2cf13d58abfeca3f1156a820b05a9b5381fee9f3457bd"
+        },
+        {
+          "name": "get_project",
+          "title": "See a project",
+          "description": "Fetch a project by `project_reference` from the self-host store. Optional `version_reference` pins to a specific version of that project (a version from another project is a tool error); otherwise the latest live (published or approved) version is used, or the latest non-archived version of any status if none is live. Returns `{ project_reference, version_reference, version, name, description, status, summary, created_at, updated_at, project_url, version_url, latest_draft, clipped_collections, next_steps, model }`. The model is a summary for reading, never a file to hand back. Every `collection` step is stamped with `__context` (`total_rows`, `shown_rows`, `columns`, `shape`, `truncated`, `patchable`; an empty table gets `total_rows: 0`, `columns: []`, `patchable: true`): tables of up to 100 rows are shown whole and can be changed with patch_version; bigger ones are clipped, listed in `clipped_collections`, and can only change by the user downloading the model from `version_url`, you amending it, and the user uploading it. `latest_draft` is the newest draft version (null if none) — patches go there, so call get_project again with its version_reference before patching. Follow `next_steps` and tell the user which route applies before making changes. All other model content — input.format, steps, expressions, output — is returned verbatim so an LLM caller can understand what the project does and how to build a valid input payload. Precursor to run_quote and patch_version.",
+          "inputSchema": {
+            "properties": {
+              "project_reference": {
+                "description": "UUID of the project to fetch.",
+                "type": "string"
+              },
+              "version_reference": {
+                "description": "Optional. Specific version UUID of this project; defaults to the latest live version, or the latest non-archived version of any status if none are live.",
+                "type": "string"
+              }
+            },
+            "required": ["project_reference"],
+            "type": "object"
+          },
+          "annotations": {
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "ptally/requires_auth": true,
+            "ptally/summary": "Shows one project: what details it asks for, how it works out a price, and its rate tables (whole up to 100 rows, a sample of bigger ones). Small changes can be patched into a draft; changes to bigger tables go through downloading and uploading the model.",
+            "swallow/requires_auth": true,
+            "swallow/summary": "Shows one project: what details it asks for, how it works out a price, and its rate tables (whole up to 100 rows, a sample of bigger ones). Small changes can be patched into a draft; changes to bigger tables go through downloading and uploading the model."
+          },
+          "digest": "sha256:4f79f2394d3b384c7d6a1fcf333b36ef4083c7659fc30b7236dd045f1f271119"
+        },
+        {
+          "name": "get_projects",
+          "title": "List projects",
+          "description": "List every project stored on this self-host instance. Returns `{ count, projects: [{ project_reference, name, description }] }`. Descriptions are truncated to 100 characters so the response stays compact — call get_project for the full record. Archived projects are excluded.",
+          "inputSchema": {
+            "properties": {},
+            "type": "object"
+          },
+          "annotations": {
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "ptally/requires_auth": true,
+            "ptally/summary": "Lists all the pricing projects saved here, with their names and a short description of each.",
+            "swallow/requires_auth": true,
+            "swallow/summary": "Lists all the pricing projects saved here, with their names and a short description of each."
+          },
+          "digest": "sha256:cff92c145279a93f5e363241e1fcec7d0a5a41d6b4a1c5be526fcf4dd7745f7c"
+        },
+        {
+          "name": "get_quote",
+          "title": "Review a quote",
+          "description": "Review one quote in a standard shape, from a stored `quote_reference` (get_quotes) or a pasted `quote` — the dashboard's Copy JSON, a POST /quotes or run_quote response, or a bare engine output with `debug` (`quote_gz`: base64 gzip of the same JSON, for big pastes). Pass exactly one. Returns `{ source, quote_reference, project_reference, project_name, version_reference, version, created_at, outcome: { decision (quoted | declined | referred | error), result, valid, status, error, exec_time_ms, engine_time_ms, steps, slowest_steps }, input, output, rules: { exclusions, refers, excesses, endorsements: { fired_count, checked_count, fired: [{ step, name, exp, values, result }] } }, result_build: { formula, values, result }, valid_rule: { exp, values, result }, build: [{ order, id, name, type, description, ms, logic: [{ name, exp | formula, values, result }], lookups, table_rows, output, errors }], errors, has_trace, truncated, amendment, quote_url, version_url, replay, how_to_explain, next_steps }`. `outcome` is always what the engine priced. `amendment` (stored quotes only; null when never touched) is `{ result, valid, sold, amended_at, log: [{ when, who, via (dashboard | api | mcp), result: { from, to }, valid, sold, note }] }`: the price, validity or sold flag someone set afterwards (dashboard, API or amend_quote), and the log of who changed what. Step names, types, descriptions and collection lookups come from the version's model when it is on this instance. A quote without a step trace is re-priced against its version (`replay: true` forces it); `replay` reports the replayed vs stored result and whether they match. Nothing is saved. Responses are kept under ~80 KB: large quotes come back clipped or as an overview (`truncated` says which) — pass `steps: [<id>, …]` for those steps in full. If even the overview is too big the result is `{ too_large: true, outcome, rules counts, next_steps }`: review a few steps at a time, or ask the user to paste the part they want explained. Explain the result back following `how_to_explain`.",
+          "inputSchema": {
+            "properties": {
+              "quote": {
+                "description": "A pasted quote: the dashboard's Copy JSON, a POST /quotes or run_quote response, or an engine output with `debug`. A JSON string is also accepted.",
+                "type": "object"
+              },
+              "quote_gz": {
+                "description": "Base64-encoded gzip of the quote JSON, instead of `quote` when it is too big to pass inline.",
+                "type": "string"
+              },
+              "quote_reference": {
+                "description": "A stored quote's reference, from get_quotes.",
+                "type": "string"
+              },
+              "replay": {
+                "description": "Optional. Re-price the quote's input against its version even when it has a step trace, and compare with the stored result. Never saved.",
+                "type": "boolean"
+              },
+              "steps": {
+                "description": "Optional. Step ids to return in full (and only those in `build`). Use after a truncated review, or to focus on one step.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "type": "object"
+          },
+          "annotations": {
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "ptally/requires_auth": true,
+            "ptally/summary": "Explains one quote: which rules fired, how each step built the price, what every step produced and how long it took. Works on a saved quote or one you paste in.",
+            "swallow/requires_auth": true,
+            "swallow/summary": "Explains one quote: which rules fired, how each step built the price, what every step produced and how long it took. Works on a saved quote or one you paste in."
+          },
+          "digest": "sha256:63454b3a5a0825988c1ac69ca0aa9019fc254f437f95ea2b0f66a750a174d46a"
+        },
+        {
+          "name": "get_quotes",
+          "title": "List quotes",
+          "description": "List quotes stored on this self-host instance, newest first (`direction: \"asc\"` for oldest first). Filter by `project_reference` (from get_projects), `version_reference`, `since` (ISO date) or `search` (text match on indicators). Paged with `limit` (default 25, max 100) and `offset`; `has_more` says whether another page exists. Returns `{ count, limit, offset, has_more, quotes: [{ quote_reference, project_reference, project_name, version_reference, version, created_at, status, valid, result, indicator, client_ref, exec_time_ms, error, amended_result, amended_valid, sold, quote_url }], next_steps }` — `result` and `valid` are what the engine priced; `amended_result` / `amended_valid` (null when not amended) are what someone changed them to in the dashboard, and `sold` (null when never set) whether it sold. No input or output payloads; call get_quote for one quote's full review. Dry runs (run_quote without save, run_version_tests) are never stored, so they never appear here; run_quote with save: true does.",
+          "inputSchema": {
+            "properties": {
+              "direction": {
+                "description": "Optional. desc (newest first, default) or asc.",
+                "enum": ["desc", "asc"],
+                "type": "string"
+              },
+              "limit": {
+                "description": "Optional. Page size, default 25, max 100.",
+                "maximum": 100,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "offset": {
+                "description": "Optional. Rows to skip, for paging.",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "project_reference": {
+                "description": "Optional. Only quotes for this project (get_projects lists them).",
+                "type": "string"
+              },
+              "search": {
+                "description": "Optional. Text to match in the quote's indicators.",
+                "type": "string"
+              },
+              "since": {
+                "description": "Optional. ISO date or date-time; only quotes created at or after it.",
+                "type": "string"
+              },
+              "version_reference": {
+                "description": "Optional. Only quotes priced by this version.",
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "annotations": {
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "ptally/requires_auth": true,
+            "ptally/summary": "Lists the quotes your projects have priced, newest first, with each one's price, whether it was valid and how long it took. Filter by project or version.",
+            "swallow/requires_auth": true,
+            "swallow/summary": "Lists the quotes your projects have priced, newest first, with each one's price, whether it was valid and how long it took. Filter by project or version."
+          },
+          "digest": "sha256:e6f6a676bb12edea5d4a30fda6a06bbb633955bd8da50742a0d91e89e0d0dd7a"
+        },
+        {
+          "name": "get_schema",
+          "title": "Model layout",
+          "description": "Fetch the full JSON schema for Ptally project config files. Use to check exact field requirements, allowed step types, and property constraints.",
+          "inputSchema": {
+            "type": "object"
+          },
+          "annotations": {
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "ptally/requires_auth": false,
+            "ptally/summary": "Shows the layout every Ptally pricing model has to follow, so you can check nothing is missing or in the wrong place.",
+            "swallow/requires_auth": false,
+            "swallow/summary": "Shows the layout every Ptally pricing model has to follow, so you can check nothing is missing or in the wrong place."
+          },
+          "digest": "sha256:26789bc351dc79e38f3e1b7d705786e9d4f4ffd49d0234832fb02ae2b48c7b02"
+        },
+        {
+          "name": "get_starter",
+          "title": "Example models",
+          "description": "Fetch a worked-example Ptally project for a common line of business. Each example is a small, fully valid project with realistic collection tables, calculations, exclusions and refers, plus an embedded tests[] suite for reference. Use as a template — copy and adapt rather than authoring from scratch. Pass no arguments (or `list: true`) to get the catalog.",
+          "inputSchema": {
+            "properties": {
+              "list": {
+                "description": "When true (or when type is omitted), return the catalog of available examples with their descriptions instead of a single project.",
+                "type": "boolean"
+              },
+              "type": {
+                "description": "Which starter example to return.",
+                "enum": ["bop", "commercial-auto", "commercial-property", "earthquake", "equipment-breakdown", "general-liability", "home", "inland-marine", "management-liability", "motor", "travel", "workers-comp"],
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "annotations": {
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "ptally/requires_auth": false,
+            "ptally/summary": "Gives you a ready-made example pricing model for a common type of insurance, such as travel, to copy and adapt instead of starting from scratch.",
+            "swallow/requires_auth": false,
+            "swallow/summary": "Gives you a ready-made example pricing model for a common type of insurance, such as travel, to copy and adapt instead of starting from scratch."
+          },
+          "digest": "sha256:3f17bac2c5275092de378b5c9ebf73a4d16383cb937587416946f1ae4a2f41df"
+        },
+        {
+          "name": "patch_version",
+          "title": "Edit a draft",
+          "description": "Change a DRAFT version's stored model with an RFC 6902 JSON Patch, merged on the server. Use it for targeted edits; any change to a clipped collection (__context.patchable: false) goes through download and upload instead (see next_steps in get_project).\n\nBEFORE CALLING\n1. The version must be a draft: use get_project's latest_draft. If it is null, ask the user to click New Version on the project page (it copies the live model), then call get_project again.\n2. Call get_project with the draft's version_reference and build every path from that response. Pass its updated_at as base_updated_at.\n3. Tell the user what you will change (old → new) and get their go-ahead.\n\nPATHS (JSON Pointer)\n- Name steps, tests and other id'd array elements by id (else key) instead of index: /steps/<step id>/... and /tests/<test id>/... Ids survive other steps being inserted or removed in the same patch.\n- Model layout: /meta/..., /input/format/<input key>/... (format is an object keyed by input key), /steps/<id>/..., /output/format/<key>/..., /tests/<id>/...\n- Collection rows by index. Compressed collection ([[col1, col2, ...], [v1, v2, ...], ...]): index 0 is the header row, so the first data row is /collection/1, and a cell is /collection/<row>/<column index>. Uncompressed collection (array of row objects): the first row is /collection/0, and a cell is /collection/<row>/<column name>. Check __context.shape and __context.columns.\n- Append with \"-\" (/steps/-, /steps/<id>/collection/-). Insert at a numeric index; step order is execution order, so a new step goes after the steps whose outputs it reads.\n- Escape \"~\" as ~0 and \"/\" as ~1 inside a segment.\n\nEXAMPLES\n- Change a rate cell: {\"op\":\"replace\",\"path\":\"/steps/region_rates/collection/1/1\",\"value\":4.5}\n- Guard then change: [{\"op\":\"test\",\"path\":\"/steps/base_premium/formula\",\"value\":\"<current formula>\"},{\"op\":\"replace\",\"path\":\"/steps/base_premium/formula\",\"value\":\"<new formula>\"}]\n- Add a table row: {\"op\":\"add\",\"path\":\"/steps/type_factors/collection/-\",\"value\":[\"gravel\",1.1]}\n- Change an input default: {\"op\":\"replace\",\"path\":\"/input/format/bike_value/def\",\"value\":2000}\n- Insert a step as the 5th: {\"op\":\"add\",\"path\":\"/steps/4\",\"value\":{ ...full step object... }}\n- Update a test's expected price: {\"op\":\"replace\",\"path\":\"/tests/t01/output/result\",\"value\":46.1}\n- Add a test: {\"op\":\"add\",\"path\":\"/tests/-\",\"value\":{\"id\":\"young_rider\",\"name\":\"Young rider\",\"key\":\"young_rider\",\"input\":{ ...every input key... },\"output\":{\"result\":52.5,\"valid\":true}}}. Expectations go in output { result, valid }, even if older tests on the model keep them under result.\n\nRULES\n- Smallest change: replace a field, not a whole step; never the whole model (path \"\" is refused).\n- New or replaced steps follow the config constraints in the server instructions (retain: true on transforms, unique id = key, {{}} references, ...).\n- Don't send __context (it's stripped anyway). A clipped collection must stay exactly as stored — no edits, no removal, no replacement with the sample you saw. A patched collection may hold at most 100 rows.\n- All operations apply or none do. At most 200 per call.\n\nRESULT\n{ saved, updated_at, validation, tests: { total, passed, failed, unchecked, failures: [{ test, problems }] }, version_url, next_steps }. saved: false = schema validation failed, nothing stored — fix from validation.errors and retry. A conflict error = the draft changed since you read it — call get_project again and rebuild. Tests are priced after saving and don't block it: report failures and ask whether their expected outputs should change. For every test's actual vs expected values, call run_version_tests. For another patch, use the returned updated_at. Never approves or publishes — the user does that in the UI.",
+          "inputSchema": {
+            "properties": {
+              "base_updated_at": {
+                "description": "The draft's updated_at exactly as get_project (called with this version_reference) or the previous patch returned it. A mismatch means someone changed the draft since — the patch is refused.",
+                "type": "string"
+              },
+              "operations": {
+                "description": "RFC 6902 JSON Patch operations, applied in order to the full stored model, all or nothing. At most 200.",
+                "items": {
+                  "properties": {
+                    "from": {
+                      "description": "Source pointer for move and copy.",
+                      "type": "string"
+                    },
+                    "op": {
+                      "description": "test fails the whole patch unless the value at path equals value — use it to guard a change.",
+                      "enum": ["add", "remove", "replace", "move", "copy", "test"],
+                      "type": "string"
+                    },
+                    "path": {
+                      "description": "JSON Pointer into the model, e.g. /steps/<step id>/formula or /steps/<step id>/collection/1/1. Array elements by id (else key) or index; \"-\" appends.",
+                      "type": "string"
+                    },
+                    "value": {
+                      "description": "New value for add, replace and test: any JSON (a number, string, row array, row object or whole step)."
+                    }
+                  },
+                  "required": ["op", "path"],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "version_reference": {
+                "description": "UUID of the draft version to patch: get_project's latest_draft.version_reference. Never a published or approved version.",
+                "type": "string"
+              }
+            },
+            "required": ["base_updated_at", "operations", "version_reference"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": false,
+            "openWorldHint": false,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": false,
+            "openWorld": false,
+            "readOnly": false
+          },
+          "meta": {
+            "ptally/requires_auth": true,
+            "ptally/summary": "Makes changes to a draft version of a project, checks the result and prices its tests. Only drafts change; you still approve and publish in the dashboard. Rate tables over 100 rows can't be changed this way.",
+            "swallow/requires_auth": true,
+            "swallow/summary": "Makes changes to a draft version of a project, checks the result and prices its tests. Only drafts change; you still approve and publish in the dashboard. Rate tables over 100 rows can't be changed this way."
+          },
+          "digest": "sha256:0e0ea85e29fc52a06f4197bdd6090abfeae55b361fd58f44b44dbbc2f82a4a2e"
+        },
+        {
+          "name": "run_quote",
+          "title": "Try a quote",
+          "description": "Price a quote against a stored project: a dry run by default, saved only with `save: true`. Takes `project_reference`, an optional `version_reference` (defaults to the latest live version; there is no fallback to drafts, so pass `version_reference` to price one — it must belong to the project and not be archived, else a tool error), and an `input` payload that matches the project's input schema. Runs the pricing engine and returns the quote envelope — `output`, `result`, `valid`, `status`, `error`, the engine's `errors` log, `exec_time_ms`, `dry_run: true` and a null `quote_reference` — WITHOUT persisting a quotes row. With `save: true` the quote is stored like a POST /quotes, under the signed-in user (an engine error is stored as an error quote), and the envelope carries `dry_run: false`, its `quote_reference`, `created_at` and `quote_url`; it then shows in get_quotes and the dashboard and can be amended with amend_quote. Only save when the user asks for the quote to be kept, not to try inputs. Saving is refused in read-only mode. Call get_project first to inspect `input.format` and build a valid input.",
+          "inputSchema": {
+            "properties": {
+              "input": {
+                "description": "Flat quote input object matching the project's input.format schema. Use get_project to discover the required keys.",
+                "type": "object"
+              },
+              "project_reference": {
+                "description": "UUID of the project to price against.",
+                "type": "string"
+              },
+              "save": {
+                "description": "Optional, default false (dry run, nothing stored). true stores the quote under the signed-in user and returns its quote_reference. Only when the user asks for the quote to be kept.",
+                "type": "boolean"
+              },
+              "source": {
+                "description": "Optional engine `source` label passed through to the model. Defaults to \"mcp\".",
+                "type": "string"
+              },
+              "version_reference": {
+                "description": "Optional. Specific non-archived version UUID of this project; defaults to the latest live version (no fallback to drafts).",
+                "type": "string"
+              }
+            },
+            "required": ["input", "project_reference"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": false,
+            "openWorldHint": false,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": false,
+            "openWorld": false,
+            "readOnly": false
+          },
+          "meta": {
+            "ptally/requires_auth": true,
+            "ptally/summary": "Works out a price for a project from the details you give it. Nothing is saved unless you ask for it to be, so it's safe to try as often as you like.",
+            "swallow/requires_auth": true,
+            "swallow/summary": "Works out a price for a project from the details you give it. Nothing is saved unless you ask for it to be, so it's safe to try as often as you like."
+          },
+          "digest": "sha256:56bc72c68bbeb3da22ca7d65108052b7e20379b9c23b3aa388ebc6184581a4e6"
+        },
+        {
+          "name": "run_version_tests",
+          "title": "Run a version's tests",
+          "description": "Price every test in a version's tests[] against that version's stored model and compare each with its expected output. Takes `version_reference` (any status but archived — a draft after patch_version, or a live version for a baseline). Runs against the stored model, so a patch saved a moment ago is included. A test passes when its result is within 0.005 of the expected result and its valid flag equals the expected valid. Expectations are read from output { result, valid }, or, when output has neither (tests imported from the hosted service), from result { result, valid }; `expected_from` says which. A test with neither is priced but unchecked (passed: null). Returns `{ project_reference, version_reference, version, status, updated_at, total, passed, failed, unchecked, results: [{ id, name, passed, expected: { result, valid }, expected_from, actual: { result, valid }, problems, errors }], version_url, next_steps }` — `problems` says why a test failed, `errors` is up to 5 of the engine's step errors for that run. Nothing is persisted. Use after patch_version, after adding or changing tests, or before a change to record the baseline. To change a test's expected output, patch_version on /tests/<test id>/output/result (drafts only) — output takes precedence over result.",
+          "inputSchema": {
+            "properties": {
+              "version_reference": {
+                "description": "UUID of the version whose tests to run — e.g. get_project's latest_draft.version_reference, or the version_reference patch_version returned.",
+                "type": "string"
+              }
+            },
+            "required": ["version_reference"],
+            "type": "object"
+          },
+          "annotations": {
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "ptally/requires_auth": true,
+            "ptally/summary": "Prices every test saved on a version and shows which ones match their expected price and which don't. Nothing is saved.",
+            "swallow/requires_auth": true,
+            "swallow/summary": "Prices every test saved on a version and shows which ones match their expected price and which don't. Nothing is saved."
+          },
+          "digest": "sha256:96278e355baed79836b90bb35b600f1620ab280b1d8a40deb9619aab669acab6"
+        },
+        {
+          "name": "validate_project",
+          "title": "Check a model for mistakes",
+          "description": "Server-side schema validation of a project config. Returns { valid: true/false, errors: [...] } with the JSON path, keyword, and message for each issue. Prefer local validation against get_schema during authoring; use this as a ground-truth check, including on an amended model before handing it back to the user as a file. Pass exactly one of inline `project` or a base64-gzipped `project_gz` (if the inline form is too large for your client); passing neither or both returns an error result.",
+          "inputSchema": {
+            "properties": {
+              "project": {
+                "properties": {
+                  "input": {
+                    "type": "object"
+                  },
+                  "meta": {
+                    "type": "object"
+                  },
+                  "output": {
+                    "type": "object"
+                  },
+                  "steps": {
+                    "items": {
+                      "type": "object"
+                    },
+                    "type": "array"
+                  },
+                  "tests": {
+                    "items": {
+                      "properties": {
+                        "id": {
+                          "type": "string"
+                        },
+                        "input": {
+                          "type": "object"
+                        },
+                        "key": {
+                          "type": "string"
+                        },
+                        "name": {
+                          "type": "string"
+                        },
+                        "output": {
+                          "properties": {
+                            "result": {
+                              "type": "number"
+                            },
+                            "valid": {
+                              "type": "boolean"
+                            }
+                          },
+                          "type": "object"
+                        }
+                      },
+                      "required": ["id", "input", "key", "name", "output"],
+                      "type": "object"
+                    },
+                    "type": "array"
+                  }
+                },
+                "required": ["input", "meta", "output", "steps"],
+                "type": "object"
+              },
+              "project_gz": {
+                "description": "Optional. Base64-encoded gzip of the project JSON, used as an alternative to inline `project` when the caller cannot fit the full payload in a single tool argument. Mutually exclusive with `project`. Pricing JSON typically compresses 5-10x.",
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "annotations": {
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "ptally/requires_auth": false,
+            "ptally/summary": "Checks a pricing model for mistakes and tells you what's wrong and where to find it.",
+            "swallow/requires_auth": false,
+            "swallow/summary": "Checks a pricing model for mistakes and tells you what's wrong and where to find it."
+          },
+          "digest": "sha256:0a6281a94fcfc404bc0a2b6c9dffe4b993a9eaa9a5ba3a015e848296274a99b4"
+        }
+      ],
+      "prompts": [
+        {
+          "name": "self-host-system-prompt",
+          "description": "System prompt for the self-host Ptally help + config-authoring MCP server",
+          "digest": "sha256:10085164acf81aeea7f374768d042e9fb73bae960698fe3cd1b2fa26fcad6c4a"
+        }
+      ],
+      "digest": "sha256:0e6c998c1ef0005ab93fe8af20341a849651285f88d973912e0658ccad9cd4d3"
+    }
+  }
+}

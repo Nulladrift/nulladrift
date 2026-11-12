@@ -1,0 +1,1103 @@
+{
+  "lockfileVersion": 2,
+  "subjects": {
+    "com.entsoemcp/entsoe-mcp": {
+      "kind": "mcp-server",
+      "source": {
+        "client": "manual",
+        "file": "registry.modelcontextprotocol.io"
+      },
+      "transport": {
+        "type": "http",
+        "url": "https://entsoemcp.com/mcp"
+      },
+      "protocol": {
+        "era": "legacy",
+        "version": "2025-11-25"
+      },
+      "serverInfo": {
+        "name": "MCP Energy Data",
+        "version": "1.0",
+        "websiteUrl": "https://entsoemcp.com"
+      },
+      "capabilities": {
+        "experimental": {},
+        "extensions": {
+          "io.modelcontextprotocol/ui": {}
+        },
+        "logging": {},
+        "prompts": {
+          "listChanged": true
+        },
+        "resources": {
+          "listChanged": true,
+          "subscribe": false
+        },
+        "tools": {
+          "listChanged": true
+        }
+      },
+      "instructions": "ENTSO-E European power-market data: prices, load, generation, cross-border flows, outages. Hot-path is DuckDB-over-Parquet — queries are sub-second over the cached ingest. Use `data_coverage` before assuming a recent date is landed.\n\nDATE CONVENTION (read before every series query):\n  • Default: `start`/`end` are UTC. `start` is INCLUSIVE, `end` is EXCLUSIVE — i.e. ts_utc ∈ [start, end).\n  • For 'all of April 2026' use start=2026-04-01, end=2026-05-01 (NOT end=2026-04-30 — that drops April 30 entirely, plus any local-time hours of April that fall on UTC dates outside the window for non-UTC zones).\n  • For 'yesterday' use start=YESTERDAY, end=TODAY.\n\nMARKET-DAY CONVENTION (use this for any 'what was the price on day X' question):\n  • The SDAC pan-European day-ahead auction defines its delivery day on a CET/CEST-aligned 24-hour grid for every coupled bidding zone — same UTC window for DE_LU, ES, GR, FI, PT, etc. (EPEX SPOT MRC process: 'All timings indicated in this document are CET timings'). UTC midnights slice off the last 1–2 hours of the real market day and pull in 1–2 from the next.\n  • For market-day questions ('yesterday's DE_LU baseload', 'May 2026 ES capture rate'), pass tz='Europe/Berlin' so the window aligns to the auction's delivery day. Example: get_day_ahead_prices(zone='DE_LU', start='2026-05-11', end='2026-05-12', tz='Europe/Berlin') returns exactly the 24 SDAC delivery hours for May 11.\n  • For per-zone-local-clock questions (rare; consumer-style: 'when was the consumption peak in Spain yesterday in Madrid time?') pass tz='local' — resolves to the zone's own IANA tz (Europe/Madrid for ES, etc.), NOT the auction grid.\n  • For zone-agnostic / cross-time-zone analysis, keep the UTC default.\n  • Responses always include a `period` field with start_utc, end_utc, duration_hours, and (when a zone is involved) start_local/end_local — verify duration_hours matches your intent (a 30-day month is 720 h).\n  • aggregation='daily'|'monthly' buckets follow the resolved tz: UTC by default; with tz= set, buckets align to that tz's day/month and are labeled by the local period start as a plain 'YYYY-MM-DD' string (the period block echoes bucket_tz). Market-day daily means = tz='Europe/Berlin' + aggregation='daily' in one call.\n\nDATA RESOLUTION (read before per-hour math):\n  • Most endpoints publish at PT60M (one row per hour). Some zones have rolled over to MTU=15min (PT15M) for select endpoints — notably `day_ahead_price` for DE_LU, and `actual_load`/`generation_per_type` across many zones. Data is stored at the native resolution it was published at.\n  • For day-ahead prices specifically: the auction still clears HOURLY, so the 4 quarter rows of an hour all carry the same price value. An hourly AVG of PT15M DA prices equals the original hourly price; a SUM would 4× over-count.\n  • For per-hour math on raw rows: aggregate to hourly first via `DATE_TRUNC('hour', ts_utc)` + AVG, THEN operate. The `get_derivation` tools handle this internally — `capture_price`, `negative_price_hours`, `residual_load`, `res_share`, `tb_spread` all aggregate to hourly before counting/averaging so the per-hour math is consistent across zones.\n  • For raw-row consumers: check the response row count vs expected hours. 2880 rows for a 720-hour April → PT15M storage; 720 rows → PT60M. Use `aggregation='hourly'` on `get_series` (or the `/api/series` / `/download` query param) to collapse to one row per hour at query time, regardless of native storage.",
+      "tools": [
+        {
+          "name": "compare_zones",
+          "title": "Compare zones",
+          "description": "Compare one endpoint across multiple zones.\n\n`start`/`end` default to UTC; `start` inclusive, `end` EXCLUSIVE.\n`tz=\"local\"` is rejected (zones may differ); pass an explicit IANA\ntz like \"Europe/Berlin\" if you need wall-clock alignment.\n`filters={column: [values]}` keeps only rows whose categorical column\nholds one of the values, in every zone (see get_series); zones whose\nperiods hold several rows are listed under `split_periods_by_zone`.\nA zone whose series stopped upstream before the window's end (GB\nday-ahead after 2020-12-31) is listed under `series_ended_by_zone`, with\nthe endpoint that carries it on — an empty `[]` there is not \"no data\nyet\".",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "aggregation": {
+                "default": "daily",
+                "type": "string"
+              },
+              "end": {
+                "type": "string"
+              },
+              "endpoint": {
+                "type": "string"
+              },
+              "filters": {
+                "anyOf": [
+                  {
+                    "additionalProperties": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "start": {
+                "type": "string"
+              },
+              "tz": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "zones": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "required": ["end", "endpoint", "start", "zones"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Compare zones"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "digest": "sha256:660bccb6554fb2df509217e8756266a49f11b2a273f57bc6005784bc0c8eee2e"
+        },
+        {
+          "name": "data_coverage",
+          "title": "Check data coverage",
+          "description": "Show ingest coverage and lag for (endpoint × zone) — call before queries\nif you're not sure whether the data is landed yet.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "endpoint": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "zone": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              }
+            },
+            "type": "object"
+          },
+          "outputSchema": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Check data coverage"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "digest": "sha256:c56f3b7a20e2e049b629d5e1ef0a0838ced6a8f390f952e407eb3833f8d12c9d"
+        },
+        {
+          "name": "get_crossborder_flow",
+          "title": "Get cross-border flow",
+          "description": "Cross-border physical flow (MW) between two adjacent zones.\n\n`start`/`end` default to UTC; `start` inclusive, `end` EXCLUSIVE.\n`tz=\"local\"` uses the FROM-zone's timezone; or pass an IANA name.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "aggregation": {
+                "default": "raw",
+                "type": "string"
+              },
+              "end": {
+                "type": "string"
+              },
+              "from_zone": {
+                "type": "string"
+              },
+              "start": {
+                "type": "string"
+              },
+              "to_zone": {
+                "type": "string"
+              },
+              "tz": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              }
+            },
+            "required": ["end", "from_zone", "start", "to_zone"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Get cross-border flow"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "digest": "sha256:699ec5a226df27a3a801a107d32bfd44e27a28f935c8c935c412911d9f4660e8"
+        },
+        {
+          "name": "get_day_ahead_prices",
+          "title": "Get day-ahead prices",
+          "description": "Day-ahead clearing price for a bidding zone, in the zone's trading\ncurrency (EUR for euro zones; the per-row `currency` column and the\nresponse `unit` say which — GB=GBP, PL/RO/BG carry local-currency eras).\n\n`start`/`end` default to UTC; `start` inclusive, `end` EXCLUSIVE.\nFor 'all of April 2026' use start=2026-04-01, end=2026-05-01\n(end=2026-04-30 silently drops the final UTC day — and 1–2 local-time\nhours of April for European zones in CET/CEST). The response's\n`period` block shows the resolved window so you can verify\n(a 30-day month is 720 hours).\n\n`tz`: pass \"local\" to interpret start/end as wall-clock in the zone's\ntimezone, or an explicit IANA name like \"Europe/Berlin\". The server\nconverts to UTC at the boundary.\n\nGB/UK: ENTSO-E's GB day-ahead price ended 2020-12-31, when GB left\nEuropean market coupling. For later windows use\n`get_series(endpoint=\"day_ahead_price_imrp\", zone=\"GB\", …)` — the same\nGB day-ahead auction, GBP/MWh, published ~D-2; a window past a series'\nend answers with `series_ended`, naming the endpoint that carries it on.\n\nIf you're computing a **generation-weighted** price metric — capture\nprice, capture rate, value factor, merchant-PPA achieved price — use\n`get_derivation(slug=\"capture_price\", …)` instead. It runs server-side\nover the full window and returns monthly rows; no row cap, no pagination.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "aggregation": {
+                "default": "raw",
+                "type": "string"
+              },
+              "end": {
+                "type": "string"
+              },
+              "start": {
+                "type": "string"
+              },
+              "tz": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "zone": {
+                "type": "string"
+              }
+            },
+            "required": ["end", "start", "zone"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Get day-ahead prices"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "digest": "sha256:e8e673dc9d055308fc32001bf94a7551e264c0b6d871eb34d5765f2176491269"
+        },
+        {
+          "name": "get_derivation",
+          "title": "Get a derived metric",
+          "description": "Compute **capture price**, **capture rate** (a.k.a. value factor /\nquality factor / Marktwertfaktor), **TBx battery-arbitrage spreads**,\nand other generation-weighted market metrics server-side from landed\nParquet. Use this instead of fetching hourly prices + hourly generation\nyourself and weighting them client-side — server-side aggregation has\nno row cap and no pagination.\n\n`slug`: a key from list_derivations() — today: `\"capture_price\"`,\n`\"negative_price_hours\"`, `\"residual_load\"`, `\"res_share\"`,\n`\"emissions\"`, `\"tb_spread\"`.\n\n`tb_spread` returns monthly (default) or annual (aggregation='annual')\nTop-Bottom spreads TB1/TB2/TB4/TB6 in <currency>/MW per period — the sum\nof daily (top-x minus bottom-x hourly prices) over SDAC market days. The\nonly slug accepting `aggregation`, and the only one accepting\nmulti-zone `zone` ('all', a list, or CSV). Example — annual TB2 across\nevery European market in ONE call:\n  get_derivation(\"tb_spread\", \"2025-01-01\", \"2026-01-01\",\n                 zone=\"all\", aggregation=\"annual\")\nFor a single day's top/bottom hour TIMESTAMPS use get_tb_spread.\n\n`capture_price` returns monthly rows per (zone, psr_type, currency) with\ncolumns: currency, capture_price_eur_per_mwh, baseload_price_eur_per_mwh,\nquality_factor (the capture rate = capture/baseload), total_gen_mwh,\nn_hours. Months are bucketed by local time using the zone's IANA\ntimezone.\n\nENDED INPUTS: when an input series stopped upstream before the window's\nend, the answer carries `series_ended` (per zone for a multi-zone\ntb_spread): which inputs, why, what carries each on, and any metric that\ncarries this one on. GB: ENTSO-E's day-ahead price ended 2020-12-31, so\nGB capture_price, negative_price_hours and tb_spread stop there;\n`capture_price_mid` covers GB 2016-09 → now against the Market Index\nPrice (a traded index, not the auction — read its note).\n\nCURRENCY (capture_price and tb_spread alike): the `*_eur_per_mwh` /\n`tb*_eur_per_mw` key names are FIXED for API stability and do NOT track\nthe actual unit — read the row's `currency` column, which is\nauthoritative (EUR for euro zones, GBP for GB, PLN/RON/BGN for the\nPL/RO/BG local-currency eras). The response echoes it top-level as\n`currency`; a window spanning two currencies instead sets `unit` to null\nwith `mixed_currency: true` and a `currencies` list. A month (or period)\nspanning a redenomination splits into one row PER CURRENCY, each computed\nonly from that currency's hours — so never average or sum a price column\nacross rows with different `currency` values. Summing `total_gen_mwh`\nacross them IS correct: the split rows partition the month's hours rather\nthan duplicating them. `quality_factor` is a ratio and stays comparable\nacross currencies.\n\n`emissions` returns monthly rows per (zone, psr_type) with columns:\ngeneration_mwh, n_hours, emission_factor_kg_per_mwh, emissions_t_co2.\nProduction-based; IPCC AR5 lifecycle factors. Zero-emission rows\n(nuclear, wind, solar, hydro, geothermal, marine) appear with\nemissions_t_co2 = 0 — useful for stacked charts.\n\nFilter via `psr_types=[\"solar\",\"wind_onshore\",\"wind_offshore\"]` (or\nraw B-codes like \"B16\") to get only the technologies you care about.\nDefaults to all psr_types that have generation data.\n\nExample — Spain solar capture price, last 12 months:\n  get_derivation(\"capture_price\", \"2025-05-01\", \"2026-05-01\",\n                 zone=\"ES\", psr_types=[\"B16\"], tz=\"Europe/Madrid\")\nExample — Germany 2024 emissions by fuel:\n  get_derivation(\"emissions\", \"2024-01-01\", \"2025-01-01\",\n                 zone=\"DE_LU\", tz=\"Europe/Berlin\")\nReturns 12 monthly rows in one call; no pagination.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "aggregation": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "end": {
+                "type": "string"
+              },
+              "from_zone": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "psr_types": {
+                "anyOf": [
+                  {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "slug": {
+                "type": "string"
+              },
+              "start": {
+                "type": "string"
+              },
+              "to_zone": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "tz": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": "local"
+              },
+              "zone": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              }
+            },
+            "required": ["end", "slug", "start"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Get a derived metric"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "digest": "sha256:b2009c6896ee1ce9efdf8344ea8b6da82a841d8280487dcabf675db011b0b358"
+        },
+        {
+          "name": "get_generation",
+          "title": "Get generation by fuel",
+          "description": "Aggregated generation (MW) per production type.\n\n`start`/`end` default to UTC; `start` inclusive, `end` EXCLUSIVE.\nFor a full calendar month set `end` to the first day of the next\nmonth. Pass `tz=\"local\"` or an IANA name to interpret start/end as\nwall-clock in that timezone.\n\nGB/UK: ENTSO-E's GB generation ended 2021-06-15. For later windows use\n`get_series(endpoint=\"generation_mix\", zone=\"GB\", …)` (NESO, 2009→now,\nits own wind codes — `list_psr_types(zone=\"GB\")` first); a window past\na series' end answers with `series_ended`, naming that endpoint.\n\nIf you're computing a **generation-weighted** price metric — capture\nprice, capture rate, value factor, merchant-PPA achieved price — use\n`get_derivation(slug=\"capture_price\", …)` instead. It runs server-side\nover the full window and returns monthly rows; no row cap, no pagination.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "aggregation": {
+                "default": "raw",
+                "type": "string"
+              },
+              "end": {
+                "type": "string"
+              },
+              "psr_types": {
+                "anyOf": [
+                  {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "start": {
+                "type": "string"
+              },
+              "tz": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "zone": {
+                "type": "string"
+              }
+            },
+            "required": ["end", "start", "zone"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Get generation by fuel"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "digest": "sha256:2efaa94058286650e303497405f4a700c4e7bd85cb3c8ae9d78f10f9e9c9d215"
+        },
+        {
+          "name": "get_load",
+          "title": "Get load (actual or forecast)",
+          "description": "Actual or forecast load (MW). kind = actual | forecast | both.\n\n`start`/`end` default to UTC; `start` inclusive, `end` EXCLUSIVE.\nFor a full calendar month set `end` to the first day of the next\nmonth. Pass `tz=\"local\"` or an IANA name to interpret start/end as\nwall-clock in that timezone.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "aggregation": {
+                "default": "raw",
+                "type": "string"
+              },
+              "end": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string"
+              },
+              "start": {
+                "type": "string"
+              },
+              "tz": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "zone": {
+                "type": "string"
+              }
+            },
+            "required": ["end", "kind", "start", "zone"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Get load (actual or forecast)"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "digest": "sha256:b73114863fc462c267e640f12b90ac4be33ca65d904107273c150b4e4b947302"
+        },
+        {
+          "name": "get_outages",
+          "title": "Get generation outages",
+          "description": "Generation-unit unavailability events (UMM).\n\n`start`/`end` default to UTC; `start` inclusive, `end` EXCLUSIVE. An\noutage is returned if it overlaps the window. Pass `tz=\"local\"` or an\nIANA name to interpret start/end as wall-clock in that timezone.\nEach row is one unit's availability step, from its document's latest\nrevision. ENTSO-E lists some outages under several documents with\nidentical rows; each such row is served once, and `copies` counts the\ndocuments that filed it. A unit can still have several overlapping\nrows that differ. To total unavailable MW, count each unit once per\ninstant (its largest unavailable MW), not the sum of its rows.\nA zone whose outage feed stopped upstream (GB, 2021-06-15) carries\n`series_ended`: outages announced since then are missing, though older\ndocuments may still schedule events into the window.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "end": {
+                "type": "string"
+              },
+              "kind": {
+                "default": "generation",
+                "type": "string"
+              },
+              "min_mw": {
+                "anyOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "start": {
+                "type": "string"
+              },
+              "tz": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "zone": {
+                "type": "string"
+              }
+            },
+            "required": ["end", "start", "zone"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Get generation outages"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "digest": "sha256:9dd4e0e552b3d9312e690f72e64804a4bf7bab5f9f8c8302673d5609123ebdd7"
+        },
+        {
+          "name": "get_series",
+          "title": "Get a time series",
+          "description": "Generic time-series query for ANY registered series endpoint.\n\nOne tool covers every (non-outage) endpoint in the registry, so adding\na new dataset (call `list_endpoints()` to see the current 14) gets an\nMCP surface automatically — no new tool to learn.\n\nArgument shape adapts to the endpoint:\n  • single-zone (day_ahead_price, actual_load, generation_per_type, …)\n    → pass `zone=\"DE_LU\"`\n  • cross-zone  (crossborder_flow, scheduled_exchanges,\n                 net_transfer_capacity_dayahead)\n    → pass `from_zone=\"DE_LU\"` AND `to_zone=\"FR\"`\n  • psr-dependent (generation_per_type, wind_solar_forecast,\n                   installed_generation_capacity)\n    → optionally filter via `psr_types=[\"solar\",\"wind_onshore\"]`\n\n`start`/`end`: UTC by default; `start` inclusive, `end` EXCLUSIVE\n(for \"all of April 2026\" use end=2026-05-01). Pass `tz=\"local\"` or an\nIANA name to interpret as wall-clock in that timezone.\n\n`aggregation`: 'raw' (default — native PT15M/PT60M per endpoint),\n'hourly' (AVG over quarters → one row per hour, useful for the\ngrowing list of PT15M-stored endpoints like DE_LU day_ahead_price),\n'daily', or 'monthly'. For day-ahead prices specifically the auction\nstill clears hourly even where stored at PT15M, so AVG=any-quarter;\nSUM would 4× over-count.\n\nCurrency: price columns keep `_eur_` in their names for stability. An\nendpoint whose rows carry a `currency` column (day-ahead and intraday\nprices, the A81/A15 capacity prices, activated_balancing_price,\nimbalance_prices) labels each row (PLN, HUF, RON, CZK, GBP, …) and the\nresponse `unit` follows it; `unit` is null when the window mixes\ncurrencies (`mixed_currency`) or, for activated_balancing_price and\nimbalance_prices, holds rows of unknown currency\n(`currency_unknown_rows`). Never average a price across rows with\ndifferent `currency`.\n\nSplit periods: when a response carries `split_periods`, some periods hold\nmore than one row — different published series told apart by the listed\ncolumns (activated_balancing_price: `product`, e.g. CZ/SK mFRR standard\nA01 vs specific A02; or `currency`). Never average across them. Keep one\nwith `filters={\"product\": [\"A01\"]}` — `filters` takes any categorical\ncolumn of the endpoint (`{column: [values]}`).\n\nProcess types: activated balancing prices are one endpoint per ENTSO-E\nprocessType (activated_balancing_price = A16 realised; _mfrr_scheduled =\nA60, _mfrr_direct = A61, _afrr_local = A68) — different prices for the\nsame period, never to be merged. `related_series` names the siblings\nholding data for the zone.\n\nEnded series: a window reaching past the day a series stopped upstream\n(a zone that left ENTSO-E, a frozen archive, a series that ended) carries\n`series_ended` — the last day, why, and `successors`: the endpoints that\ncarry it on, each with a ready `call` and a `note` on how it differs. GB\nday-ahead after 2020-12-31 → day_ahead_price_imrp (GBP/MWh); GB\ngeneration after 2021-06-15 → generation_mix (NESO).\n\nOutage-family endpoints (different schema) stay on `get_outages()`.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "aggregation": {
+                "default": "raw",
+                "type": "string"
+              },
+              "end": {
+                "type": "string"
+              },
+              "endpoint": {
+                "type": "string"
+              },
+              "filters": {
+                "anyOf": [
+                  {
+                    "additionalProperties": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "from_zone": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "psr_types": {
+                "anyOf": [
+                  {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "start": {
+                "type": "string"
+              },
+              "to_zone": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "tz": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "zone": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              }
+            },
+            "required": ["end", "endpoint", "start"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Get a time series"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "digest": "sha256:3b56f64922cd5568c7a1787ea04a6cbf822cb888a10cef4039ef25af02ad5a3d"
+        },
+        {
+          "name": "get_tb_spread",
+          "title": "Get top-bottom spread",
+          "description": "Top-Bottom (TBx) spread — daily battery-arbitrage benchmark.\nTBx = sum(top X priced hours) − sum(bottom X priced hours) over the\nday-ahead clearing prices for `zone` on `date`. The day is the SDAC\nmarket day (23/25 hours on DST-transition days). `date` must be a\nbare YYYY-MM-DD — time-bearing strings are rejected.\nReturns both `spread` (<currency>/MW/day) and `mean_spread`\n(<currency>/MWh = spread/X) in the zone's trading currency — see the\nresponse `currency`/`unit` (EUR for euro zones; GB=GBP).\nCommon X: 1, 2, 4. A day past the zone's day-ahead series end (GB after\n2020-12-31) answers with `series_ended`, naming the endpoint that carries\nthe prices on.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "date": {
+                "type": "string"
+              },
+              "x": {
+                "default": 2,
+                "type": "integer"
+              },
+              "zone": {
+                "type": "string"
+              }
+            },
+            "required": ["date", "zone"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Get top-bottom spread"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "digest": "sha256:81c553fa63d6e076cac1bf60fc9d76ea9a5d19b8262d801c9a3754775d6b9c0b"
+        },
+        {
+          "name": "list_derivations",
+          "title": "List derived metrics",
+          "description": "List computed-metric derivations available via get_derivation().\n\nEach derivation is a metric computed on-the-fly from one or more\nlanded endpoints (Tier-2 Parquet). Today: capture_price (monthly\nVWAP capture price + baseload + capture rate per technology;\n\"capture rate\" is the industry-standard name for what the JSON\nresponse calls `quality_factor`), negative_price_hours, residual_load,\nres_share, emissions (monthly CO2 emissions per fuel using IPCC\nAR5 lifecycle factors, production-based), and tb_spread (monthly or\nannual Top-Bottom battery-arbitrage spread TB1/TB2/TB4/TB6 per zone\non SDAC market days; accepts zone='all' for every zone in one call).",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {},
+            "type": "object"
+          },
+          "outputSchema": {
+            "properties": {
+              "result": {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "type": "array"
+              }
+            },
+            "required": ["result"],
+            "type": "object",
+            "x-fastmcp-wrap-result": true
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "List derived metrics"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "digest": "sha256:06d4344217ef116e6070734ffd521cb59ca11100d7d3999c82d08f384c1d9de4"
+        },
+        {
+          "name": "list_endpoints",
+          "title": "List data endpoints",
+          "description": "List supported ENTSO-E endpoint families.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "family": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              }
+            },
+            "type": "object"
+          },
+          "outputSchema": {
+            "properties": {
+              "result": {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "type": "array"
+              }
+            },
+            "required": ["result"],
+            "type": "object",
+            "x-fastmcp-wrap-result": true
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "List data endpoints"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "digest": "sha256:ff33b8b705d707f80319d4a44f3ce0e6806e8832c5ba751dbb0a6aa2c79304d7"
+        },
+        {
+          "name": "list_psr_types",
+          "title": "List production types",
+          "description": "List production-type (psr_type) codes. Pass zone= to scope the answer.\n\nMost codes are ENTSO-E's B01..B25 and mean the same thing in every\nENTSO-E zone. A few are source-native (source != \"entsoe\") and exist only\nwhere that source publishes — they express concepts the B-codes cannot,\nso they are NOT interchangeable with a similar-looking B-code. Check\n`source` and read `description` before comparing a code across zones.\n\nPassing zone= also returns `taxonomy_note` for zones that mix taxonomies\n(e.g. GB), and per-code `endpoints` showing where each code comes from.\n\nEach code carries `counts_as_generation`: when False the figure is a net\nflow or net storage number, not production — do not sum it into a\ngeneration total.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "zone": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              }
+            },
+            "type": "object"
+          },
+          "outputSchema": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "List production types"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "digest": "sha256:f2a551cd8103d893ecd82ab843aea3df7b72b2676f217c74280bfd35206e2197"
+        },
+        {
+          "name": "list_zones",
+          "title": "List bidding zones",
+          "description": "List registered ENTSO-E bidding zones.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "active_only": {
+                "default": true,
+                "type": "boolean"
+              },
+              "cluster": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              }
+            },
+            "type": "object"
+          },
+          "outputSchema": {
+            "properties": {
+              "result": {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "type": "array"
+              }
+            },
+            "required": ["result"],
+            "type": "object",
+            "x-fastmcp-wrap-result": true
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "List bidding zones"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "digest": "sha256:226c3a6f8ea6c36633f6c7fc315f2586580c22917500f70045c038630af68b59"
+        }
+      ],
+      "resources": [
+        {
+          "uri": "entsoe://coverage",
+          "name": "_coverage",
+          "mimeType": "text/plain",
+          "meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "digest": "sha256:e6a6ec9f4746bb7554297a212d44000d5ddeba2ef6e4ef824de88c007d6e07fa"
+        },
+        {
+          "uri": "entsoe://endpoints",
+          "name": "_endpoints",
+          "mimeType": "text/plain",
+          "meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "digest": "sha256:4df1c577429020dc5695a29e74ce952ebe543a94bdd121a6194ab0ad9f598afe"
+        },
+        {
+          "uri": "entsoe://psr-types",
+          "name": "_psr_types",
+          "mimeType": "text/plain",
+          "meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "digest": "sha256:6575214c0afcf07b75ea4df05cca355dea67ea0172966ef114c7c10363361642"
+        },
+        {
+          "uri": "entsoe://zones",
+          "name": "_zones",
+          "mimeType": "text/plain",
+          "meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "digest": "sha256:d123a677b07864095c214bc193cc077537d01f0a4aeca0c69fd47a87c373d233"
+        }
+      ],
+      "prompts": [
+        {
+          "name": "battery_spread_scan",
+          "description": "Battery-arbitrage (TBx) spread scan across zones or for one zone.",
+          "arguments": [
+            {
+              "name": "zone",
+              "description": "Provide as a JSON string matching the following schema: {\"type\":\"string\"}",
+              "required": false
+            }
+          ],
+          "meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "digest": "sha256:b69aa53ec9300b9af7b508646e2d0982d38619fedf6ce022fb102489fa374ce2"
+        },
+        {
+          "name": "capture_rate_report",
+          "description": "Solar/wind capture-rate report for a zone and year.",
+          "arguments": [
+            {
+              "name": "zone",
+              "description": "Provide as a JSON string matching the following schema: {\"type\":\"string\"}",
+              "required": true
+            },
+            {
+              "name": "year",
+              "description": "Provide as a JSON string matching the following schema: {\"type\":\"string\"}",
+              "required": true
+            }
+          ],
+          "meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "digest": "sha256:1c9f55e0f11bddc8d1316dab72286253b7815f6c3fe556722f0bf7e8db911c6e"
+        },
+        {
+          "name": "zone_briefing",
+          "description": "Market briefing for one bidding zone: prices, load, mix, balancing.",
+          "arguments": [
+            {
+              "name": "zone",
+              "description": "Provide as a JSON string matching the following schema: {\"type\":\"string\"}",
+              "required": true
+            }
+          ],
+          "meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "digest": "sha256:dcfeec321c4c8fb01f312519601a48d010d2a0c404fcd2ed5e182261ec7b7d0b"
+        }
+      ],
+      "digest": "sha256:16f3047e90aa0579c870aa32a0c587337fe63fcbb5ebdc79c79f57706e29c11e"
+    }
+  }
+}

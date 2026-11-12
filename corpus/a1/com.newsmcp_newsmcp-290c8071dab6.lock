@@ -1,0 +1,740 @@
+{
+  "lockfileVersion": 2,
+  "subjects": {
+    "com.newsmcp/newsmcp": {
+      "kind": "mcp-server",
+      "source": {
+        "client": "manual",
+        "file": "registry.modelcontextprotocol.io"
+      },
+      "transport": {
+        "type": "http",
+        "url": "https://mcp.newsmcp.com/mcp"
+      },
+      "protocol": {
+        "era": "legacy",
+        "version": "2025-11-25"
+      },
+      "serverInfo": {
+        "name": "NewsMCP",
+        "version": "0.7.0"
+      },
+      "capabilities": {
+        "experimental": {},
+        "extensions": {
+          "io.modelcontextprotocol/ui": {}
+        },
+        "logging": {},
+        "prompts": {
+          "listChanged": true
+        },
+        "resources": {
+          "listChanged": true,
+          "subscribe": false
+        },
+        "tools": {
+          "listChanged": true
+        }
+      },
+      "instructions": "Everything here returns **synthesized story events** — one entry per real-world story, each\nwith a generated headline, one-liner, abstract, key actors, industry / event-type labels,\ncorroboration counts, and source links. It is not a flat article list, and there is no\nper-article search.\n\n## Pick the tool by what is being asked\n\n| The request | The tool |\n|---|---|\n| a topic, a filter, or \"what's happening\" | `news` |\n| a named company, person, place, or organisation | `news` with `subject=` |\n| more detail on a story already seen | `get_story` |\n| \"is this true?\" / \"how widely reported?\" | `check_coverage` |\n| how much budget is left | `check_limits` |\n\nFor a name, use `subject=` rather than putting it in `q`. It quotes the name so it matches\nas a phrase and widens the window to 30 days, which is the difference between finding a\ncompany and finding nothing: `q=\"Bank of America\"` unquoted ANDs three common words and\nreturns \"India Now Asia's Least Preferred Stock Market\" first, and `q=\"Monzo\"` over the\ndefault 24 hours returns nothing at all. `subject` and `q` combine, so\n`subject=\"Tesla\", q=\"recall OR lawsuit\"` reads as expected.\n\nLeave `sort` alone unless the user asked for an ordering. The API then picks `relevance`\nwhen there is a query and `newsrooms` when there is not — forcing `newsrooms` on a keyword\nsearch ranks by story size instead of match quality.\n\n`check_coverage` answers a different question from all of them: it reports how many\nINDEPENDENT newsrooms carried a claim, separately from how many domains reprinted it. Reach\nfor it whenever the user is asking whether something is real rather than what happened.\n\nNothing is required. A bare `news()` call returns the most-corroborated stories of the\nlast 24 hours, so never refuse for lack of parameters — call it and refine after.\n\nAuthentication is configured on the connection (an `x-api-key` or `Authorization: Bearer`\nheader, the MCP URL's `?apiKey=…`, or env `NEWSMCP_API_KEY`) — never ask the user for a key.\nUse `check_health` only to verify the API is up — it returns no news.\n\nSome tools rewrite a query before sending it, because the index removes function words when\nit is built but the query still requires every word given — so `q=\"what is happening with\nDisney\"` matches nothing. Any `Note:` line in a result explains what was adjusted or\nnarrowed. **Relay those notes**; never present a narrowed result as complete.\n\n## Limits — know these before you plan a sequence of calls\n\n|                            | Keyless    | With a key            |\n|----------------------------|------------|-----------------------|\n| `from_` lookback           | 7 days     | per plan (14 days free_tier)|\n| Calls per hour             | 20         | per plan (50 free_tier)    |\n| `limit` (stories per call) | 20         | per plan (50 free_tier)    |\n| Requests in flight at once | 1          | 1                     |\n\n**Call `check_limits` rather than trusting that table.** Every keyed number is per-plan\nconfig that changes without a release.`check_limits` reports the live ceilings\n*and* how much of the hourly budget is left, and costs nothing: it is exempt from metering,\nso checking never consumes a call, a slot or a credit. Use it before planning a batch of\ncalls, and after any limit error instead of guessing what was hit.\n\n**Call one at a time.** A keyed caller gets exactly ONE request in flight; a second before\nthe first returns is refused with a 429. So never fan out: \"compare banking, energy and\nsemiconductors\" is three calls in sequence, or better, one call with\n`sector=\"banking,energy_utilities,semiconductors\"`.\n\n**Budget your calls.** The hourly count is the scarce resource, and every page is one call.\nSet the filters you\nneed on the first attempt instead of probing one at a time. Keyless callers share the\n20/hour budget per network address, so it may already be partly spent by someone else.\n\n**Over-limit behaves differently per tier.** Keyless: the call still succeeds, narrowed to\nthe allowance, with a note in the response saying what was adjusted — relay that note\nrather than presenting a narrowed result as complete. With a key: the call is rejected with\na validation error naming the parameter and its maximum.\n\n## CRITICAL: `response_format` (default `markdown` — looks good out of the box)\n\nHosts only see `content[0].text`. Default is **`markdown`** (readable digest of every story\nreturned). Omit the param when the user does not ask for a format. When the user *does* ask,\nyou MUST pass the matching value:\n\n| User says | Pass |\n|---|---|\n| no format / \"find news\" / \"what happened\" | omit or `response_format=\"markdown\"` |\n| \"text\", \"plain text\", \"as text\" | `response_format=\"text\"` |\n| \"markdown\", \"as markdown\", \"md\", \"formatted digest\" | `response_format=\"markdown\"` |\n| \"json\", \"as json\", \"raw json\", \"full payload\", \"full response\" | `response_format=\"json\"` |\n\nNever answer that you cannot produce text/markdown/JSON without first calling with the matching\n`response_format`. Do not post-process one format into another when the tool can return it.\n\n## Query syntax (`q` parameter)\n\n`q` is **optional** — omit it entirely for a filter-only digest (e.g. \"top banking stories\ntoday\" is `sector=\"banking\"` with no `q`). When you do pass one:\n\n- `q` is matched against the story's headline, one-liner, abstract, and actor names — not\n  against full article bodies. Keep it to the words that would appear in a headline.\n- **Always quote multi-word phrases.** The API auto-inserts `AND` between bare, unquoted,\n  space-separated words, so `q=\"AI OR artificial intelligence\"` is parsed as\n  `AI OR artificial AND intelligence` and is rejected with a `422`. Write\n  `q='AI OR \"artificial intelligence\"'`, or parenthesize each side.\n- Exact phrase: wrap it in literal double-quote characters, e.g. `q='\"Tim Cook\"'`. Without\n  quotes, `q='Tim Cook'` means `Tim AND Cook`.\n- Boolean: `AND`, `OR`, `NOT`, with parentheses to control evaluation order, e.g.\n  `(bitcoin OR cryptocurrency) AND (investment OR trading)`.\n- Prefix shorthand: `+term` to require, `-term` to exclude.\n- Wildcards: `*` (any length) and `?` (single character); neither may lead a term\n  (`*intelligence` is invalid, `technolog*` is fine).\n- `NEAR()` and `MULTIPLE()` are **not** supported here.\n- Forbidden characters, never valid anywhere in `q`: `[ ] / \\ : ^`.\n- On a `422`, fix the quoting/parentheses and retry. If results look wrong: too broad → add\n  `AND` terms or `NOT` exclusions; too few → widen `from_`, drop a filter, or use `OR`.\n\nGood: `\"renewable energy\" OR solar` · `AI OR \"artificial intelligence\"` ·\n`(OpenAI OR Anthropic) AND model` · `\"Tim Cook\"` · `Tesla NOT \"Elon Musk\"`\nBad (422): `renewable energy OR solar` · `AI OR artificial intelligence`\n\n## How to set each news field\n\nMap the user's request into these parameters (omit optional ones you do not need):\n\n- **q**: query built with the rules above, or omitted for a filter-only digest.\n- **event_id**: fetch ONE story by an id from an earlier result. Every other filter is\n  ignored. A story folded into a more complete one answers `404` naming its replacement id —\n  fetch that id instead.\n- **event_type**: what KIND of event it is, as an exact `family.leaf` value, comma-separated\n  for OR (`deals.merger_acquisition,funding.venture_funding_round`). A bare family (`deals`)\n  is invalid and unknown values are rejected by name — the tool's own parameter description\n  carries all 59 leaves across 21 families, so read it rather than guessing. `unclassifiable`\n  is itself a valid value.\n- **content_type**: article form — `news_report`, `press_release`, `explainer`, `commentary`,\n  `analysis`, `opinion`, `interview`, `human_interest`, `service_info`, `obituary`.\n  Comma-separated for OR.\n- **sector**: industry, comma-separated for OR, e.g. `banking,semiconductors`.\n- **min_articles** / **min_sources** / **min_newsrooms**: three coverage floors, loosest to\n  strictest. `min_articles` counts every article including duplicates (a rough size floor);\n  `min_sources` counts distinct publisher domains with mirrors included (breadth of pickup);\n  `min_newsrooms` counts outlets that reported *independently* — the strongest \"is this\n  real\" filter, and the one to use when the user wants to exclude a story one outlet ran and\n  everyone else reprinted. `min_newsrooms=3` for \"well-corroborated only\".\n- **min_confidence**: labeling-confidence floor 0–1; unscored stories are excluded.\n- **from_** / **to_**: window over when the story BEGAN, not article publish dates. ISO 8601\n  (`2026-07-01T00:00:00`) or natural language (`3 days ago`). Default: last 24 hours — widen\n  `from_` first when a story that should exist comes back empty.\n- **enriched_only**: `true` (default) hides brand-new stories with no headline/summary yet.\n- **sort**: `newsrooms` (default, most corroborated), `trending` (corroboration weighted by\n  recency — use for \"what's big right now\"), `relevance` (best match, REQUIRES `q`),\n  `last_seen`, `first_seen`, `size`, `source_count`, `confidence`. **order**: `desc` (default)\n  or `asc`.\n- **limit**: how many stories to return, capped per tier. A flat ceiling, not a page\n  size — there is no paging past it, so this is the most a single call can surface.\n- **verbosity**: affects ONLY the source-link list — headline, summary, actors, and labels\n  are always present. `compact` (none), `standard` (default, up to 3), `full` (all,\n  uncapped). Prefer `standard`; `full` on a large `limit` returns a very long digest.\n- **response_format**: see the table above.\n\nFilters combine with **AND** — `sector=banking` plus `min_newsrooms=3` means banking\nstories with at least 3 independent outlets. `event_type`, `content_type`, and `sector`\neach take several comma-separated values combined with **OR**.\n\n## Worked examples\n\n| The user says | The call |\n|---|---|\n| \"what's trending in funding rounds right now\" | `event_type=\"funding.venture_funding_round\", sort=\"trending\"` |\n| \"quick summary of what's happening with Acme Corp\" | `q='\"Acme Corp\"'` |\n| \"well-corroborated cybersecurity stories, 3+ independent outlets\" | `event_type=\"security.cyberattack\", min_newsrooms=3` |\n| \"banking news, only confidently-labeled\" | `sector=\"banking\", min_confidence=0.7` |\n| \"just the analysis pieces on the merger, not straight news\" | `q=\"merger\", content_type=\"analysis\"` |\n| \"top 20 stories today\" | `limit=20` |\n| \"show me every source link\" | `verbosity=\"full\"` |\n| \"pull that story up again\" | `event_id=\"evt_…\"` from the earlier result |\n| \"what happened last week in semiconductors\" | `sector=\"semiconductors\", from_=\"7 days ago\"` |\n\n## When a call comes back empty or wrong\n\nLoosen one thing at a time, in this order:\n\n1. **Widen `from_`.** The default window is only 24 hours and it bounds when the story\n   *started*, so an ongoing story that began earlier is invisible. This is the single most\n   common cause of \"but I know that story exists\".\n2. **Lower a floor** — `min_newsrooms`, `min_sources`, `min_articles`, `min_confidence`.\n3. **Pass `enriched_only=False`** if the story broke minutes ago.\n4. **Drop a label filter.** `event_type` / `content_type` / `sector` are exact-match; a\n   story can be labeled differently than expected.\n5. Only then simplify `q` — or drop it and rely on filters.\n\n## What each error means and what to do\n\n- **429 with `retry_after_seconds` — the hourly budget is spent.** Further calls are blocked\n  until the window resets. **Do not retry in a loop and do not keep calling with different\n  parameters** — every attempt is refused and, keyless, counts against the same shared\n  budget. `check_limits` will confirm the wait without spending anything. Tell the user how\n  long it is and that a key (or a higher plan) raises the ceiling; only retry if the wait is\n  short and they ask.\n- **429 without it (\"Max API Requests Concurrency Reached\") — you called in parallel.** The\n  cap is one request in flight, and nothing was spent from the hourly budget. Wait for the\n  previous call to finish and retry this one; do not treat it as a quota problem.\n- **499 plan_limit.** A value is beyond this caller's plan and the message names the field\n  and its maximum. Re-issue once with that value clamped. If the message does not name a\n  number, `check_limits` will.\n- **400 invalid_filter_value.** An `event_type`/`content_type`/`sector` value is not in the\n  taxonomy. The message lists every accepted value — pick the closest one from that list and\n  retry once. Never retry unchanged.\n- **422 validation error.** It names the parameter and the allowed maximum — usually `limit`\n  or a `from_` beyond the plan's history. Re-issue the call ONCE with that value clamped to\n  the stated maximum; never retry unchanged. `from_` later than `to_` lands here too.\n- **404 on `event_id`.** If it names a replacement id, the story was folded into a larger\n  one — fetch that id. Otherwise the id never existed: search again for a current one.\n- **408 timeout.** Retry once, then narrow the window or lower `limit`.\n- **503 service_overloaded.** The backing search index is overloaded, not a bad request.\n  Retry once after a few seconds; if it repeats, stop and report the outage rather than\n  looping.\n- **A notice in a successful response.** Keyless narrowing happened. Say so.\n\nDo not invent unsupported operators, and do not put filters inside `q` that belong in a\ndedicated field (put the industry in `sector`, not in `q`).",
+      "tools": [
+        {
+          "name": "check_coverage",
+          "description": "Judge how widely and how independently a claim has been reported.\n\nAnswers \"is this real?\" rather than returning a list. Reports the number of\nINDEPENDENT newsrooms — outlets that reported it themselves — separately\nfrom the number of domains that carried it, which includes syndication. A\nstory on 200 domains from 3 newsrooms is one story reprinted, not 200\nconfirmations.\n\nBecause upstream clustering splits a story across languages, this totals the\nlikely variants of the same story and presents that total as an upper bound,\nlisting what was combined so the caller can check it is really one story.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "claim": {
+                "description": "The claim or headline to check, phrased in the words a headline would use. Matched literally against headlines and summaries, not by meaning, so \"atomic arsenal\" will not find stories about nuclear weapons.",
+                "type": "string"
+              },
+              "days_back": {
+                "default": 14,
+                "description": "How far back to look, in days. Defaults to 14. Clamped down to whatever the caller's plan allows, with a note saying so.",
+                "minimum": 1,
+                "type": "integer"
+              },
+              "response_format": {
+                "default": "markdown",
+                "description": "markdown (default), text, or json. Pass the format the user asked for rather than reformatting afterwards.",
+                "enum": ["text", "markdown", "json"],
+                "type": "string"
+              }
+            },
+            "required": ["claim"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "additionalProperties": false,
+            "description": "Corroboration verdict for a claim.",
+            "properties": {
+              "anchor_newsrooms": {
+                "description": "Independent newsrooms for the best-corroborated matching story.",
+                "type": "integer"
+              },
+              "combined_newsrooms_upper_bound": {
+                "description": "Sum across clustered variants of the same story — an upper bound, not a confirmed count.",
+                "type": "integer"
+              },
+              "matched": {
+                "description": "Whether any story matched the claim text in the window.",
+                "type": "boolean"
+              },
+              "notes": {
+                "description": "Query-normalization and plan-clamping notes to relay verbatim.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "total_matching_stories": {
+                "type": "integer"
+              },
+              "variants": {
+                "description": "Anchor story first, then its likely variants.",
+                "items": {
+                  "additionalProperties": true,
+                  "properties": {
+                    "abstract": {
+                      "type": ["string", "null"]
+                    },
+                    "content_type": {
+                      "type": ["string", "null"]
+                    },
+                    "entities": {
+                      "description": "Key actors named in the story.",
+                      "items": {
+                        "additionalProperties": true,
+                        "properties": {
+                          "name": {
+                            "type": "string"
+                          }
+                        },
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "event_id": {
+                      "description": "Stable id, e.g. evt_...",
+                      "type": "string"
+                    },
+                    "event_type": {
+                      "description": "family.leaf taxonomy value, e.g. deals.merger_acquisition.",
+                      "type": ["string", "null"]
+                    },
+                    "first_seen": {
+                      "description": "ISO 8601 UTC.",
+                      "type": ["string", "null"]
+                    },
+                    "headline": {
+                      "type": ["string", "null"]
+                    },
+                    "language_count": {
+                      "type": ["integer", "null"]
+                    },
+                    "last_seen": {
+                      "description": "ISO 8601 UTC.",
+                      "type": ["string", "null"]
+                    },
+                    "newsrooms": {
+                      "description": "Independent newsrooms — the corroboration signal.",
+                      "type": ["integer", "null"]
+                    },
+                    "one_liner": {
+                      "type": ["string", "null"]
+                    },
+                    "reports": {
+                      "type": ["integer", "null"]
+                    },
+                    "sector": {
+                      "type": ["string", "null"]
+                    },
+                    "size": {
+                      "description": "Article count.",
+                      "type": ["integer", "null"]
+                    },
+                    "source_count": {
+                      "description": "Publisher domains, mirrors included.",
+                      "type": ["integer", "null"]
+                    },
+                    "sources": {
+                      "description": "Source article URLs — a sample or the full list per verbosity.",
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    }
+                  },
+                  "type": "object"
+                },
+                "type": "array"
+              }
+            },
+            "required": ["anchor_newsrooms", "combined_newsrooms_upper_bound", "matched", "notes", "total_matching_stories", "variants"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "openWorldHint": true,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "digest": "sha256:a4731375ec8f27a24a33e4244626fcbfd037ef0aa4c61d76744c65cc0f9506a5"
+        },
+        {
+          "name": "check_health",
+          "description": "Check whether the NewsMCP REST API is reachable and healthy.\n\nDoes not require an API token. Use when diagnosing connectivity, not for searching news.\nFor allowances and remaining budget use `check_limits` instead.\n\nReturns:\n    str: Health status reported by the API.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {},
+            "type": "object"
+          },
+          "outputSchema": {
+            "properties": {
+              "result": {
+                "type": "string"
+              }
+            },
+            "required": ["result"],
+            "type": "object",
+            "x-fastmcp-wrap-result": true
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "openWorldHint": false,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "digest": "sha256:1334e812ea847dd51ba35a3103854ecebbec4de1be9e77866915f29f54374257"
+        },
+        {
+          "name": "check_limits",
+          "description": "Report what this caller may do right now — and never spend any of it to find out.\n\nAnswers the questions the `news` tool descriptions cannot: how many searches are left\nthis hour, how far back this plan reaches, the largest `limit` it allows, how many\nsearches may run at once, and how long to wait if the budget is spent. These ceilings\nare per-plan and change without a release, so trust this over any number written into a\ndescription.\n\nChecking is free: the endpoint is exempt from every metering stage, so calling it does\nnot consume an hourly call, a concurrency slot, or a credit.\n\nReach for it before planning a batch of calls, and after any plan-limit or rate-limit\nerror instead of guessing the ceiling that was hit.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "response_format": {
+                "default": "text",
+                "description": "`text` (default) for a readable summary, `json` for the raw payload.",
+                "enum": ["text", "json"],
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "outputSchema": {
+            "properties": {
+              "result": {
+                "type": "string"
+              }
+            },
+            "required": ["result"],
+            "type": "object",
+            "x-fastmcp-wrap-result": true
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "openWorldHint": false,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "digest": "sha256:d9747f3e954327ee1613a529860b831a598e33ddcb51b8d6c6ba0927f4710ad4"
+        },
+        {
+          "name": "get_story",
+          "description": "Expand one story: full summary, classification, actors, and source links.\n\nUse this after any search, when the user wants more than the digest line for\na particular story. It is the only tool that can return a story's complete\nsource list.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "event_id": {
+                "description": "The `event_id` of a story from an earlier result (e.g. `evt_...`). A story folded into a more complete one answers 404 naming its replacement id — fetch that instead.",
+                "type": "string"
+              },
+              "include_sources": {
+                "default": false,
+                "description": "False (default) returns a sample of source links; True returns every one. A large story can carry several hundred, so leave this off unless the user asked for the full list. This is the only place the complete list is available — the search endpoints cap it.",
+                "type": "boolean"
+              },
+              "response_format": {
+                "default": "markdown",
+                "description": "markdown (default), text, or json. Pass the format the user asked for rather than reformatting afterwards.",
+                "enum": ["text", "markdown", "json"],
+                "type": "string"
+              }
+            },
+            "required": ["event_id"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "additionalProperties": true,
+            "description": "One synthesized news event, expanded.",
+            "properties": {
+              "abstract": {
+                "type": ["string", "null"]
+              },
+              "content_type": {
+                "type": ["string", "null"]
+              },
+              "entities": {
+                "description": "Key actors named in the story.",
+                "items": {
+                  "additionalProperties": true,
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "event_id": {
+                "description": "Stable id, e.g. evt_...",
+                "type": "string"
+              },
+              "event_type": {
+                "description": "family.leaf taxonomy value, e.g. deals.merger_acquisition.",
+                "type": ["string", "null"]
+              },
+              "first_seen": {
+                "description": "ISO 8601 UTC.",
+                "type": ["string", "null"]
+              },
+              "headline": {
+                "type": ["string", "null"]
+              },
+              "language_count": {
+                "type": ["integer", "null"]
+              },
+              "last_seen": {
+                "description": "ISO 8601 UTC.",
+                "type": ["string", "null"]
+              },
+              "newsrooms": {
+                "description": "Independent newsrooms — the corroboration signal.",
+                "type": ["integer", "null"]
+              },
+              "one_liner": {
+                "type": ["string", "null"]
+              },
+              "reports": {
+                "type": ["integer", "null"]
+              },
+              "sector": {
+                "type": ["string", "null"]
+              },
+              "size": {
+                "description": "Article count.",
+                "type": ["integer", "null"]
+              },
+              "source_count": {
+                "description": "Publisher domains, mirrors included.",
+                "type": ["integer", "null"]
+              },
+              "sources": {
+                "description": "Source article URLs — a sample or the full list per verbosity.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "openWorldHint": true,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "digest": "sha256:efbfa604275a1bc0dda128d9d94d85f3dfd5ddf48e8c6b14f3a42d3294223439"
+        },
+        {
+          "name": "news",
+          "description": "Search already-synthesized news events — pre-built story digests — or fetch one by id.\n\nEach story comes with a generated headline, one-liner, abstract, key actors, and\nindustry/event-type labels. Use it for a quick digest of what happened, for\ndeal/incident-type or industry filtering, and for corroboration ranking. Nothing is\nrequired: a bare call returns the most-corroborated stories of the last 24 hours.\nLimits — keyless: 7-day `from_` lookback, 20 calls/hour, 20 stories per call, over-limit\nnarrowed with a notice. With a key: per-plan ceilings (free tier today 14 days, 50\ncalls/hour, 50 stories), over-limit rejected rather than narrowed. Call `check_limits`\nfor the live numbers; it is free and never spends the budget it reports on.\n\nFilters combine with AND; `event_type`, `content_type`, and `sector` each accept\nseveral comma-separated values combined with OR.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "content_type": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "The FORM the reporting takes, independent of what it is about. Comma-separated for OR. One of: news_report, press_release, service_info, human_interest, explainer, commentary, analysis, opinion, interview, obituary. There is no NOT on this field, so for \"analysis, not straight news\" name the forms wanted (`analysis`) rather than the ones to exclude."
+              },
+              "event_id": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Superseded by the `get_story` tool, which does this with two arguments instead of nineteen and can return every source link. Kept for compatibility. Fetch ONE story directly by the `event_id` of an earlier result (e.g. `evt_...`) — use it for \"pull that story up again\". When set, every other filter is ignored. Stories are occasionally folded into a more complete story as coverage develops: that returns 404 naming the replacement id, so fetch that id instead. An id that never existed returns a plain not-found."
+              },
+              "event_type": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "What KIND of event the story is, independent of industry. Exact `family.leaf` value; a bare family (`deals`) is invalid and unknown values are rejected naming them. Comma-separated for OR (`deals.merger_acquisition,funding.venture_funding_round` = \"M&A or funding news\"). The taxonomy is 59 leaves across 21 families, plus the standalone value `unclassifiable` for a labeled-but-uncategorizable story. Families: corporate_finance, markets, deals, governance, society_environment, sports, justice_crime, security, macro_policy, research_science, religion_society, politics, legal_regulatory, culture_media, product, accidents_disasters, operations, funding, local_civic, geopolitics, corporate_comms. The complete set of accepted values: corporate_finance.earnings_report, corporate_finance.analyst_rating, corporate_finance.dividends, markets.stock_move, markets.commodity_price, markets.currency_move, deals.merger_acquisition, deals.ipo_filing, deals.asset_sale, governance.board_change, governance.shareholder_vote, governance.executive_departure, society_environment.climate_event, society_environment.public_health, society_environment.environmental_incident, sports.match_result, sports.transfer_signing, sports.championship, justice_crime.arrest_charge, justice_crime.trial_verdict, justice_crime.investigation, security.cyberattack, security.data_breach, security.physical_security_incident, macro_policy.central_bank_decision, macro_policy.trade_policy, macro_policy.fiscal_policy, research_science.scientific_discovery, research_science.clinical_trial_result, research_science.publication, religion_society.religious_event, religion_society.social_movement, politics.election, politics.policy_announcement, politics.diplomacy, legal_regulatory.regulatory_action, legal_regulatory.lawsuit_filed, legal_regulatory.compliance_ruling, culture_media.celebrity_news, culture_media.entertainment_release, culture_media.award, product.product_launch, product.product_recall, product.feature_update, accidents_disasters.natural_disaster, accidents_disasters.industrial_accident, accidents_disasters.transport_accident, operations.plant_closure, operations.layoffs, operations.supply_chain_disruption, funding.venture_funding_round, funding.grant_award, local_civic.local_government_action, local_civic.infrastructure_project, geopolitics.armed_conflict, geopolitics.sanctions, geopolitics.diplomacy_summit, corporate_comms.press_release, corporate_comms.leadership_statement, unclassifiable."
+              },
+              "from_": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Inclusive lower bound on when the story BEGAN (its first_seen) — NOT the publish date of any one article, so a story still running today but started last week falls outside the default window. ISO 8601 (`2026-07-01T00:00:00`) or a relative phrase (`now-6h`, `2 days ago`, `yesterday`); all dates are UTC. Default: 24 hours ago, much narrower than a general news search — widening this is the FIRST thing to try when a query that should match something returns nothing — but the lookback is capped: 7 days keyless (narrowed with a notice), and per-plan with a key (14 days on the free tier today, rejected rather than narrowed). `check_limits` reports the caller's live ceiling."
+              },
+              "limit": {
+                "default": 20,
+                "description": "Stories per page, 1–50, default 20, but capped for the caller: keyless 20 (softly, with a notice), and per-plan with a key (50 on the free tier today, over it is a validation error naming the maximum). `check_limits` reports the live cap. Raise it when the user asks for breadth — one call with a a flat ceiling rather than a page size: there is no paging past it, since the hourly call budget is the scarce resource (keyless 20/hour, 50/hour on the free tier).",
+                "maximum": 50,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "min_newsrooms": {
+                "anyOf": [
+                  {
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Minimum outlets that reported INDEPENDENTLY, mirrors excluded — the strongest is-this-real signal. Reach for this over min_sources whenever the user wants to exclude a story that one outlet ran and everyone else reprinted. `3` ≈ \"well-corroborated only\"."
+              },
+              "q": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Optional search terms, matched case-insensitively against the story's headline, one-liner, abstract, and named actors (no article body text, no stemming). Space-separated words are ANDed, so ALWAYS quote a multi-word phrase: `layoffs OR \"workforce reduction\"` works, `layoffs OR workforce reduction` is read as a mix of AND/OR and rejected. Supports AND/OR/NOT (aliases &&, ||, !), ( ) grouping, and `*` wildcards. NEAR() and MULTIPLE() are NOT supported here — they are silently read as ordinary words instead of erroring, so never use them. Omit q entirely for a filter-only digest (\"banking news today\" needs no q at all)."
+              },
+              "response_format": {
+                "default": "markdown",
+                "description": "Output shape in content[0].text. Default `markdown` (readable digest). `text` = plain lines. `json` = full API payload. Match what the user asks for.",
+                "enum": ["text", "markdown", "json"],
+                "type": "string"
+              },
+              "sector": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Industry the story belongs to. Comma-separated for OR (`software_it_services,semiconductors` = \"tech and chips\"). One of: government_public_sector, media_entertainment, financial_services, healthcare_pharma, energy_utilities, retail_consumer, real_estate, agriculture_food, telecommunications, automotive, manufacturing_industrial, transport_logistics, aerospace_defense, mining_metals, construction_infrastructure, education, hospitality_travel, sports_recreation, nonprofit_ngo, legal_services, insurance, software_it_services, ecommerce, banking, defense_security, chemicals, fashion_apparel, gaming_esports, biotechnology, semiconductors, other_sector."
+              },
+              "sort": {
+                "anyOf": [
+                  {
+                    "enum": ["newsrooms", "trending", "relevance", "last_seen", "first_seen", "size", "source_count", "confidence"],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "What \"best\" means for this call. **Omit it** unless the user asked for a specific ordering: the API then picks `relevance` when `q` or `subject` is set and `newsrooms` when neither is, which is almost always right. Forcing `newsrooms` on a keyword search ranks by story size rather than match, so `subject=\"Bank of America\"` returns \"India Now Asia's Least Preferred Stock Market\" ahead of \"Bank of America Warns of European Stock Decline\" — big stories that merely mention the words. `newsrooms`: most independently-corroborated first. `trending`: corroboration weighted by freshness on an 8-hour half-life — the one for \"what is blowing up right now\". `relevance`: best semantic match to q first, and REQUIRES q. `last_seen`: most recently active. `first_seen`: most recently started. `size`: most articles. `source_count`: most publisher domains, mirrors included. `confidence`: highest label confidence, unlabeled last regardless of order."
+              },
+              "subject": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "A single company, person, place, or organisation to centre the search on — plain name, no quoting. Quoted for you, which is the difference between a phrase and a bag of words: `Bank of America` unquoted ANDs three common terms and surfaces \"Medtronic Revenue Grows\" first, while the quoted phrase surfaces Bank of America. Combines with `q` (subject AND query), so `subject=\"Tesla\", q=\"recall OR lawsuit\"` reads as expected. Setting it also widens the default window from 24 hours to 30 days (clamped to the plan), because a company can go a fortnight without news — that is the single most common reason a name search comes back empty. Pass an explicit `from_` to override."
+              },
+              "verbosity": {
+                "default": "standard",
+                "description": "Controls ONLY the source-link list; headline, summary, actors, and labels are always present. `compact`: no links. `standard` (default): up to 3. `full`: every link, uncapped — use it for \"show me every source\", but it makes a large `limit` very long.",
+                "enum": ["compact", "standard", "full"],
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "outputSchema": {
+            "additionalProperties": true,
+            "allOf": [
+              {
+                "additionalProperties": true,
+                "properties": {
+                  "abstract": {
+                    "type": ["string", "null"]
+                  },
+                  "content_type": {
+                    "type": ["string", "null"]
+                  },
+                  "entities": {
+                    "description": "Key actors named in the story.",
+                    "items": {
+                      "additionalProperties": true,
+                      "properties": {
+                        "name": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    "type": "array"
+                  },
+                  "event_id": {
+                    "description": "Stable id, e.g. evt_...",
+                    "type": "string"
+                  },
+                  "event_type": {
+                    "description": "family.leaf taxonomy value, e.g. deals.merger_acquisition.",
+                    "type": ["string", "null"]
+                  },
+                  "first_seen": {
+                    "description": "ISO 8601 UTC.",
+                    "type": ["string", "null"]
+                  },
+                  "headline": {
+                    "type": ["string", "null"]
+                  },
+                  "language_count": {
+                    "type": ["integer", "null"]
+                  },
+                  "last_seen": {
+                    "description": "ISO 8601 UTC.",
+                    "type": ["string", "null"]
+                  },
+                  "newsrooms": {
+                    "description": "Independent newsrooms — the corroboration signal.",
+                    "type": ["integer", "null"]
+                  },
+                  "one_liner": {
+                    "type": ["string", "null"]
+                  },
+                  "reports": {
+                    "type": ["integer", "null"]
+                  },
+                  "sector": {
+                    "type": ["string", "null"]
+                  },
+                  "size": {
+                    "description": "Article count.",
+                    "type": ["integer", "null"]
+                  },
+                  "source_count": {
+                    "description": "Publisher domains, mirrors included.",
+                    "type": ["integer", "null"]
+                  },
+                  "sources": {
+                    "description": "Source article URLs — a sample or the full list per verbosity.",
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  }
+                },
+                "type": "object"
+              }
+            ],
+            "description": "A page of synthesized news events for a search call, or — when `event_id` is set — a single event's own fields at the top level instead of under `events`.",
+            "properties": {
+              "events": {
+                "description": "Present for a search call (event_id unset).",
+                "items": {
+                  "additionalProperties": true,
+                  "properties": {
+                    "abstract": {
+                      "type": ["string", "null"]
+                    },
+                    "content_type": {
+                      "type": ["string", "null"]
+                    },
+                    "entities": {
+                      "description": "Key actors named in the story.",
+                      "items": {
+                        "additionalProperties": true,
+                        "properties": {
+                          "name": {
+                            "type": "string"
+                          }
+                        },
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "event_id": {
+                      "description": "Stable id, e.g. evt_...",
+                      "type": "string"
+                    },
+                    "event_type": {
+                      "description": "family.leaf taxonomy value, e.g. deals.merger_acquisition.",
+                      "type": ["string", "null"]
+                    },
+                    "first_seen": {
+                      "description": "ISO 8601 UTC.",
+                      "type": ["string", "null"]
+                    },
+                    "headline": {
+                      "type": ["string", "null"]
+                    },
+                    "language_count": {
+                      "type": ["integer", "null"]
+                    },
+                    "last_seen": {
+                      "description": "ISO 8601 UTC.",
+                      "type": ["string", "null"]
+                    },
+                    "newsrooms": {
+                      "description": "Independent newsrooms — the corroboration signal.",
+                      "type": ["integer", "null"]
+                    },
+                    "one_liner": {
+                      "type": ["string", "null"]
+                    },
+                    "reports": {
+                      "type": ["integer", "null"]
+                    },
+                    "sector": {
+                      "type": ["string", "null"]
+                    },
+                    "size": {
+                      "description": "Article count.",
+                      "type": ["integer", "null"]
+                    },
+                    "source_count": {
+                      "description": "Publisher domains, mirrors included.",
+                      "type": ["integer", "null"]
+                    },
+                    "sources": {
+                      "description": "Source article URLs — a sample or the full list per verbosity.",
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    }
+                  },
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "keyless_notices": {
+                "description": "Present when a keyless caller's request was narrowed.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "total": {
+                "description": "Total matching stories; present for a search call.",
+                "type": "integer"
+              }
+            },
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "openWorldHint": true,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "digest": "sha256:967bcbe0dd4207c7be6b32231c60c35c1b23c7a84c59250af61f0622e5723cad"
+        }
+      ],
+      "resources": [
+        {
+          "uri": "config://api-base-url",
+          "name": "api_base_url",
+          "description": "The base URL of the upstream NewsMCP REST API.\n\nReturns:\n    str: Base URL string.",
+          "mimeType": "text/plain",
+          "meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "digest": "sha256:29f6d487eb384665f2cce68d908710c1519a276766e5195ce5ccc56ca87ab5de"
+        }
+      ],
+      "digest": "sha256:879089035a93689bab59a4362d4c9094fae2220bae426860543009b470375887"
+    }
+  }
+}

@@ -1,0 +1,1086 @@
+{
+  "lockfileVersion": 2,
+  "subjects": {
+    "com.atproto-mcp/taproot": {
+      "kind": "mcp-server",
+      "source": {
+        "client": "manual",
+        "file": "registry.modelcontextprotocol.io"
+      },
+      "transport": {
+        "type": "http",
+        "url": "https://mcp.atproto.at/mcp"
+      },
+      "protocol": {
+        "era": "legacy",
+        "version": "2025-06-18"
+      },
+      "serverInfo": {
+        "name": "taproot",
+        "title": "Taproot: AT Protocol Explorer",
+        "version": "0.1.0",
+        "websiteUrl": "https://atproto.at"
+      },
+      "capabilities": {
+        "prompts": {
+          "listChanged": false
+        },
+        "resources": {
+          "listChanged": false,
+          "subscribe": false
+        },
+        "tools": {
+          "listChanged": false
+        }
+      },
+      "instructions": "Taproot exposes read-only AT Protocol data, PDS-agnostic (works for any PDS, relay, or labeler, not only Bluesky).\nStart with `resolve` for any at:// URI, handle, or DID. Use `get_profile`/`get_record`/`list_records` when you already know the shape, and `search_accounts` to turn a name into candidate DIDs.\nWORKFLOWS:\n- Who liked/reposted/replied to/quoted/mentioned/follows X: call `get_backlinks` (counts per category, each carrying a `source`), then `list_backlink_records` with that `source` for the author DIDs and record URIs, then `get_record` on a URI to read what a reply/quote/mention actually says. For a whole conversation, use `get_thread` (ancestors + direct replies).\n- Never trust a handle from search results or user input before acting on it: `verify_handle` checks the handle's DNS/well-known binding to the DID (anti-spoof).\n- Moderation labels: `list_labelers` to discover a labeler, then `query_labels` with it (labels key on DIDs; a handle target is resolved for you).\n- `count_records` may return exact:false with a cursor; call it again with that cursor and ADD the counts.\nMORE TOOLS: `get_account_history` (handle/PDS/key changes over time, did:plc). `search_lexicons`/`resolve_lexicon` (registry of published lexicons; `search_lexicons` filters by schema kind with `type`, e.g. type='space' for permissioned spaces, and always reports a `typeCounts` breakdown of the matches (plus `otherTypes` for what a type filter excluded) — an NSID does not imply its type). `list_repos_by_collection` (which accounts publish a lexicon, relay-served). `get_did_document` (raw identity doc). `get_app_link` (shareable web/PDS links). `describe_pds`/`get_repo_status` (PDS info, account takedown/active status). `get_latest_commit` (repo head CID/rev). `list_repos` (accounts hosted on a PDS). `get_pds_directory_info`/`get_relay_directory_info` (cached health cards). `list_blobs`/`get_blob_info` (an account's media blobs, and a blob's getBlob URL, content-type, and size).\nCOMPOSE LINKS: to hand the user a prefilled record-composer link, build an at.new URL — https://at.new/?record=<percent-encoded record JSON> for small records, https://at.new/#record=b64:<base64url of the UTF-8 JSON, padding stripped> for anything bigger, or https://at.new/#record=dfl:<base64url of raw-deflate-compressed JSON> to keep large payloads compact (caps: 100 KB encoded, 1 MB decoded). Include \"$type\" in the record (it selects the collection). The user always reviews and presses Create themselves; nothing auto-posts. Template variables inside string values make the link reusable: {{$now}} (UTC instant), {{$did}}/{{$handle}} (whoever opens it), {{$lang}} (opener's language) resolve at create time. Any OTHER placeholder without a $ — any name you invent, e.g. {{title}} or {{message}} — becomes a text field the opener fills in before creating. Full guide: /new/api on the human host.\nCONVENTIONS: every list tool returns a `cursor` when more pages exist. Error responses carry a machine-readable `hint`. On a rate-limit error (429), wait retryAfterSec before retrying (heavy tools cost more budget). Add `include:['profile']` on resolve/get_profile/get_record for the repo owner's display name, bio, and avatar URL ('schema' applies to record/collection targets; 'backlinks' means followers when the target is an account). at:// URIs are also readable as MCP resources (resources/templates/list, resources/read), and prompts/list has ready-made recipes (who_engaged, account_audit, pds_health).",
+      "tools": [
+        {
+          "name": "count_records",
+          "description": "Count the total records in an account's collection (e.g. how many likes a user has given). Scans server-side so you don't page manually. AT Protocol has no cheap exact count, so for very large collections this returns exact:false with a lower-bound count and a cursor,call again with that cursor and ADD the counts to keep going.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "collection": {
+                "description": "Collection NSID, e.g. app.bsky.feed.like.",
+                "type": "string"
+              },
+              "cursor": {
+                "description": "Resume cursor from a prior capped (exact:false) count. The new count covers records AFTER it,add it to your previous total.",
+                "type": "string"
+              },
+              "repo": {
+                "description": "A handle or DID.",
+                "type": "string"
+              }
+            },
+            "required": ["collection", "repo"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "annotations": {
+            "openWorldHint": true,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:2908ebb5c757ba7008444fb43585c77e7a05b52102e4910530c474687b93a80b"
+        },
+        {
+          "name": "count_repos_by_collection",
+          "description": "Count how many accounts across the network publish a given collection/lexicon,e.g. 'how many accounts have an at.glean.subscription?'. Walks a relay's com.atproto.sync.listReposByCollection with NO per-account handle resolution, so it's cheap and returns an exact total for typical collections. For very large collections it returns exact:false with a cursor,call again with that cursor and ADD the counts (like count_records). Relay-served (defaults to the public Bluesky relay; pass `relay` for another).",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "collection": {
+                "description": "A collection NSID, e.g. app.bsky.feed.generator.",
+                "type": "string"
+              },
+              "cursor": {
+                "description": "Resume cursor from a previous exact:false response.",
+                "type": "string"
+              },
+              "relay": {
+                "description": "Optional relay origin to query instead of the default, e.g. https://relay.example.com.",
+                "type": "string"
+              }
+            },
+            "required": ["collection"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "annotations": {
+            "openWorldHint": true,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:226bf360ac3f4b5a93d829687ce33d856ecf26fdb39606597a4edf15d3de17cd"
+        },
+        {
+          "name": "describe_pds",
+          "description": "Describe a Personal Data Server: its DID, whether registration requires an invite, the handle domains you can register there, and ToS/contact links. Works for any PDS, not just Bluesky. Input is the PDS origin (e.g. https://pds.example.com).",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "pds": {
+                "description": "A PDS origin URL, e.g. https://pds.example.com.",
+                "type": "string"
+              }
+            },
+            "required": ["pds"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "annotations": {
+            "openWorldHint": true,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:c82afa2c9b2dd16a3a82084854dc4a7ff59ec77d884bfd2954b66986fd251d40"
+        },
+        {
+          "name": "get_account_history",
+          "description": "An account's history from its PLC audit log: handle changes, PDS migrations, signing-key rotations, and creation time. did:plc accounts only (did:web has no PLC log). Input is a handle or DID.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "actor": {
+                "description": "A handle or DID (did:plc).",
+                "type": "string"
+              }
+            },
+            "required": ["actor"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "annotations": {
+            "openWorldHint": true,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:0e1c6eea165480f209bc3412d368a9a6f56d98792559e5a4937bc3656d51a263"
+        },
+        {
+          "name": "get_app_link",
+          "description": "Turn an at:// URI (or handle/DID) into shareable web links,a Bluesky/Blacksky app URL to open in a browser, plus the canonical PDS getRecord URL. Use when the user wants a clickable/pasteable link.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "uri": {
+                "description": "An at:// URI, handle, or DID.",
+                "type": "string"
+              }
+            },
+            "required": ["uri"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "annotations": {
+            "openWorldHint": true,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:7ba2403547ff0e462a7e49fefbf96bd8d7db3f24341f080eb3791d82f4f72909"
+        },
+        {
+          "name": "get_backlinks",
+          "description": "Index of who/what references a target,the inbound likes, reposts, quotes, replies, and follows,as COUNTS per category, via the Constellation backlink index. Target is a record's at:// URI or an account DID. This returns aggregate counts only; each category also includes a `source` string. To list the actual records and their author DIDs for one category (e.g. WHO liked a post), call list_backlink_records with that `source`.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "target": {
+                "description": "A record at:// URI or a DID.",
+                "type": "string"
+              }
+            },
+            "required": ["target"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "annotations": {
+            "openWorldHint": true,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:04ee299d6a9332f9e03bb51436a849aed68365c8684a0f2b8d135409244f8931"
+        },
+        {
+          "name": "get_blob_info",
+          "description": "Get metadata for a single blob: its canonical PDS getBlob URL plus a best-effort content-type and byte size (via a HEAD request). Returns the URL, never the bytes. Use to turn a blob ref (CID) found in a record into a downloadable link and learn what it is. Input is the owning repo (handle or DID) and the blob CID.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "cid": {
+                "description": "The blob CID (e.g. bafkrei...), as found in a record's blob ref.",
+                "type": "string"
+              },
+              "repo": {
+                "description": "A handle or DID (the blob's owning repo).",
+                "type": "string"
+              }
+            },
+            "required": ["cid", "repo"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "annotations": {
+            "openWorldHint": true,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:da5292ec431264ef22e4e4af5d7cdf79ffb36929c6939dda89f4f820c0d5a050"
+        },
+        {
+          "name": "get_did_document",
+          "description": "Fetch the raw DID document for any DID or handle: all aliases (alsoKnownAs), every service entry (PDS, labeler, custom AppView), and verification methods. Broader than get_profile, and works for did:web accounts. Input is a handle or DID.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "actor": {
+                "description": "A handle or DID.",
+                "type": "string"
+              }
+            },
+            "required": ["actor"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "annotations": {
+            "openWorldHint": true,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:15dd4ff3763c96de01fd8c7f53ad9467fed5ae7f57029e8ffddc313929e971bc"
+        },
+        {
+          "name": "get_latest_commit",
+          "description": "The current head commit of an account's repository (com.atproto.sync.getLatestCommit): its commit CID and revision. The cheapest way to fingerprint a repo or detect whether it changed since you last looked, without downloading data. Complements get_repo_status (which has the rev but not the commit CID). Input is a handle or DID.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "repo": {
+                "description": "A handle or DID.",
+                "type": "string"
+              }
+            },
+            "required": ["repo"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "annotations": {
+            "openWorldHint": true,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:53f0ab870fb664dadab364ecb130711e5b739b2dace255690cc89329b8779565"
+        },
+        {
+          "name": "get_pds_directory_info",
+          "description": "A cached health card for a PDS from pds.directory: version, DID, approximate user count, reachability, last-checked time, available domains, and which relays index it. Input is the PDS hostname (e.g. pds.example.com). Best-effort/cached data.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "hostname": {
+                "description": "A PDS hostname, e.g. pds.example.com.",
+                "type": "string"
+              }
+            },
+            "required": ["hostname"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "annotations": {
+            "openWorldHint": true,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:6141cab12608d3b3af87f3ffc8d14ebb4d8ea94951c94ff9906818f14a892e61"
+        },
+        {
+          "name": "get_profile",
+          "description": "Get an account's repository overview (handle, DID, PDS, and the list of collections it contains). Input is a handle or DID.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "actor": {
+                "description": "A handle (alice.bsky.social) or DID (did:plc:...).",
+                "type": "string"
+              },
+              "include": {
+                "description": "Optional enrichments: 'schema' resolves the collection's lexicon; 'backlinks' lists who referenced the target; 'profile' adds the repo owner's display name, bio, and avatar URL.",
+                "items": {
+                  "enum": ["schema", "backlinks", "profile"],
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "required": ["actor"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "annotations": {
+            "openWorldHint": true,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:bc213658faf262328f682a67376e222b819326641109232fe967f516feb83ca5"
+        },
+        {
+          "name": "get_record",
+          "description": "Fetch a single record by its full at:// URI (must include collection and rkey). Returns the record's value, CID, and resolved identity.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "include": {
+                "description": "Optional enrichments: 'schema' resolves the collection's lexicon; 'backlinks' lists who referenced the target; 'profile' adds the repo owner's display name, bio, and avatar URL.",
+                "items": {
+                  "enum": ["schema", "backlinks", "profile"],
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "uri": {
+                "description": "Full at:// URI: at://<did-or-handle>/<collection>/<rkey>.",
+                "type": "string"
+              }
+            },
+            "required": ["uri"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "annotations": {
+            "openWorldHint": true,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:2c570ec953662e4e23fa45a057a5d379b4bbe87c493e3124fd8c77bb2cd03e2f"
+        },
+        {
+          "name": "get_relay_directory_info",
+          "description": "A cached overview of a relay from firehose.directory: counts of PDSes it indexes (total/active/offline/banned) and total accounts. Input is the relay hostname (e.g. bsky.network). Best-effort/cached data.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "hostname": {
+                "description": "A relay hostname, e.g. bsky.network.",
+                "type": "string"
+              }
+            },
+            "required": ["hostname"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "annotations": {
+            "openWorldHint": true,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:fb58814124a155712dc24ca073b62d45255e378df088fab459cc039705e084fa"
+        },
+        {
+          "name": "get_repo_status",
+          "description": "Liveness/moderation status of an account's repository: whether it is active, its current revision, and any takedown/suspended/deactivated/deleted state. Answers 'has @alice been taken down?' which get_profile can't. Input is a handle or DID.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "repo": {
+                "description": "A handle or DID.",
+                "type": "string"
+              }
+            },
+            "required": ["repo"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "annotations": {
+            "openWorldHint": true,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:cca8cca4a6ce42d2116f8d5ef3de22a8de588d5c46890964036ad613363411d5"
+        },
+        {
+          "name": "get_thread",
+          "description": "Reconstruct the conversation around a post: its ancestor chain up to the thread root (following reply.parent, root-first) PLUS a bounded descendant reply TREE,replies, replies-to-replies, and so on, each tagged with its depth and parent,walked breadth-first and capped for cost. NOTE: descendant expansion assumes the Bluesky reply model (app.bsky.feed.post with reply.parent); ancestor walking follows reply.parent generically, but the reply tree is specific to that lexicon and will be empty for record types that model replies differently. Answers 'show me this whole conversation / what is this replying to?'. If the tree is truncated, use list_backlink_records on a specific post's URI to expand it further. Input is a post's at:// URI.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "uri": {
+                "description": "A post's full at:// URI: at://<did-or-handle>/app.bsky.feed.post/<rkey>.",
+                "type": "string"
+              }
+            },
+            "required": ["uri"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "annotations": {
+            "openWorldHint": true,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:8bee646362a875a9a0575f550c0fbca5852999b3fef78ba6c647aa9d4ab24189"
+        },
+        {
+          "name": "list_backlink_records",
+          "description": "List the actual records (author DID + verified handle + at:// URI, newest first) that reference a target for ONE category,i.e. WHO liked, reposted, quoted, replied to, mentioned, or follows it. Workflow: call get_backlinks first to get a category `source`, then pass it here. To read WHAT a referencing record says (e.g. the text of a mention or reply), call get_record on its at:// URI. Author handles are resolved via identity resolution (verified), not search.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "cursor": {
+                "description": "Pagination cursor returned by a previous call (to get the next page).",
+                "type": "string"
+              },
+              "limit": {
+                "description": "Page size (1-25, default 25). Use the returned cursor for the next page.",
+                "maximum": 25,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "source": {
+                "description": "A category `source` from get_backlinks, e.g. app.bsky.feed.like:subject.uri.",
+                "type": "string"
+              },
+              "target": {
+                "description": "The referenced record at:// URI or account DID (same target passed to get_backlinks).",
+                "type": "string"
+              }
+            },
+            "required": ["source", "target"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "annotations": {
+            "openWorldHint": true,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:662563592b3baca69fd475ba5e79b125883549418135914584d4863c0815cf96"
+        },
+        {
+          "name": "list_blobs",
+          "description": "List the blobs (uploaded media/attachments,images, video, etc.) hosted in an account's repository, via com.atproto.sync.listBlobs. Returns each blob's CID and its canonical PDS getBlob URL (PDS-native, works for any PDS,not a CDN). Answers 'what media does this account host?'. Records reference blobs by CID; use this (or get_blob_info) to turn a CID into a fetchable URL. Input is a handle or DID.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "cursor": {
+                "description": "Pagination cursor from a previous call.",
+                "type": "string"
+              },
+              "limit": {
+                "description": "Page size (1-100, default 50). A cursor in the response means more pages exist.",
+                "maximum": 100,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "repo": {
+                "description": "A handle or DID.",
+                "type": "string"
+              }
+            },
+            "required": ["repo"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "annotations": {
+            "openWorldHint": true,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:c33c4abe2ecf27c83057db56994db8cf4adda8d40fed94cfbdb74620b1216608"
+        },
+        {
+          "name": "list_labelers",
+          "description": "List the labeler (moderation) services known to the labeler relay,each labeler's DID, resolved handle, and service endpoint. The discovery step BEFORE query_labels, which needs a labeler DID/handle up front: use this to find moderation.bsky.app and any third-party/regional labelers, then pass one to query_labels.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "cursor": {
+                "description": "Pagination cursor from a previous call.",
+                "type": "string"
+              },
+              "limit": {
+                "description": "Page size (1-20, default 20). Use the returned cursor for the next page.",
+                "maximum": 20,
+                "minimum": 1,
+                "type": "integer"
+              }
+            },
+            "type": "object"
+          },
+          "outputSchema": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "annotations": {
+            "openWorldHint": true,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:bc57bfc7e2e56940219e6e94176c2e45e24750be2c157173a99744c56c4a13ce"
+        },
+        {
+          "name": "list_records",
+          "description": "List records in a collection for an account, with pagination. Provide the repo (handle or DID) and the collection NSID (e.g. app.bsky.feed.post).",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "collection": {
+                "description": "Collection NSID, e.g. app.bsky.feed.post.",
+                "type": "string"
+              },
+              "cursor": {
+                "description": "Pagination cursor from a previous page.",
+                "type": "string"
+              },
+              "limit": {
+                "description": "Page size (1-100, default 50). A cursor in the response means more pages exist.",
+                "maximum": 100,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "repo": {
+                "description": "A handle or DID.",
+                "type": "string"
+              }
+            },
+            "required": ["collection", "repo"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "annotations": {
+            "openWorldHint": true,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:b97bf35683d047b594874643086269098b299c93c7532ab60d79640fff65162f"
+        },
+        {
+          "name": "list_repos",
+          "description": "List the accounts (repositories) hosted on a PDS, via com.atproto.sync.listRepos: each repo's DID and active/takedown status, paginated. Answers 'who is hosted on this PDS?' / 'how many accounts does this PDS have?'. By default returns DIDs only (one request, large page — best for counting); pass enrich=true to also resolve handles (slower, smaller page). Input is the PDS origin (e.g. https://pds.example.com). Works for any PDS.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "cursor": {
+                "description": "Pagination cursor from a previous call.",
+                "type": "string"
+              },
+              "enrich": {
+                "description": "Resolve each DID to its handle. Default false — returns DIDs only in ONE request (large page, the fast path for listing/counting). Set true only when you need handles (slower, smaller page).",
+                "type": "boolean"
+              },
+              "limit": {
+                "description": "Page size (1-1000, default 1000). With enrich=true the effective page is capped near 20 (each DID is resolved to a handle). Use the returned cursor for the next page.",
+                "maximum": 1000,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "pds": {
+                "description": "A PDS origin URL, e.g. https://pds.example.com.",
+                "type": "string"
+              }
+            },
+            "required": ["pds"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "annotations": {
+            "openWorldHint": true,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:987ecda7ab08ad04613feafd1036bae71d10492b0d3e5b3d33bc7fb28eb55a1b"
+        },
+        {
+          "name": "list_repos_by_collection",
+          "description": "Network-wide: which accounts publish a given collection/lexicon,e.g. 'who has an app.bsky.feed.generator (a custom feed)?' or who uses a custom lexicon. Via a relay's com.atproto.sync.listReposByCollection (anonymous). By default returns DIDs only (one request, large page); pass enrich=true to also resolve handles (slower, smaller page). For just a total, use count_repos_by_collection. NOTE: relay-served (defaults to the public Bluesky relay; pass `relay` to query another), not the account's own PDS. Pairs with search_lexicons / resolve_lexicon.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "collection": {
+                "description": "A collection NSID, e.g. app.bsky.feed.generator.",
+                "type": "string"
+              },
+              "cursor": {
+                "description": "Pagination cursor from a previous call.",
+                "type": "string"
+              },
+              "enrich": {
+                "description": "Resolve each DID to its handle. Default false — returns DIDs only in ONE request (large page, the fast path for listing/counting). Set true only when you need handles (slower, smaller page).",
+                "type": "boolean"
+              },
+              "limit": {
+                "description": "Page size (1-1000, default 1000). With enrich=true the effective page is capped near 20 (each DID is resolved to a handle). Use the returned cursor for the next page.",
+                "maximum": 1000,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "relay": {
+                "description": "Optional relay origin to query instead of the default, e.g. https://relay.example.com.",
+                "type": "string"
+              }
+            },
+            "required": ["collection"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "annotations": {
+            "openWorldHint": true,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:07813658dcf0093045e9dc378213c6fd8039bbdcaad95380bd8b718c4e29d4a9"
+        },
+        {
+          "name": "query_labels",
+          "description": "What moderation labels a labeler has applied to a subject (com.atproto.label.queryLabels),e.g. 'has @alice or this post been labeled spam/nsfw/hidden by labeler X?'. Anonymous and service-agnostic: the labeler's own service endpoint is found from its DID document (no hardcoded aggregator). Subject is a DID/handle (account labels) or an at:// URI (record labels); labeler is the handle or DID of a labeler service (e.g. moderation.bsky.app).",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "cursor": {
+                "description": "Pagination cursor from a previous call.",
+                "type": "string"
+              },
+              "labeler": {
+                "description": "The labeler service to ask,a handle or DID, e.g. moderation.bsky.app.",
+                "type": "string"
+              },
+              "limit": {
+                "description": "Page size (1-100, default 50). A cursor in the response means more pages exist.",
+                "maximum": 100,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "subject": {
+                "description": "What to check: a DID/handle (account-level labels) or an at:// URI (record-level).",
+                "type": "string"
+              }
+            },
+            "required": ["labeler", "subject"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "annotations": {
+            "openWorldHint": true,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:6b45cf16b35bea86e86f0e43755eaaed0bbd4e493b6ff17cfbb544e760ac78b7"
+        },
+        {
+          "name": "resolve",
+          "description": "Resolve any AT Protocol identifier to JSON. Accepts an at:// URI (at://<did-or-handle>/<collection>/<rkey>), a bare handle (alice.bsky.social), or a DID (did:plc:...). Returns a profile, a collection page, or a single record depending on how specific the input is. PDS-agnostic: works for any AT Protocol PDS, not just Bluesky.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "cursor": {
+                "description": "Pagination cursor (collections only).",
+                "type": "string"
+              },
+              "include": {
+                "description": "Optional enrichments: 'schema' resolves the collection's lexicon; 'backlinks' lists who referenced the target; 'profile' adds the repo owner's display name, bio, and avatar URL.",
+                "items": {
+                  "enum": ["schema", "backlinks", "profile"],
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "limit": {
+                "description": "Page size (1-100, default 50). A cursor in the response means more pages exist.",
+                "maximum": 100,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "uri": {
+                "description": "An at:// URI, a bare handle, or a DID.",
+                "type": "string"
+              }
+            },
+            "required": ["uri"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "annotations": {
+            "openWorldHint": true,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:efb1572149f45d22eecda716029f33927e7ea172af1de7f1e05b4c3323f9e5a3"
+        },
+        {
+          "name": "resolve_lexicon",
+          "description": "Explain what a record type means by resolving its lexicon schema. Input is a collection NSID (e.g. app.bsky.feed.post). Returns the schema's description and definition.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "nsid": {
+                "description": "A collection NSID, e.g. app.bsky.feed.post.",
+                "type": "string"
+              }
+            },
+            "required": ["nsid"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "annotations": {
+            "openWorldHint": true,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:5b0d0dc9c2da52f34c83f3fa09ee1c5d4bf6cb6d2bae8100ee0a812468871554"
+        },
+        {
+          "name": "search_accounts",
+          "description": "Search for AT Protocol accounts by handle or display name (paginated, via the Bluesky AppView app.bsky.actor.searchActors, so accounts unknown to that index may be missing). Returns candidate accounts with DID + handle, to turn a name into a DID. Results are search CANDIDATES, not verified handle-to-DID mappings: call verify_handle before trusting that a handle really belongs to a DID (resolve/get_profile only confirm an account exists, not that the handle is authentic).",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "cursor": {
+                "description": "Pagination cursor from a previous call.",
+                "type": "string"
+              },
+              "limit": {
+                "description": "Page size (1-100, default 50). A cursor in the response means more pages exist.",
+                "maximum": 100,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "query": {
+                "description": "A handle fragment or display name, e.g. \"alice\".",
+                "type": "string"
+              }
+            },
+            "required": ["query"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "annotations": {
+            "openWorldHint": true,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:8bef6081f37dcbed7aeee53868878e1f39deda7f6dac6551f76990c06219be20"
+        },
+        {
+          "name": "search_lexicons",
+          "description": "Browse or search the registry of published AT Protocol lexicon schemas. The response's `total` field is the exact registry size and `matched` is the exact match count. Substring matches the NSID or description (query 'profile' → anything containing 'profile'); prefix the query with a DOT for a suffix match (query '.profile' → only NSIDs ENDING in .profile, i.e. profile record types). Filter by schema kind with `type` — 'give me every space lexicon' is type='space' with NO query, since an NSID does not imply its type (space.saebyeok.permissionSet is a permission set; app.kimbia.circle is a space). Types: the spec's primary types are record, query, procedure, subscription, and permission-set; a main def may also be a non-primary type (object, token, string); space comes from proposal 0016 (permissioned data), which is not in the ratified spec; defs-only marks a schema file with no main definition. Every response carries a `typeCounts` breakdown of the returned matches (it sums to `matched`), so one call with no arguments shows which kinds exist and how many; when you filter by type, `otherTypes` reports what the filter excluded, so a too-narrow or misspelled type still shows you the real options. Without a query or type, returns the total plus a sample. Results are paginated by `limit`; to see matches beyond the first page, call again with the `offset` printed at the end of the list. Use resolve_lexicon for a specific schema's full definition.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "limit": {
+                "description": "Page size (1-100, default 50). A cursor in the response means more pages exist.",
+                "maximum": 100,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "offset": {
+                "description": "Skip this many matches (pagination). Use the offset value printed after a truncated list.",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "query": {
+                "description": "Optional substring to filter by, e.g. \"profile\" or \"app.bsky\".",
+                "type": "string"
+              },
+              "type": {
+                "description": "Keep only these schema kinds, e.g. \"space\" for permissioned space declarations, or [\"record\",\"procedure\"]. Case-insensitive. Combine with query to search within a kind.",
+                "oneOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  }
+                ]
+              }
+            },
+            "type": "object"
+          },
+          "outputSchema": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "annotations": {
+            "openWorldHint": true,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:970046fef3011823437c56283216199c83e8f9085dddf491b6db9cba8d7806e4"
+        },
+        {
+          "name": "verify_handle",
+          "description": "Bidirectionally verify that a handle is really owned by its DID, via DNS TXT and HTTPS well-known. Returns whether each method passed. Use this to check for impersonation/spoofing,search results and resolve give candidates, this gives cryptographic binding.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "handle": {
+                "description": "A handle, e.g. alice.bsky.social.",
+                "type": "string"
+              }
+            },
+            "required": ["handle"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "annotations": {
+            "openWorldHint": true,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:931a48264140aa3cff13a722a94b89441927d3f7c1ae5aa144cbf201a4f22f95"
+        }
+      ],
+      "resourceTemplates": [
+        {
+          "uriTemplate": "at://{+identifier}",
+          "name": "AT Protocol profile",
+          "description": "An account's repository overview (handle, DID, PDS, collections). {identifier} is a handle or DID.",
+          "mimeType": "application/json",
+          "digest": "sha256:139302a9302dd2cb4869dd82ca903964bf15bb7bda8181774a4740ea4dc5f8a6"
+        },
+        {
+          "uriTemplate": "at://{+did}/{collection}/{+rkey}",
+          "name": "AT Protocol record",
+          "description": "A single record (post, like, profile record, ...) resolved to JSON + Markdown.",
+          "mimeType": "application/json",
+          "digest": "sha256:06b97c6f4147b206f09bd84b8da3bafc359c9cc3db53bf1552d34e90e5ca0ecb"
+        }
+      ],
+      "prompts": [
+        {
+          "name": "account_audit",
+          "title": "Audit an account",
+          "description": "A full identity/trust picture of an account: profile, handle verification, history, moderation labels, repo status.",
+          "arguments": [
+            {
+              "name": "actor",
+              "description": "A handle or DID.",
+              "required": true
+            }
+          ],
+          "digest": "sha256:794842f0b45474f20cc3bcd939f430dfcfa31f2588d775f0d443856fd33551ac"
+        },
+        {
+          "name": "pds_health",
+          "title": "Inspect a PDS",
+          "description": "Everything about a Personal Data Server: server info, directory health card, and who is hosted there.",
+          "arguments": [
+            {
+              "name": "host",
+              "description": "A PDS origin or hostname, e.g. pds.example.com.",
+              "required": true
+            }
+          ],
+          "digest": "sha256:2e7ffa89669741f11c11fe85c5180844b8d4e8fed5acedd9c36d4f90e54f0c81"
+        },
+        {
+          "name": "who_engaged",
+          "title": "Who engaged with this?",
+          "description": "Find who liked / reposted / quoted / replied to / mentioned a post or account, and read what they said.",
+          "arguments": [
+            {
+              "name": "target",
+              "description": "A record at:// URI or an account handle/DID.",
+              "required": true
+            }
+          ],
+          "digest": "sha256:a2519516db9ecee2cbebb42bc4646254d003c07f7741628873d3b1d00dedbc2c"
+        }
+      ],
+      "digest": "sha256:a9337aca095787e9ab25dd5f5d800f32c55fbb9e0ba76dc24cec290f6692885a"
+    }
+  }
+}

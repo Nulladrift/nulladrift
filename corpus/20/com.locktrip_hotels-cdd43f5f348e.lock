@@ -1,0 +1,866 @@
+{
+  "lockfileVersion": 2,
+  "subjects": {
+    "com.locktrip/hotels": {
+      "kind": "mcp-server",
+      "source": {
+        "client": "manual",
+        "file": "registry.modelcontextprotocol.io"
+      },
+      "transport": {
+        "type": "http",
+        "url": "https://locktrip.com/mcp/rpc"
+      },
+      "protocol": {
+        "era": "legacy",
+        "version": "2025-11-25"
+      },
+      "serverInfo": {
+        "name": "locktrip-hotel-booking",
+        "version": "1.0.0"
+      },
+      "capabilities": {
+        "tools": {}
+      },
+      "instructions": "LockTrip hotel-booking server. Search hotels worldwide and book them.\n\nBOOKING FLOW (searching needs no account):\n1) search_location { query } — turn a place name into a location `id` (use it as `regionId`).\n2) hotel_search { regionId, startDate, endDate, rooms[{adults,...}], nationality, currency } — returns a `searchKey`. First collect the exact check-in date, number of nights (to derive `endDate`), rooms/adults, and nationality from the user; do not guess them.\n3) get_search_results { searchKey } — POLL until `searchStatus` is `COMPLETED`, then pick a `hotelId`.\n4) get_hotel_rooms { hotelId, searchKey, ... } — pick a `quoteId`. (Optional: check_cancellation_policy with that package's `packageId`, and get_hotel_details for more info.)\n5) prepare_booking { quoteId, searchKey, rooms[{roomIndex,guests[{firstName,lastName}]}], contactPerson{firstName,lastName,email,phone} } — returns a `preparedBookingId`. Collect each guest's name and a contact email + phone from the user first.\n6) create_checkout { bookingId: preparedBookingId, currency } — returns a `checkoutUrl` for the user to pay. The booking confirms automatically once payment succeeds.\n\nSESSIONS: prepare_booking and create_checkout need a guest session: call guest_login with the user's email and pass the returned token as the `sessionToken` argument. Never ask the user to type a password or a token in the chat. If guest_login returns `magicLinkSent: true`, that email already has a LockTrip account and a sign-in link was emailed to it: tell the user to check their email and finish on locktrip.com, and do not call guest_login again for that email.\n\nMY BOOKINGS: to see or cancel existing bookings, call list_bookings (or get_booking_details / cancel_booking) with the user's account `email`. Without a signed-in session, LockTrip emails that address a sign-in link to their bookings on locktrip.com and the result has `magicLinkSent: true`: tell the user to check their email. Nothing is shown or cancelled in the chat in that case. confirm_booking is for B2B partner sessions only. If a tool returns mcpCode AUTH_INSUFFICIENT_ROLE (rpc -32009), the session's role is wrong; calling guest_login again returns the same role and sends another email, so do not retry it. Forward the IDs returned by one tool into the next: regionId -> searchKey -> hotelId -> quoteId -> preparedBookingId.",
+      "tools": [
+        {
+          "name": "cancel_booking",
+          "title": "Cancel Booking",
+          "description": "Cancels an existing booking. Required: `bookingId` (from `list_bookings`) and the boolean `confirmed`; optional `reason`. This is a two-step safety flow: calling with `confirmed:false` does NOT cancel and returns only a 'not confirmed' acknowledgement (it does NOT return fees or refund amounts — read those first from `get_booking_details`); call again with `confirmed:true` to actually submit the cancellation. On success the response includes `cancellationFee` + `cancellationFeeCurrency` when the supplier reported a charged fee (absent means none was reported, not zero); refunds are processed separately. When the cancellation is not accepted, `failureReason` is one of `NOT_FOUND`, `AFTER_CHECK_IN`, `NOT_CANCELLABLE_STATUS`, `SUPPLIER_NOT_CONFIRMED` (submitted, under review: do not rebook or retry) or `ERROR` (not processed: the booking was not cancelled; try again later or contact support). Needs a registered LockTrip account session; guest sessions cannot cancel bookings. Without a signed-in session, pass the user's `email` instead: LockTrip emails them a sign-in link to their bookings on locktrip.com, and the result has `magicLinkSent: true` (nothing is shown or changed in this chat). Returns `success` and a `message`. This is a destructive, terminal action — confirm with the user before calling with `confirmed:true`.",
+          "inputSchema": {
+            "properties": {
+              "bookingId": {
+                "description": "Booking ID to cancel",
+                "type": "string"
+              },
+              "confirmed": {
+                "description": "Set true to confirm cancellation",
+                "type": "boolean"
+              },
+              "email": {
+                "description": "The user's LockTrip account email. Needed only when there is no signed-in session: LockTrip then emails that address a sign-in link to the user's bookings on locktrip.com (the bookings are not shown in this chat).",
+                "type": "string"
+              },
+              "reason": {
+                "description": "Optional cancellation reason",
+                "type": "string"
+              },
+              "sessionToken": {
+                "description": "Optional guest-checkout token returned by `guest_login`.",
+                "type": "string"
+              }
+            },
+            "required": ["bookingId", "confirmed"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": true,
+            "readOnlyHint": false,
+            "title": "Cancel Booking"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:52a9d124943df7385776281148eafffe2c5b815f8b04da0122d8b6a00d9bbaac"
+        },
+        {
+          "name": "check_cancellation_policy",
+          "title": "Check Cancellation Policy",
+          "description": "Returns detailed cancellation terms for one or more room packages before booking. Required: `searchKey`, `hotelId`, and `packageIds[]` — pass the package UUID WITHOUT the `_hotelId` suffix, i.e. `quoteId.split('_')[0]`. Passing the full `quoteId` here fails with a misleading SESSION_EXPIRED even on a live session, because the policy lookup matches the bare UUID. Returns `policies[]`, each with `packageId`, `isRefundable`, `freeCancellationUntil`, and `fees[]` (`fromDate`, `amount`, `currency`). `currency` is the supplier's own denomination for that penalty and is OMITTED, never guessed, when the supplier does not state one — so read the amount as unpriced if it is absent rather than assuming your search currency. No authentication required. Informational only — use it to confirm the refund/penalty terms with the user, then continue with `prepare_booking`.",
+          "inputSchema": {
+            "properties": {
+              "hotelId": {
+                "description": "Hotel ID",
+                "type": "string"
+              },
+              "packageIds": {
+                "description": "Package IDs to check",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "searchKey": {
+                "description": "Search key",
+                "type": "string"
+              }
+            },
+            "required": ["hotelId", "packageIds", "searchKey"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "readOnlyHint": true,
+            "title": "Check Cancellation Policy"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:ee1fd5e480d0f68abe51c00dd86b0ba5d0e69eb7b729a3a8173dd5e6f69cfae0"
+        },
+        {
+          "name": "confirm_booking",
+          "title": "Confirm Hotel Booking",
+          "description": "Confirms and finalizes a booking using a B2B credit line — PARTNER ACCOUNTS ONLY. Guests cannot use this; ordinary consumers must instead pay via `create_checkout` (recommended) or `get_payment_url`. Required: `bookingInternalId` and `quoteId` (both from `prepare_booking`); `paymentMethod` defaults to `CREDIT_LINE`. REQUIRES A B2B PARTNER SESSION with a credit line; a `guest_login` session has no credit line and is rejected. Returns `accepted` and `message`, plus a `voucherUrl` on success. On `accepted:false`, READ `serviceUnavailable`: if it is absent the credit-line service gave a real verdict (insufficient balance, inactive line) and the answer will NOT change on retry — tell the user and stop; if it is `true` the credit-line service was unreachable, which is a system fault and not a decision about their credit. Even then do NOT blindly retry: the reservation may already have been applied — re-read the booking with `get_booking_details` first. Note also that `accepted:true` means the credit line was charged and the booking accepted, but the supplier reservation is completed asynchronously afterwards.",
+          "inputSchema": {
+            "properties": {
+              "bookingInternalId": {
+                "description": "Booking ID from prepare_booking",
+                "type": "string"
+              },
+              "paymentMethod": {
+                "description": "Payment method (default: CREDIT_LINE for B2B)",
+                "type": "string"
+              },
+              "quoteId": {
+                "description": "Quote ID used in prepare_booking",
+                "type": "string"
+              },
+              "sessionToken": {
+                "description": "Optional guest-checkout token returned by `guest_login`.",
+                "type": "string"
+              }
+            },
+            "required": ["bookingInternalId", "quoteId"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": true,
+            "readOnlyHint": false,
+            "title": "Confirm Hotel Booking"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:54969f7758030ca9692564bd5b9adacd6fc290fe8953bc712a18805941ba037b"
+        },
+        {
+          "name": "create_checkout",
+          "title": "Create Checkout",
+          "description": "Creates a hosted Revolut payment link for a prepared booking — the RECOMMENDED way for ordinary consumers (no credit line) to pay. Required: `bookingId` (the `preparedBookingId` from `prepare_booking`) and `currency` (3-letter); optional `backUrl` and `successUrl`. REQUIRES A SESSION: pass the token returned by `guest_login` as the `sessionToken` argument. Returns a `checkoutUrl` (valid ~20 minutes), a `checkoutToken`, and a `message`. Share the `checkoutUrl` with the guest to complete payment — the booking is confirmed automatically by webhook once payment succeeds (do not call `confirm_booking`, which is B2B-only).",
+          "inputSchema": {
+            "properties": {
+              "backUrl": {
+                "description": "Cancel/back redirect URL (optional, defaults to locktrip.com)",
+                "type": "string"
+              },
+              "bookingId": {
+                "description": "Booking ID from prepare_booking (preparedBookingId)",
+                "type": "string"
+              },
+              "currency": {
+                "description": "3-letter currency code (e.g. USD, EUR, GBP)",
+                "type": "string"
+              },
+              "sessionToken": {
+                "description": "Optional guest-checkout token returned by `guest_login`.",
+                "type": "string"
+              },
+              "successUrl": {
+                "description": "Success redirect URL (optional)",
+                "type": "string"
+              }
+            },
+            "required": ["bookingId", "currency"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "readOnlyHint": false,
+            "title": "Create Checkout"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:0def92afbd336b02e943b76719cf23f68a52278d9ca0cdf87501ab0e5f3af66e"
+        },
+        {
+          "name": "get_booking_details",
+          "title": "Get Booking Details",
+          "description": "Returns the full details of one existing booking: hotel, dates, rooms, guests, contact person, total price, payment status (`PAID`, `PENDING`, or `CREDIT_LINE` for a confirmed booking charged to a partner credit line, settled per statement via `GET /api/b2b/credit-line/statement`), and the cancellation policy (including any cancellation fees and the free-cancellation deadline). Required: `bookingId` (from `list_bookings`). Needs a registered LockTrip account session; guest sessions cannot view booking details. Without a signed-in session, pass the user's `email` instead: LockTrip emails them a sign-in link to their bookings on locktrip.com, and the result has `magicLinkSent: true` (nothing is shown or changed in this chat). Informational only. Use this to read the fee/refund terms BEFORE cancelling, since `cancel_booking` itself does not return a fee preview.",
+          "inputSchema": {
+            "properties": {
+              "bookingId": {
+                "description": "Booking ID to retrieve",
+                "type": "string"
+              },
+              "email": {
+                "description": "The user's LockTrip account email. Needed only when there is no signed-in session: LockTrip then emails that address a sign-in link to the user's bookings on locktrip.com (the bookings are not shown in this chat).",
+                "type": "string"
+              },
+              "sessionToken": {
+                "description": "Optional guest-checkout token returned by `guest_login`.",
+                "type": "string"
+              }
+            },
+            "required": ["bookingId"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "readOnlyHint": true,
+            "title": "Get Booking Details"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:ed5693d3d3d8fc6e5ba810895d172011bc3c10fa613b48ec9b00c517bc548b6c"
+        },
+        {
+          "name": "get_credit_line_statement",
+          "title": "Get Credit-Line Statement",
+          "description": "Returns the signed-in partner's own credit-line statement: `balance` (the real-time balance due and pending, ALWAYS for the whole credit line, not filtered by the dates), `account` details (name, currency, creditLimit, periodType), and the booking rows whose due date falls between `from` and `to` (default: the current month; at most 93 days). Each row carries `bookingReferenceId`, `hotelName`, `guestName`, dates, `amount`, `currency`, `bucket` (`current` = due, `pending` = not due yet), `dueDate`, `paid`, `outstanding`, `paymentStatus`, `settledBy`, and `lineType` (`booking`, or `cancellation_fee` for a late-cancellation charge). Read-only. Needs a signed-in partner credit-line account session; guest sessions have no credit line. Takes no account identifier: the credit line is always the caller's own.",
+          "inputSchema": {
+            "properties": {
+              "from": {
+                "description": "First due date to include, YYYY-MM-DD. Pass with `to`; omit both for the current month.",
+                "type": "string"
+              },
+              "sessionToken": {
+                "description": "Optional guest-checkout token returned by `guest_login`.",
+                "type": "string"
+              },
+              "to": {
+                "description": "Last due date to include, YYYY-MM-DD (at most 93 days after `from`).",
+                "type": "string"
+              }
+            },
+            "required": [],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "readOnlyHint": true,
+            "title": "Get Credit-Line Statement"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:35eed291aa1740145e58590e453a6b4ee1acb5b2f353f8dedbd89e8b10bf11da"
+        },
+        {
+          "name": "get_hotel_details",
+          "title": "Get Hotel Details",
+          "description": "Fetches full descriptive details for one hotel: name, address, coordinates (lat/lng), star rating, description, phone, amenities, photos, and reviews. Required: the NUMERIC `hotelId` (the same hotel identifier returned in search results, passed as a number); optional `language`, `includeImages` (set true to fetch extra photos), and `imageLimit` (default 20, max 100). Returns a `hotel` object and optional `additionalImages`. No authentication required. Informational only — use it to enrich what you show the user before they pick a room.",
+          "inputSchema": {
+            "properties": {
+              "hotelId": {
+                "description": "Hotel ID (numeric, from search results externalId)",
+                "type": "number"
+              },
+              "imageLimit": {
+                "description": "Max additional images to fetch (default: 20, max: 100)",
+                "type": "number"
+              },
+              "includeImages": {
+                "description": "Fetch additional hotel images (default: false)",
+                "type": "boolean"
+              },
+              "language": {
+                "description": "Language code for description (default: en)",
+                "type": "string"
+              }
+            },
+            "required": ["hotelId"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "readOnlyHint": true,
+            "title": "Get Hotel Details"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:6d267193e893a0019e34ff90e99f9bc12feb85ecddcf804ec3d9b89e8739d9b8"
+        },
+        {
+          "name": "get_hotel_rooms",
+          "title": "Get Hotel Rooms",
+          "description": "Lists the bookable room packages for one hotel. Required: `hotelId` (from `get_search_results`), the SAME `searchKey` from `hotel_search`, plus `startDate`, `endDate`, `rooms[]`, `nationality`, and `regionId` (re-supply the same values used in `hotel_search`); `currency` is recommended. Returns `packages[]`, each with a `quoteId` (the priced, bookable offer — format `packageId_hotelId`), a `packageId` (the same string as the `quoteId`; truncate it at the underscore before sending it to `check_cancellation_policy`), `roomName`, `mealType`, `price`, `pricePerNight`, `totalNights`, `amenities`, and `isRefundable`. No authentication required. Pass a chosen `quoteId` to `prepare_booking` (and to `confirm_booking` for B2B). To inspect cancellation terms first, pass `quoteId.split('_')[0]` (the bare package UUID, WITHOUT the `_hotelId` suffix) to `check_cancellation_policy` — handing it the full `quoteId` fails with a misleading SESSION_EXPIRED even on a live session.",
+          "inputSchema": {
+            "properties": {
+              "currency": {
+                "description": "Currency code",
+                "type": "string"
+              },
+              "endDate": {
+                "description": "Check-out date (YYYY-MM-DD)",
+                "type": "string"
+              },
+              "hotelId": {
+                "description": "Hotel ID from search results",
+                "type": "string"
+              },
+              "nationality": {
+                "description": "2-letter country code",
+                "type": "string"
+              },
+              "regionId": {
+                "description": "Region ID",
+                "type": "string"
+              },
+              "rooms": {
+                "items": {
+                  "properties": {
+                    "adults": {
+                      "type": "number"
+                    },
+                    "childrenAges": {
+                      "items": {
+                        "type": "number"
+                      },
+                      "type": "array"
+                    }
+                  },
+                  "required": ["adults"],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "searchKey": {
+                "description": "Search key",
+                "type": "string"
+              },
+              "startDate": {
+                "description": "Check-in date (YYYY-MM-DD)",
+                "type": "string"
+              }
+            },
+            "required": ["endDate", "hotelId", "nationality", "regionId", "rooms", "searchKey", "startDate"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "readOnlyHint": true,
+            "title": "Get Hotel Rooms"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:eadd142ef8359c64966f40fb5c03cdc6bccd584ccba0dec772848849b2f5ac76"
+        },
+        {
+          "name": "get_payment_url",
+          "title": "Get Payment URL",
+          "description": "Creates a hosted Stripe (credit-card) checkout link for a prepared booking — an alternative consumer payment rail to `create_checkout` (Revolut). Required: `bookingId` (the `preparedBookingId` from `prepare_booking`), `currency` (3-letter), and `backUrl`; optional `successUrl`. REQUIRES A REGISTERED-ACCOUNT SESSION; a `guest_login` session is REJECTED here (the Stripe rail is not open to guests; use `create_checkout` for a guest instead). Returns a payment `url` and a `sessionId`. Share the `url` with the guest — the booking is confirmed automatically by webhook once payment succeeds. Prefer `create_checkout` unless a Stripe card link is specifically needed.",
+          "inputSchema": {
+            "properties": {
+              "backUrl": {
+                "description": "URL to redirect on cancel/back",
+                "type": "string"
+              },
+              "bookingId": {
+                "description": "Booking ID from prepare_booking (preparedBookingId)",
+                "type": "string"
+              },
+              "currency": {
+                "description": "Payment currency code (e.g., USD, EUR)",
+                "type": "string"
+              },
+              "sessionToken": {
+                "description": "Optional guest-checkout token returned by `guest_login`.",
+                "type": "string"
+              },
+              "successUrl": {
+                "description": "Custom URL to redirect on success",
+                "type": "string"
+              }
+            },
+            "required": ["backUrl", "bookingId", "currency"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "readOnlyHint": false,
+            "title": "Get Payment URL"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:8d81bdaa8e778b4897fa699d9838510ff6b1dafdcd3500b50bc55b4ab205ac0b"
+        },
+        {
+          "name": "get_search_results",
+          "title": "Get Hotel Search Results",
+          "description": "Returns the hotel results for a running search identified by `searchKey` (from `hotel_search`). Results stream in asynchronously, so POLL this tool until the returned `searchStatus` equals `COMPLETED` (it is `IN_PROGRESS` while results are still loading). Supports `page` (0-indexed on BOTH the request and the response echo — page 0 is the first page and comes back as page 0), `size` (use a large value like 5000 to get all), `filters` (minPrice/maxPrice/starRatings/amenities/mealTypes/hotelName/minDiscountScore), `sortBy` (PRICE_ASC/PRICE_DESC/RATING_DESC/DISTANCE/VALUE_DESC), and `currency`. Returns `hotels[]` (each with `hotelId`, `name`, `starRating`, `minPrice`, `originalPrice`, `currency`, `discountScore`, `reviewScore`, `hasFreeCancellation`, `isRefundable`, etc.), plus `totalCount` and `hasMore`. `discountScore` is LockTrip's value score for the offer: an estimated % below the hotel's usual public price (the figure locktrip.com shows as \"X% off\"). Higher means better value; 20 or more is a strong deal; 0 or missing means no score. A low price is not the same as good value, so to find the best-value hotels use `sortBy` VALUE_DESC (highest discountScore first) or `filters.minDiscountScore` (e.g. 20), and weigh it with `starRating` and `reviewScore`. No authentication required. Pass a chosen `hotelId` together with the SAME `searchKey` to `get_hotel_rooms`.",
+          "inputSchema": {
+            "properties": {
+              "currency": {
+                "description": "Currency code from hotel_search (prices are in this currency)",
+                "type": "string"
+              },
+              "filters": {
+                "properties": {
+                  "amenities": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "hotelName": {
+                    "type": "string"
+                  },
+                  "maxPrice": {
+                    "type": "number"
+                  },
+                  "mealTypes": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "minDiscountScore": {
+                    "description": "Only hotels whose discountScore is at least this value (0-100; e.g. 20 for strong deals)",
+                    "type": "number"
+                  },
+                  "minPrice": {
+                    "type": "number"
+                  },
+                  "starRatings": {
+                    "items": {
+                      "type": "number"
+                    },
+                    "type": "array"
+                  }
+                },
+                "type": "object"
+              },
+              "page": {
+                "description": "Page number (0-indexed)",
+                "type": "number"
+              },
+              "searchKey": {
+                "description": "Search key from hotel_search",
+                "type": "string"
+              },
+              "size": {
+                "description": "Results per page (use 5000 to get all)",
+                "type": "number"
+              },
+              "sortBy": {
+                "description": "VALUE_DESC = best value first (highest discountScore)",
+                "enum": ["PRICE_ASC", "PRICE_DESC", "RATING_DESC", "DISTANCE", "VALUE_DESC"],
+                "type": "string"
+              }
+            },
+            "required": ["searchKey"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "readOnlyHint": true,
+            "title": "Get Hotel Search Results"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:91bf26a6fe427b073cebdf2d5a4543b1a971e2189de6ee4e5fc3b67f0bcd8f1f"
+        },
+        {
+          "name": "get_statement_document",
+          "title": "Get Statement Document",
+          "description": "Returns the signed-in partner's own monthly statement of account for `period` (YYYY-MM) exactly as it was sent to them: `format` `pdf` (default) returns the PDF as an embedded file, `csv` returns the CSV as text in `csv`. Statements exist only for months already issued; any other month returns RESOURCE_NOT_FOUND. Read-only. Needs a signed-in partner credit-line account session; guest sessions have no credit line.",
+          "inputSchema": {
+            "properties": {
+              "format": {
+                "description": "pdf (default) or csv",
+                "enum": ["pdf", "csv"],
+                "type": "string"
+              },
+              "period": {
+                "description": "Statement month, YYYY-MM",
+                "type": "string"
+              },
+              "sessionToken": {
+                "description": "Optional guest-checkout token returned by `guest_login`.",
+                "type": "string"
+              }
+            },
+            "required": ["period"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "readOnlyHint": true,
+            "title": "Get Statement Document"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:d36fa8eb39847d5a5e040443b56d33786a74674306d1a7f97e47b40cc5fb767a"
+        },
+        {
+          "name": "guest_login",
+          "title": "Continue as Guest",
+          "description": "Starts a guest checkout from the user's `email` only (no password) and returns a session `token` plus `userId`, `email`, and `isNewUser`; a new email also receives a verification email. Use it when the user wants to book, with the email the user gave for the booking. Pass the returned `token` as the `sessionToken` argument to `prepare_booking` and `create_checkout`. If the email already belongs to a LockTrip account, no guest session is created: LockTrip emails a sign-in link to that address instead, and the result has `magicLinkSent: true` and no `token`. Tell the user to check their email and finish on locktrip.com; do not call `guest_login` again for that email. A guest session can search, prepare a booking, and pay via `create_checkout`, but CANNOT list, view or cancel bookings, use `get_payment_url`, or use `confirm_booking`. No authentication required to call this tool.",
+          "inputSchema": {
+            "properties": {
+              "email": {
+                "description": "User email address for guest registration/login",
+                "type": "string"
+              }
+            },
+            "required": ["email"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "readOnlyHint": false,
+            "title": "Continue as Guest"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:e0455afd6c5cc10a48bf6bf9e8a8daa9a2d764329d2022cdef2733fd6f3e7b29"
+        },
+        {
+          "name": "hotel_search",
+          "title": "Search Hotels",
+          "description": "Starts an asynchronous hotel-availability search and returns a `searchKey` (plus `sessionId`, `status`, `totalHotels`). Required: `startDate` and `endDate` (both YYYY-MM-DD), `rooms[]` (each `{adults, childrenAges?[]}`, 1-4 adults per room), `nationality` (2-letter ISO country code), and EITHER `regionId` (from `search_location`) OR `latitude`+`longitude`; `currency` (3-letter) is strongly recommended. Before calling, collect the missing trip details from the user (exact check-in date, number of nights to derive `endDate`, number of rooms/adults, and nationality) instead of guessing. No authentication required. Pass the returned `searchKey` to `get_search_results` (poll it), and reuse the SAME `searchKey` for `get_hotel_rooms` and `prepare_booking`.",
+          "inputSchema": {
+            "properties": {
+              "currency": {
+                "description": "Currency code (USD, EUR, etc.)",
+                "type": "string"
+              },
+              "endDate": {
+                "description": "Check-out date (YYYY-MM-DD)",
+                "type": "string"
+              },
+              "latitude": {
+                "description": "Latitude for coordinate-based search (-90 to 90). Use with longitude instead of regionId.",
+                "type": "number"
+              },
+              "longitude": {
+                "description": "Longitude for coordinate-based search (-180 to 180). Use with latitude instead of regionId.",
+                "type": "number"
+              },
+              "nationality": {
+                "description": "2-letter country code for guest nationality",
+                "type": "string"
+              },
+              "radiusInMeters": {
+                "description": "Search radius in meters (default: 30000, min: 1000, max: 100000). Only with lat/lng.",
+                "type": "number"
+              },
+              "regionId": {
+                "description": "Location ID from search_location. Required unless latitude/longitude are provided.",
+                "type": "string"
+              },
+              "rooms": {
+                "description": "Room configurations",
+                "items": {
+                  "properties": {
+                    "adults": {
+                      "description": "Number of adults (1-4)",
+                      "type": "number"
+                    },
+                    "childrenAges": {
+                      "description": "Ages of children",
+                      "items": {
+                        "type": "number"
+                      },
+                      "type": "array"
+                    }
+                  },
+                  "required": ["adults"],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "startDate": {
+                "description": "Check-in date (YYYY-MM-DD)",
+                "type": "string"
+              }
+            },
+            "required": ["endDate", "nationality", "rooms", "startDate"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "readOnlyHint": true,
+            "title": "Search Hotels"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:fe31a81a0e9b42f2ce787c7f08fd51fb54a18a75dce06a8ddd6b7d851be33f28"
+        },
+        {
+          "name": "list_bookings",
+          "title": "List My Bookings",
+          "description": "Lists the authenticated user's existing bookings, filtered by `type`: `UPCOMING` (default), `COMPLETED`, `CANCELLED`, or `PENDING`. Needs a registered LockTrip account session; guest sessions from `guest_login` cannot list bookings. Without a signed-in session, pass the user's `email` instead: LockTrip emails them a sign-in link to their bookings on locktrip.com, and the result has `magicLinkSent: true` (nothing is shown or changed in this chat). Returns `bookings[]` (each with `bookingId`, `bookingReferenceId`, `hotelName`, `checkIn`, `checkOut`, `status`, `roomCount`, `createdAt`, and `totalPrice` + `currency` when the booking records a price) plus `totalCount` (all matching bookings). Optional paging: `page` (0-based) and `size` (max 100); omit both for the full list. Pass a `bookingId` to `get_booking_details` or `cancel_booking`.",
+          "inputSchema": {
+            "properties": {
+              "email": {
+                "description": "The user's LockTrip account email. Needed only when there is no signed-in session: LockTrip then emails that address a sign-in link to the user's bookings on locktrip.com (the bookings are not shown in this chat).",
+                "type": "string"
+              },
+              "page": {
+                "description": "Page number, 0-based. Omit page and size for the full list.",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "sessionToken": {
+                "description": "Optional guest-checkout token returned by `guest_login`.",
+                "type": "string"
+              },
+              "size": {
+                "description": "Bookings per page (max 100).",
+                "maximum": 100,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "type": {
+                "description": "Booking list filter",
+                "enum": ["UPCOMING", "COMPLETED", "CANCELLED", "PENDING"],
+                "type": "string"
+              }
+            },
+            "required": [],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "readOnlyHint": true,
+            "title": "List My Bookings"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:4418ba8fc4ddccb7f56956469facbf63d2d3b86fac4117d16e4379710ede3c33"
+        },
+        {
+          "name": "list_settlements",
+          "title": "List Bank Transfers",
+          "description": "Lists the signed-in partner's own bank-transfer settlements of the credit line: `settlements[]` (each with `reference`, `status`, `amount`, `currency`, `createdAt`, `expiresAt`, and `receivedAmount`/`receivedAt` once the transfer has arrived), `payable[]` (transfers still awaiting funds), the `bank` details to pay into, and a `notice` that must be shown to the user as given (overpayments are held as credit, not refunded). This is the list of transfers, not per-booking payment state: that is on each row of `get_credit_line_statement`. Read-only. Needs a signed-in partner credit-line account session; guest sessions have no credit line.",
+          "inputSchema": {
+            "properties": {
+              "sessionToken": {
+                "description": "Optional guest-checkout token returned by `guest_login`.",
+                "type": "string"
+              }
+            },
+            "required": [],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "readOnlyHint": true,
+            "title": "List Bank Transfers"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:77df26a6ccb24ad9fe3f517a08e8ce3350c5542c03146eb7dfdba8a63ec22cb6"
+        },
+        {
+          "name": "prepare_booking",
+          "title": "Prepare Hotel Booking",
+          "description": "Prepares a booking for a chosen room offer and returns the final price plus a `preparedBookingId` (also returned as the alias `bookingInternalId`). A prepared booking has NO fixed expiry — what expires is the search session behind its `quoteId`, which surfaces as \"This booking is unavailable\"; re-run `hotel_search` and re-quote if you see that. Required: `quoteId` (from `get_hotel_rooms`), `searchKey` (the SAME one from `hotel_search` — omitting it is a 400), `rooms[]` (each `{roomIndex (0-based), guests:[{firstName, lastName, title?}], children?}` — one guest entry per adult), and a `contactPerson` (`firstName`, `lastName`, `email`, `phone`); the `searchKey` is required (it warms the cancellation-policy cache the backend needs to book). Collect every guest's first/last name and a contact email + phone from the user before calling. REQUIRES A SESSION: for a guest booking, first call `guest_login` with the user's email and pass the returned token as the `sessionToken` argument. After this, send `preparedBookingId` to `create_checkout` (consumer, recommended) or `get_payment_url` (consumer, Stripe alternative); B2B partners use `confirm_booking`.",
+          "inputSchema": {
+            "properties": {
+              "contactPerson": {
+                "properties": {
+                  "countryCode": {
+                    "type": "string"
+                  },
+                  "email": {
+                    "type": "string"
+                  },
+                  "firstName": {
+                    "type": "string"
+                  },
+                  "lastName": {
+                    "type": "string"
+                  },
+                  "phone": {
+                    "type": "string"
+                  },
+                  "title": {
+                    "description": "Title (default: Mr)",
+                    "enum": ["Mr", "Mrs", "Ms"],
+                    "type": "string"
+                  }
+                },
+                "required": ["email", "firstName", "lastName", "phone"],
+                "type": "object"
+              },
+              "quoteId": {
+                "description": "Quote ID from get_hotel_rooms",
+                "type": "string"
+              },
+              "rooms": {
+                "items": {
+                  "properties": {
+                    "children": {
+                      "description": "Children in this room (must match childrenAges from search)",
+                      "items": {
+                        "properties": {
+                          "age": {
+                            "description": "Child age (0-17)",
+                            "type": "number"
+                          },
+                          "firstName": {
+                            "type": "string"
+                          },
+                          "lastName": {
+                            "type": "string"
+                          }
+                        },
+                        "required": ["age", "firstName", "lastName"],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "guests": {
+                      "description": "Adult guests in this room",
+                      "items": {
+                        "properties": {
+                          "email": {
+                            "type": "string"
+                          },
+                          "firstName": {
+                            "type": "string"
+                          },
+                          "isLeadGuest": {
+                            "type": "boolean"
+                          },
+                          "lastName": {
+                            "type": "string"
+                          },
+                          "phone": {
+                            "type": "string"
+                          },
+                          "title": {
+                            "description": "Guest title (default: Mr)",
+                            "enum": ["Mr", "Mrs", "Ms"],
+                            "type": "string"
+                          }
+                        },
+                        "required": ["firstName", "lastName"],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "roomIndex": {
+                      "description": "Room index (0-based)",
+                      "type": "number"
+                    }
+                  },
+                  "required": ["guests", "roomIndex"],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "searchKey": {
+                "description": "Search key from hotel_search (needed to validate cancellation policy)",
+                "type": "string"
+              },
+              "sessionToken": {
+                "description": "Optional guest-checkout token returned by `guest_login`.",
+                "type": "string"
+              },
+              "specialRequests": {
+                "type": "string"
+              }
+            },
+            "required": ["contactPerson", "quoteId", "rooms", "searchKey"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "readOnlyHint": false,
+            "title": "Prepare Hotel Booking"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:c631ca68c242d42541995f6724fe52e4d1d5f6f0ea7abced0bcbbab574487a05"
+        },
+        {
+          "name": "search_location",
+          "title": "Search Locations",
+          "description": "Searches LockTrip destinations (cities, regions, landmarks, or specific hotels) by free-text `query`. Returns `locations[]`, each with `id`, `name`, `country`, `type` (CITY/REGION/HOTEL/AIRPORT/POI), and `fullName`. Pass a chosen location's `id` to `hotel_search` as its `regionId` to search hotels in that area. No authentication required. This is the first step of the booking flow.",
+          "inputSchema": {
+            "properties": {
+              "language": {
+                "description": "Language code (default: en)",
+                "type": "string"
+              },
+              "query": {
+                "description": "Search query (city name, region, or hotel name)",
+                "type": "string"
+              }
+            },
+            "required": ["query"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "readOnlyHint": true,
+            "title": "Search Locations"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:21c5bba87c8c5eaadcb3aed343a0cb96256142ebf4760d9757804c5d2f34584f"
+        }
+      ],
+      "digest": "sha256:e4b8fe71d99033dd5f3679edc2a8045033328557540848a39aa62e4fb4aa50c9"
+    }
+  }
+}

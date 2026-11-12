@@ -1,0 +1,822 @@
+{
+  "lockfileVersion": 2,
+  "subjects": {
+    "com.petabloom/podcasts": {
+      "kind": "mcp-server",
+      "source": {
+        "client": "manual",
+        "file": "registry.modelcontextprotocol.io"
+      },
+      "transport": {
+        "type": "http",
+        "url": "https://podcasts.petabloom.com/mcp"
+      },
+      "protocol": {
+        "era": "modern",
+        "version": "2026-07-28",
+        "supportedVersions": ["2026-07-28"]
+      },
+      "serverInfo": {
+        "name": "PodcastTranscriptSearch",
+        "version": "0.2.8",
+        "websiteUrl": "https://podcasts.petabloom.com"
+      },
+      "capabilities": {
+        "extensions": {
+          "io.modelcontextprotocol/ui": {}
+        },
+        "logging": {},
+        "prompts": {
+          "listChanged": false
+        },
+        "resources": {
+          "listChanged": false,
+          "subscribe": false
+        },
+        "tools": {
+          "listChanged": false
+        }
+      },
+      "instructions": "Tools to discover podcast episodes and retrieve transcripts for quoting, analysis, and summarization.\n\nTwo search tools, with different strengths — pick deliberately:\n\n* `search_episodes`: lexical / full-text matching over titles, descriptions, and authors.\n  Best when the user names a specific person, company, product, or wants verbatim phrasing.\n  Example queries that work well here: \"Sam Altman\", \"Anthropic\", \"Theo Epstein\", \"EU AI Act\".\n\n* `search_episodes_by_topic`: semantic matching over LLM-extracted topic phrases per episode.\n  Best for concepts, themes, and paraphrased queries — matches by meaning, not exact wording.\n  Returns the matched topic phrases alongside each episode so you can see *why* it matched.\n  Example queries that work well here: \"AI safety\", \"GPU supply constraints\",\n  \"roster construction in baseball\", \"monetary policy and inflation\".\n\nIf you're unsure which to use, prefer `search_episodes_by_topic` for thematic questions and\n`search_episodes` when the user named a specific entity. Either tool composes with\n`get_transcript` the same way: pick GUIDs from the result, then fetch transcript chunks.\n\nPagination: `search_episodes`, `search_episodes_by_topic`, and `get_latest_episodes` return\n`total_count` plus a `next_cursor`. To get the next page, pass that value back as `cursor`;\nstop when `next_cursor` is null. Don't synthesize your own cursor — only follow `next_cursor`.\nFor the lexical/date tools `total_count` is the exact number of matching episodes. For\n`search_episodes_by_topic` it is counted over the nearest-match candidate window; when the\nresponse sets `total_count_is_approximate` to true, treat `total_count` as a lower bound and\nrefine the query if you need a complete set.\n\nUse when the user wants:\n1) Exact quotes from an episode\n   - \"What did {person} say about {topic} on {show}?\"\n   - Flow: `search_episodes` -> pick episode GUID(s) -> `get_transcript` -> quote relevant lines.\n\n2) Episodes about a topic, theme, or concept\n   - \"Find recent episodes discussing {topic}.\" / \"Anything about {concept}?\"\n   - Flow: `search_episodes_by_topic` (topic={topic}) -> inspect `matched_topics` to confirm\n     relevance -> optionally `get_transcript` for evidence/quotes.\n\n3) What is new / latest releases\n   - \"Any new episodes from {show}?\" / \"What dropped this week?\"\n   - Flow: `get_latest_episodes` -> optionally `get_transcript` for summaries.\n\n4) Summaries grounded in transcripts\n   - \"Summarize the discussion of {topic} across these episodes with citations.\"\n   - Flow: `search_episodes_by_topic` -> `get_transcript` -> summarize with quoted support.\n\nIf you encounter a bug or missing capability, call `give_feedback` with feedback.",
+      "tools": [
+        {
+          "name": "get_latest_episodes",
+          "title": "Get Latest Episodes",
+          "description": "Return the most recent transcript-ready episodes across the full podcast catalog.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "cursor": {
+                "default": 0,
+                "description": "Zero-based episode offset for pagination. Use the `next_cursor` returned by a prior search/listing call to fetch the next page of results.",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "limit": {
+                "default": 5,
+                "description": "Maximum number of episodes to return. Must be between 1 and 50.",
+                "maximum": 50,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "published_after": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Inclusive lower publication-date bound. Accepts YYYY-MM-DD or ISO 8601 datetime."
+              },
+              "published_before": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Inclusive upper publication-date bound. Accepts YYYY-MM-DD or ISO 8601 datetime."
+              },
+              "sort": {
+                "default": "published_desc",
+                "description": "Sort order for results. `relevance` ranks full-text searches first and falls back to newest-first when no query is provided.",
+                "enum": ["relevance", "published_desc", "published_asc"],
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "outputSchema": {
+            "properties": {
+              "count": {
+                "description": "Number of episodes returned on this page.",
+                "type": "integer"
+              },
+              "episodes": {
+                "description": "Matching transcript-ready episodes.",
+                "items": {
+                  "properties": {
+                    "description": {
+                      "description": "Episode description, truncated for search result display.",
+                      "type": "string"
+                    },
+                    "duration_seconds": {
+                      "anyOf": [
+                        {
+                          "type": "integer"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "default": null,
+                      "description": "Episode duration in seconds when available from the source feed."
+                    },
+                    "episode_guid": {
+                      "description": "Podcast episode GUID.",
+                      "type": "string"
+                    },
+                    "episode_title": {
+                      "description": "Podcast episode title.",
+                      "type": "string"
+                    },
+                    "published_date": {
+                      "description": "Episode publication timestamp in ISO 8601 format.",
+                      "type": "string"
+                    },
+                    "rss_feed_url": {
+                      "description": "RSS feed URL for the podcast show.",
+                      "type": "string"
+                    },
+                    "show_guid": {
+                      "description": "Podcast show GUID.",
+                      "type": "string"
+                    },
+                    "show_title": {
+                      "description": "Podcast show title.",
+                      "type": "string"
+                    }
+                  },
+                  "required": ["description", "episode_guid", "episode_title", "published_date", "rss_feed_url", "show_guid", "show_title"],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "next_cursor": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Cursor to pass to the next search call to retrieve the next page of results, or null if there are no more pages."
+              },
+              "total_count": {
+                "description": "Total number of matching transcript-ready episodes across all pages.",
+                "type": "integer"
+              },
+              "total_count_is_approximate": {
+                "default": false,
+                "description": "When true, `total_count` is a lower bound — more matches may exist than were counted. False for exact lexical/date counts; can be true only for semantic results (e.g. the topic-search fallback).",
+                "type": "boolean"
+              }
+            },
+            "required": ["count", "episodes", "total_count"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Get Latest Episodes"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "icons": [
+            {
+              "src": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgc3Ryb2tlPSIjRjU5RTBCIiBzdHJva2Utd2lkdGg9IjIiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCI+CiAgPGNpcmNsZSBjeD0iMTIiIGN5PSIxMiIgcj0iMTAiPjwvY2lyY2xlPgogIDxwb2x5bGluZSBwb2ludHM9IjEyIDYgMTIgMTIgMTYgMTQiPjwvcG9seWxpbmU+Cjwvc3ZnPg==",
+              "mimeType": "image/svg+xml"
+            }
+          ],
+          "meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "digest": "sha256:580d13229d75d3498fc1003089f78379e17b34020277d7901e6a72e069d239c8"
+        },
+        {
+          "name": "get_transcript",
+          "title": "Get Transcript",
+          "description": "Fetch a bounded transcript chunk for a specific episode using its show and episode GUIDs. Use `next_cursor` to continue reading.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "cursor": {
+                "default": 0,
+                "description": "Zero-based character offset into the transcript. Use the `next_cursor` returned by a prior get_transcript call to fetch the next chunk.",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "episode_guid": {
+                "description": "Episode GUID returned by `search_episodes` or `get_latest_episodes`.",
+                "minLength": 1,
+                "type": "string"
+              },
+              "max_chars": {
+                "default": 12000,
+                "description": "Target maximum number of transcript characters to return. Chunks prefer natural boundaries and may be slightly shorter. Must be between 100 and 20000.",
+                "maximum": 20000,
+                "minimum": 100,
+                "type": "integer"
+              },
+              "show_guid": {
+                "description": "Podcast show GUID returned by `search_episodes` or `get_latest_episodes`.",
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": ["episode_guid", "show_guid"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "properties": {
+              "char_end": {
+                "description": "Exclusive zero-based end offset of this chunk in the complete transcript.",
+                "type": "integer"
+              },
+              "char_start": {
+                "description": "Inclusive zero-based start offset of this chunk in the complete transcript.",
+                "type": "integer"
+              },
+              "duration_seconds": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Episode duration in seconds when available from the source feed."
+              },
+              "episode_guid": {
+                "description": "Podcast episode GUID requested by the client.",
+                "type": "string"
+              },
+              "episode_title": {
+                "description": "Podcast episode title.",
+                "type": "string"
+              },
+              "has_more": {
+                "description": "Whether another get_transcript call is needed to continue reading.",
+                "type": "boolean"
+              },
+              "next_cursor": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Cursor to pass to the next get_transcript call, or null at the end."
+              },
+              "published_date": {
+                "description": "Episode publication timestamp in ISO 8601 format.",
+                "type": "string"
+              },
+              "rss_feed_url": {
+                "description": "RSS feed URL for the podcast show.",
+                "type": "string"
+              },
+              "show_guid": {
+                "description": "Podcast show GUID requested by the client.",
+                "type": "string"
+              },
+              "show_title": {
+                "description": "Podcast show title.",
+                "type": "string"
+              },
+              "text": {
+                "description": "Transcript chunk text.",
+                "type": "string"
+              },
+              "total_chars": {
+                "description": "Total character count of the complete transcript text.",
+                "type": "integer"
+              }
+            },
+            "required": ["char_end", "char_start", "episode_guid", "episode_title", "has_more", "published_date", "rss_feed_url", "show_guid", "show_title", "text", "total_chars"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Get Transcript"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "icons": [
+            {
+              "src": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgc3Ryb2tlPSIjQTg1NUY3IiBzdHJva2Utd2lkdGg9IjIiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCI+CiAgPHBhdGggZD0iTTE0IDJINmEyIDIgMCAwIDAtMiAydjE2YTIgMiAwIDAgMCAyIDJoMTJhMiAyIDAgMCAwIDItMlY4eiI+PC9wYXRoPgogIDxwb2x5bGluZSBwb2ludHM9IjE0IDIgMTQgOCAyMCA4Ij48L3BvbHlsaW5lPgogIDxsaW5lIHgxPSIxNiIgeTE9IjEzIiB4Mj0iOCIgeTI9IjEzIj48L2xpbmU+CiAgPGxpbmUgeDE9IjE2IiB5MT0iMTciIHgyPSI4IiB5Mj0iMTciPjwvbGluZT4KICA8cG9seWxpbmUgcG9pbnRzPSIxMCA5IDkgOSA4IDkiPjwvcG9seWxpbmU+Cjwvc3ZnPg==",
+              "mimeType": "image/svg+xml"
+            }
+          ],
+          "meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "digest": "sha256:dea0e9491f1849203d277badcccdddb8ff284c30a4c0238ec818ec1620f99070"
+        },
+        {
+          "name": "give_feedback",
+          "title": "Give Feedback",
+          "description": "Send structured feedback about bugs, missing data, unclear behavior, or feature requests.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "feedback": {
+                "description": "Feedback for the server team. Include the problem, missing capability, or suggested improvement without sensitive user data.",
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": ["feedback"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "properties": {
+              "feedback_id": {
+                "description": "Stable feedback identifier.",
+                "type": "string"
+              },
+              "message": {
+                "description": "Human-readable result summary.",
+                "type": "string"
+              },
+              "status": {
+                "description": "Feedback persistence status.",
+                "enum": ["saved", "logged"],
+                "type": "string"
+              }
+            },
+            "required": ["feedback_id", "message", "status"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": false,
+            "openWorldHint": true,
+            "readOnlyHint": false,
+            "title": "Give Feedback"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "icons": [
+            {
+              "src": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgc3Ryb2tlPSIjRUM0ODk5IiBzdHJva2Utd2lkdGg9IjIiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCI+CiAgPHBhdGggZD0iTTIxIDExLjVhOC4zOCA4LjM4IDAgMCAxLS45IDMuOCA4LjUgOC41IDAgMCAxLTcuNiA0LjcgOC4zOCA4LjM4IDAgMCAxLTMuOC0uOUwzIDIxbDEuOS01LjdhOC4zOCA4LjM4IDAgMCAxLS45LTMuOCA4LjUgOC41IDAgMCAxIDQuNy03LjYgOC4zOCA4LjM4IDAgMCAxIDMuOC0uOWguNWE4LjQ4IDguNDggMCAwIDEgOCA4di41eiI+PC9wYXRoPgogIDxwYXRoIGQ9Ik0xNSA5bC0zIDMtMi0yLTQgNCI+PC9wYXRoPgo8L3N2Zz4=",
+              "mimeType": "image/svg+xml"
+            }
+          ],
+          "meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "digest": "sha256:09e33219c4eeec876b8a75761fc8a79b7117c32c24da2eede3b2a4b162902679"
+        },
+        {
+          "name": "search_episodes",
+          "title": "Search Episodes",
+          "description": "Search indexed podcast episodes by keyword or show name and return the show/episode GUIDs needed for transcript retrieval.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "cursor": {
+                "default": 0,
+                "description": "Zero-based episode offset for pagination. Use the `next_cursor` returned by a prior search/listing call to fetch the next page of results.",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "limit": {
+                "default": 5,
+                "description": "Maximum number of episodes to return. Must be between 1 and 50.",
+                "maximum": 50,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "podcast_name": {
+                "default": "",
+                "description": "Optional podcast title or internal label to narrow results to a specific show.",
+                "type": "string"
+              },
+              "published_after": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Inclusive lower publication-date bound. Accepts YYYY-MM-DD or ISO 8601 datetime."
+              },
+              "published_before": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Inclusive upper publication-date bound. Accepts YYYY-MM-DD or ISO 8601 datetime."
+              },
+              "published_within_hours": {
+                "anyOf": [
+                  {
+                    "maximum": 168,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Filter episodes published in the past X hours. Maximum 168 hours (1 week)."
+              },
+              "query": {
+                "default": "",
+                "description": "Optional search keywords matched against indexed episode content. Use people, topics, companies, or phrases.",
+                "type": "string"
+              },
+              "sort": {
+                "default": "relevance",
+                "description": "Sort order for results. `relevance` ranks full-text searches first and falls back to newest-first when no query is provided.",
+                "enum": ["relevance", "published_desc", "published_asc"],
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "outputSchema": {
+            "properties": {
+              "count": {
+                "description": "Number of episodes returned on this page.",
+                "type": "integer"
+              },
+              "episodes": {
+                "description": "Matching transcript-ready episodes.",
+                "items": {
+                  "properties": {
+                    "description": {
+                      "description": "Episode description, truncated for search result display.",
+                      "type": "string"
+                    },
+                    "duration_seconds": {
+                      "anyOf": [
+                        {
+                          "type": "integer"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "default": null,
+                      "description": "Episode duration in seconds when available from the source feed."
+                    },
+                    "episode_guid": {
+                      "description": "Podcast episode GUID.",
+                      "type": "string"
+                    },
+                    "episode_title": {
+                      "description": "Podcast episode title.",
+                      "type": "string"
+                    },
+                    "published_date": {
+                      "description": "Episode publication timestamp in ISO 8601 format.",
+                      "type": "string"
+                    },
+                    "rss_feed_url": {
+                      "description": "RSS feed URL for the podcast show.",
+                      "type": "string"
+                    },
+                    "show_guid": {
+                      "description": "Podcast show GUID.",
+                      "type": "string"
+                    },
+                    "show_title": {
+                      "description": "Podcast show title.",
+                      "type": "string"
+                    }
+                  },
+                  "required": ["description", "episode_guid", "episode_title", "published_date", "rss_feed_url", "show_guid", "show_title"],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "next_cursor": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Cursor to pass to the next search call to retrieve the next page of results, or null if there are no more pages."
+              },
+              "total_count": {
+                "description": "Total number of matching transcript-ready episodes across all pages.",
+                "type": "integer"
+              },
+              "total_count_is_approximate": {
+                "default": false,
+                "description": "When true, `total_count` is a lower bound — more matches may exist than were counted. False for exact lexical/date counts; can be true only for semantic results (e.g. the topic-search fallback).",
+                "type": "boolean"
+              }
+            },
+            "required": ["count", "episodes", "total_count"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Search Episodes"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "icons": [
+            {
+              "src": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgc3Ryb2tlPSIjMkRENEJGIiBzdHJva2Utd2lkdGg9IjIiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCI+CiAgPHBhdGggZD0iTTIxIDIxbC02LTYiPjwvcGF0aD4KICA8Y2lyY2xlIGN4PSIxMCIgY3k9IjEwIiByPSI3Ij48L2NpcmNsZT4KICA8cGF0aCBkPSJNMTAgN3YzbDIgMiI+PC9wYXRoPgo8L3N2Zz4=",
+              "mimeType": "image/svg+xml"
+            }
+          ],
+          "meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "digest": "sha256:1f0bae28bf5d6cb0d1fb957044911245f8a5a94737b04e92abc1d8b728af8be6"
+        },
+        {
+          "name": "search_episodes_by_topic",
+          "title": "Search Episodes by Topic",
+          "description": "Semantic topic search across the podcast catalog. Unlike `search_episodes` (which does lexical/keyword matching), this tool understands meaning: a query for 'AI safety' will match episodes about 'AI alignment', 'AGI risk', or 'frontier model evaluation' even if they don't contain the exact phrase. Returns ranked episodes with the matched topic phrases so you can explain *why* each result is relevant before fetching the transcript. Best for conceptual or thematic queries — use `search_episodes` instead when the user is looking for a specific person, product, or verbatim phrase.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "cursor": {
+                "default": 0,
+                "description": "Zero-based episode offset for pagination. Use the `next_cursor` returned by a prior search/listing call to fetch the next page of results.",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "limit": {
+                "default": 5,
+                "description": "Maximum number of episodes to return. Must be between 1 and 50.",
+                "maximum": 50,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "published_after": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Inclusive lower publication-date bound. Accepts YYYY-MM-DD or ISO 8601 datetime."
+              },
+              "published_before": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Inclusive upper publication-date bound. Accepts YYYY-MM-DD or ISO 8601 datetime."
+              },
+              "show_guid": {
+                "default": "",
+                "description": "Optional canonical show GUID (as returned by `search_episodes` or `get_latest_episodes` in the `show_guid` field) to restrict topic search to a single podcast. Leave empty to search across all shows.",
+                "type": "string"
+              },
+              "topic": {
+                "description": "Semantic topic to find episodes about. Free-form phrasing welcome — the server embeds this string and finds episodes whose extracted topic phrases are closest in meaning. Good examples: 'AI safety', 'EU AI Act regulation', 'GPU supply constraints', 'Theo Epstein on roster construction'. Distinct from `search_episodes`, which performs lexical keyword matching.",
+                "maxLength": 300,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": ["topic"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "properties": {
+              "count": {
+                "description": "Number of episodes returned on this page.",
+                "type": "integer"
+              },
+              "episodes": {
+                "description": "Episodes ranked by best topic-phrase similarity to the query.",
+                "items": {
+                  "properties": {
+                    "best_similarity": {
+                      "description": "Similarity of the strongest topic match — the value the episodes were sorted by.",
+                      "type": "number"
+                    },
+                    "description": {
+                      "description": "Episode description, truncated for search result display.",
+                      "type": "string"
+                    },
+                    "duration_seconds": {
+                      "anyOf": [
+                        {
+                          "type": "integer"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "default": null,
+                      "description": "Episode duration in seconds when available from the source feed."
+                    },
+                    "episode_guid": {
+                      "description": "Podcast episode GUID.",
+                      "type": "string"
+                    },
+                    "episode_title": {
+                      "description": "Podcast episode title.",
+                      "type": "string"
+                    },
+                    "matched_topics": {
+                      "description": "Topic phrases from this episode that matched the query, ordered by similarity (best first). Use these to summarize *why* the episode is relevant before fetching the full transcript.",
+                      "items": {
+                        "properties": {
+                          "phrase": {
+                            "description": "The extracted topic phrase that matched. Useful for explaining to the user why this episode came back for their query.",
+                            "type": "string"
+                          },
+                          "similarity": {
+                            "description": "Cosine similarity between the query and this topic phrase, in [0.0, 1.0]. Higher is more semantically similar.",
+                            "type": "number"
+                          }
+                        },
+                        "required": ["phrase", "similarity"],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "published_date": {
+                      "description": "Episode publication timestamp in ISO 8601 format.",
+                      "type": "string"
+                    },
+                    "rss_feed_url": {
+                      "description": "RSS feed URL for the podcast show.",
+                      "type": "string"
+                    },
+                    "show_guid": {
+                      "description": "Podcast show GUID.",
+                      "type": "string"
+                    },
+                    "show_title": {
+                      "description": "Podcast show title.",
+                      "type": "string"
+                    }
+                  },
+                  "required": ["best_similarity", "description", "episode_guid", "episode_title", "matched_topics", "published_date", "rss_feed_url", "show_guid", "show_title"],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "next_cursor": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Cursor to pass to the next search call to retrieve the next page of results, or null if there are no more pages."
+              },
+              "query": {
+                "description": "The topic query that was embedded and searched.",
+                "type": "string"
+              },
+              "total_count": {
+                "description": "Number of matching episodes, counted over the nearest-match candidate window rather than the whole catalog. When `total_count_is_approximate` is true, treat this as a lower bound — broad queries may have more matches than reported.",
+                "type": "integer"
+              },
+              "total_count_is_approximate": {
+                "default": false,
+                "description": "True when the candidate window was exhausted, so `total_count` undercounts the true number of matches. When false, `total_count` is exact. Refine the query for tighter results if this is true and you need a complete set.",
+                "type": "boolean"
+              }
+            },
+            "required": ["count", "episodes", "query", "total_count"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Search Episodes by Topic"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "icons": [
+            {
+              "src": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0ibm9uZSIgc3Ryb2tlPSIjMkRENEJGIiBzdHJva2Utd2lkdGg9IjIiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIgc3Ryb2tlLWxpbmVqb2luPSJyb3VuZCI+CiAgPHBhdGggZD0iTTIxIDIxbC02LTYiPjwvcGF0aD4KICA8Y2lyY2xlIGN4PSIxMCIgY3k9IjEwIiByPSI3Ij48L2NpcmNsZT4KICA8cGF0aCBkPSJNMTAgN3YzbDIgMiI+PC9wYXRoPgo8L3N2Zz4=",
+              "mimeType": "image/svg+xml"
+            }
+          ],
+          "meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "digest": "sha256:3a5d05fc52ef49a56086c7f4f5d1fe23f768fcfdd1f1c832214c93121a923473"
+        }
+      ],
+      "resources": [
+        {
+          "uri": "resource://server-guide",
+          "name": "server_guide",
+          "title": "Podcast Transcript Search Guide",
+          "description": "Usage guidance, common workflows, and runtime configuration notes for this MCP server.",
+          "mimeType": "text/markdown",
+          "meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "digest": "sha256:524a9a73801e57d9376e40cf8b567789be741a3e780a52b5a78aacbdd0cc8e80"
+        }
+      ],
+      "prompts": [
+        {
+          "name": "summarize_topic_across_episodes",
+          "title": "Summarize Topic Across Episodes",
+          "description": "Build a grounded workflow for finding episodes on a topic and summarizing them with transcript evidence.",
+          "arguments": [
+            {
+              "name": "topic",
+              "description": "Topic, person, company, or phrase to investigate across episodes.\n\nProvide a value matching the following JSON schema: {\"description\":\"Topic, person, company, or phrase to investigate across episodes.\",\"type\":\"string\"}. Encode non-string values as JSON.",
+              "required": true
+            },
+            {
+              "name": "podcast_name",
+              "description": "Optional podcast title or internal label to narrow results to a specific show.\n\nProvide a value matching the following JSON schema: {\"description\":\"Optional podcast title or internal label to narrow results to a specific show.\",\"type\":\"string\"}. Encode non-string values as JSON.",
+              "required": false
+            },
+            {
+              "name": "max_episodes",
+              "description": "Maximum number of episodes to inspect before summarizing.\n\nProvide a value matching the following JSON schema: {\"description\":\"Maximum number of episodes to inspect before summarizing.\",\"maximum\":10,\"minimum\":1,\"type\":\"integer\"}. Encode non-string values as JSON.",
+              "required": false
+            }
+          ],
+          "meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "digest": "sha256:d6cdc2d8636c7cb26f1bb2302bf423a089c3d56b8bcf06cd1adacdace59f2e1e"
+        }
+      ],
+      "digest": "sha256:58e2336861c0782c2e44651226713d266609906be2100818b44a3d1cf7374fa5"
+    }
+  }
+}

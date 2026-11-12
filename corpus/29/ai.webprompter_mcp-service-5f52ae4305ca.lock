@@ -1,0 +1,313 @@
+{
+  "lockfileVersion": 2,
+  "subjects": {
+    "ai.webprompter/mcp-service": {
+      "kind": "mcp-server",
+      "source": {
+        "client": "manual",
+        "file": "registry.modelcontextprotocol.io"
+      },
+      "transport": {
+        "type": "http",
+        "url": "https://mcp.webprompter.ai/mcp"
+      },
+      "protocol": {
+        "era": "legacy",
+        "version": "2025-11-25"
+      },
+      "serverInfo": {
+        "name": "mcp-service (anonymous)",
+        "title": "webprompter",
+        "version": "0.1.0",
+        "description": "Static site deployment and custom domain connection for coding agents.",
+        "websiteUrl": "https://webprompter.ai"
+      },
+      "capabilities": {
+        "tools": {}
+      },
+      "instructions": "# Static site deploy contract — READ BEFORE building a zip or calling deploy tools\n\nrules_version: 1\n\n## URLs and HTML\n- Files are served under a path prefix: `/sites/{site_id}/{staging|prod}/current/`.\n- Use RELATIVE `href` / `src` (no leading `/`) so assets resolve under that prefix.\n- **cleanUrls trap:** If `static-hosting.json` materializes `somepath/index.html`, the browser URL is `.../somepath/`. Relative `app.js` then resolves to `.../somepath/app.js`, not the zip root. Fix with `../app.js` / `../style.css` in that HTML, link to `.html` instead of `path/`, or duplicate assets under `somepath/`.\n\n## Zip contents\n- `index.html` at zip root is required.\n- Max zip size: 52428800 bytes (~50 MiB).\n- Optional zip root `static-hosting.json`: cleanUrls, preflight.forbidRootRelative, navigationFallback (declares **SPA** vs **MPA** routing; the file itself is **not** uploaded to S3, but its routing intent is honored by the CDN).\n- **SPA** (history-mode router) → set `navigationFallback.enabled: true`. Extensionless paths under the site prefix render the shell HTML (`navigationFallback.rewrite`, default `/index.html`); list path patterns under `navigationFallback.exclude` to skip the shell.\n- **MPA** (multi-page) → omit `navigationFallback` or set `enabled: false`. Extensionless paths resolve to `{path}.html`; unknown extensions are passed through to origin (may 404).\n- With **no** `static-hosting.json` in the zip, routing defaults to **SPA** for backward compatibility.\n\n## MCP workflow (order matters)\n1. `create_site` or `list_sites` → obtain `site_id`.\n2. **`get_deployment_rules`** with that `site_id` → read the full JSON; copy **`deploy_ack_token`**.\n3. Build the zip following the rules above, then `create_deploy_upload` + `commit_deploy_upload` (always staging) — pass the same **`deploy_ack_token`** on both.\n4. When staging looks good, call **`promote_staging_to_prod`** to go live on production.\n5. To edit an older version: **`list_deployments`** → **`download_deployment`** (presigned zip) → change files → redeploy to staging.\n6. Only the current deployment plus **5 previous versions** per environment are kept; older versions are marked **deleted** (artifacts removed, history row retained).\n\n## Custom domain (BYO DNS, prod only)\n- Requires an **active prod** deployment and an **active domain subscription** (subscribe in the web console first; deploys are free).\n- `connect_custom_domain` → add returned **cert_validation** CNAMEs at your DNS host (apex + www).\n- Poll `get_custom_domain_status` until status is `active` (typically 10–30 minutes).\n- When status reaches `awaiting_routing_dns`, add **routing** DNS: point apex (ALIAS/A) and www (CNAME) to the CloudFront domain shown.\n- `disconnect_custom_domain` removes the connection (best-effort CDN/ACM cleanup).\n\n## When deploy returns 400\n- Parse tool error JSON: **`details.agent_fix`** and **`details.violation`**; fix the artifact and retry (do not recreate the site unless the slug was wrong).\n\n\n---\n\nAuthentication required. To use the webprompter MCP server:\n  1. Create an account at https://webprompter.ai/console#signup\n  2. Log in and create an API key in the \"API keys\" panel\n  3. Add it to mcp.json under headers[\"X-Api-Key\"] as your raw key: wpk_live_...\n\nSign up: https://webprompter.ai/console#signup\nConsole: https://webprompter.ai/console",
+      "tools": [
+        {
+          "name": "commit_deploy_upload",
+          "description": "Finalize deploy after PUT using upload_id. Pass the same deploy_ack_token from get_deployment_rules for this site as on create_deploy_upload when MCP_ENFORCE_DEPLOY_ACK is on.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "deploy_ack_token": {
+                "description": "From get_deployment_rules.deploy_ack_token (required when MCP_ENFORCE_DEPLOY_ACK is true).",
+                "type": "string"
+              },
+              "upload_id": {
+                "type": "string"
+              }
+            },
+            "required": ["upload_id"],
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:bf988c1deed1c049a03087e3c92022632ec75b300de281df72132037673de8a1"
+        },
+        {
+          "name": "connect_custom_domain",
+          "description": "Attach an externally owned domain to a site's live prod deployment. Returns ACM DNS validation CNAMEs (apex + www). Requires active prod deploy and an active domain subscription (subscribe in console first).",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "hostname": {
+                "description": "Apex hostname (e.g. example.com)",
+                "type": "string"
+              },
+              "site_id": {
+                "type": "string"
+              }
+            },
+            "required": ["hostname", "site_id"],
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:b1d0c33c3c523fc94ee3a315e86d0fde191dbb27f6522f64020fb72bda3a33e9"
+        },
+        {
+          "name": "create_deploy_upload",
+          "description": "Start a staging deploy: request presigned PUT URL for the zip. Use promote_staging_to_prod to go live on production. Requires deploy_ack_token from get_deployment_rules when MCP_ENFORCE_DEPLOY_ACK is on. Pass the same token to commit_deploy_upload. Returns upload_id; PUT the zip then commit_deploy_upload.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "deploy_ack_token": {
+                "description": "From get_deployment_rules.deploy_ack_token (required when MCP_ENFORCE_DEPLOY_ACK is true).",
+                "type": "string"
+              },
+              "sha256_hex": {
+                "description": "Optional SHA-256 digest hex for upload integrity verification.",
+                "type": "string"
+              },
+              "site_id": {
+                "type": "string"
+              },
+              "size_bytes": {
+                "description": "Expected zip size in bytes.",
+                "type": "number"
+              }
+            },
+            "required": ["site_id", "size_bytes"],
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:88ca71e8b7eb65bf80284f4a3d07db9de3e8047a7dc78469b8a24e995a50e224"
+        },
+        {
+          "name": "create_site",
+          "description": "Create a new site owned by the caller. Site name must be lowercase letters/digits/hyphens, 1-64 chars. Returns { site } only. Read server instructions and call get_deployment_rules before building a zip or deploying.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "name": {
+                "description": "Site slug",
+                "type": "string"
+              }
+            },
+            "required": ["name"],
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:a875c62d2eba4a8ecb365871f72bcdf0386388534059f4dc609965d4f29d01e6"
+        },
+        {
+          "name": "disconnect_custom_domain",
+          "description": "Remove custom domain connection for a site (best-effort CloudFront disable + ACM delete).",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "site_id": {
+                "type": "string"
+              }
+            },
+            "required": ["site_id"],
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:8662bcc865fd179da3fc9463fa0171cc4f573c7809c2e3feeced3730379f88e3"
+        },
+        {
+          "name": "download_deployment",
+          "description": "Download a deployment version as a zip (presigned GET URL, expires in ~15 minutes). Use list_deployments to find deployment_id. Omits cleanUrls materialized copies when possible and includes static-hosting.json for editing and redeploying to staging.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "deployment_id": {
+                "type": "string"
+              },
+              "site_id": {
+                "type": "string"
+              }
+            },
+            "required": ["deployment_id", "site_id"],
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:55bd29da7785a7169c69a52de130343151e631f2e96bb4ad995b7fbbbe1617d5"
+        },
+        {
+          "name": "get_custom_domain_status",
+          "description": "Poll custom domain setup progress; triggers one processing tick. Returns steps and dns_records (cert validation + routing).",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "site_id": {
+                "type": "string"
+              }
+            },
+            "required": ["site_id"],
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:a18921e85a70a1b92505e7de2ce27edd50a43df8c94f1d131d4e01b95eb549d0"
+        },
+        {
+          "name": "get_deployment_rules",
+          "description": "REQUIRED before deploy: returns platform deploy rules + a site-scoped checklist, example URLs for this site_id, and a short-lived deploy_ack_token. Call after create_site or list_sites. Pass the token to create_deploy_upload and commit_deploy_upload.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "site_id": {
+                "description": "Site UUID from create_site / list_sites",
+                "type": "string"
+              }
+            },
+            "required": ["site_id"],
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:21d34fabfa051154ee45fd2920e4310f6c94298aa273f99afe2694be86ffc69c"
+        },
+        {
+          "name": "list_deployments",
+          "description": "List deployments for a site, optionally filtered to one environment. Excludes pruned (deleted) versions. Only the current deployment plus 5 previous versions per environment are retained.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "environment": {
+                "enum": ["staging", "prod"],
+                "type": "string"
+              },
+              "site_id": {
+                "type": "string"
+              }
+            },
+            "required": ["site_id"],
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:2169fd16b091649549a01ba89b5559c064fb88c489208ee561e3d6339b7e9833"
+        },
+        {
+          "name": "list_sites",
+          "description": "List all sites owned by the authenticated caller, including deploy URLs, custom domain status, and bandwidth usage (with warning at 80% and shutdown message when the custom domain is suspended).",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {},
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:d7d162a6d7626f0b1390cb66f965d04ba7f2fd045235f173fee0468f025e03d7"
+        },
+        {
+          "name": "promote_staging_to_prod",
+          "description": "Promote the current staging deployment to production (the only way to go live on prod). Copies the active staging artifact into a new prod version. Requires an active current staging deployment; does not accept a zip.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "site_id": {
+                "type": "string"
+              }
+            },
+            "required": ["site_id"],
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:3522df3a756a8fef74cbddea3ef9fce027fa0dc63461b22ea7b0608d0b3db404"
+        },
+        {
+          "name": "rollback_deployment",
+          "description": "Promote a previous deployment back to current for its environment.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "deployment_id": {
+                "type": "string"
+              },
+              "site_id": {
+                "type": "string"
+              }
+            },
+            "required": ["deployment_id", "site_id"],
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:4211ef0620e47c51efe6f03bd679e719bebc9a4dd1778d045c9eba23f9418b13"
+        }
+      ],
+      "digest": "sha256:e4731c85aa86855434cb5330fe01cb42b1ab602bfdd17ed7d7304d3e5ed1ec37"
+    }
+  }
+}

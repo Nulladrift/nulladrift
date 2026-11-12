@@ -1,0 +1,583 @@
+{
+  "lockfileVersion": 2,
+  "subjects": {
+    "com.meettempi/tempi": {
+      "kind": "mcp-server",
+      "source": {
+        "client": "manual",
+        "file": "registry.modelcontextprotocol.io"
+      },
+      "transport": {
+        "type": "http",
+        "url": "https://meettempi.com/mcp"
+      },
+      "protocol": {
+        "era": "legacy",
+        "version": "2025-06-18"
+      },
+      "serverInfo": {
+        "name": "tempi",
+        "title": "Tempi scheduling",
+        "version": "1.0.0"
+      },
+      "capabilities": {
+        "resources": {
+          "listChanged": false
+        },
+        "tools": {
+          "listChanged": false
+        }
+      },
+      "instructions": "Book meetings with people and teams on Tempi: get_public_profile → get_available_slots → create_booking. A booking link works wherever a handle or slug is asked for. Pass the user's time zone as `timezone` (an IANA id, or an abbreviation like EST) and show them the local `times` and `when` the results give, not the UTC values. Keep the returned manageUrl: it is needed to view, reschedule or cancel. Paid events return a paymentUrl the user must open. To manage the user's own Tempi account, connect to /mcp/account (OAuth sign-in).",
+      "tools": [
+        {
+          "name": "cancel_booking_as_invitee",
+          "title": "Cancel a booking (invitee)",
+          "description": "Cancels a booking by its id and token. The event is removed from the host's calendar. Paid bookings cancelled before `refundableUntil` are refunded in full. Later cancellations get no refund. The event type sets the rules, which get_booking shows: no changes after `changeableUntil` (409 change_too_late), no cancelling when `canCancel` is false (409 cancel_not_allowed, reschedule instead).",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "following": {
+                "description": "for a series: also cancel every later meeting",
+                "type": "boolean"
+              },
+              "id": {
+                "description": "the booking id from create_booking, or its manageUrl",
+                "type": "string"
+              },
+              "reason": {
+                "description": "why the invitee cancels, sent to the host",
+                "maxLength": 500,
+                "minLength": 0,
+                "title": "maxLength(500)",
+                "type": "string"
+              },
+              "token": {
+                "description": "the token from create_booking, or the manageUrl",
+                "type": "string"
+              }
+            },
+            "required": ["id", "token"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": false,
+            "readOnly": false
+          },
+          "digest": "sha256:7f756891be67d95375cd3c0f0ba79d67029c517535563009ddf397a6516569b6"
+        },
+        {
+          "name": "check_series",
+          "title": "Check a repeating series before booking it",
+          "description": "For event types with `repeatMax` (from get_public_profile): lists each meeting of a series that starts at `start` (one of the slots) and repeats `every` 1, 2 or 4 weeks at the host's clock time, and whether each is free. Pass the invitee's `timezone` to get each meeting's `when` in it: where clocks change on other dates than the host's, some meetings move for the invitee, and `message` says which. Book it with create_booking and `repeat` when `bookable` is true. A series is booked whole or not at all, and round robin gives every meeting to the same host.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "count": {
+                "anyOf": [
+                  {
+                    "description": "how many meetings, first included (2 up to the event type's repeatMax)",
+                    "maximum": 52,
+                    "minimum": 2,
+                    "title": "between(2, 52)",
+                    "type": "integer"
+                  },
+                  {
+                    "description": "a string to be decoded into a number",
+                    "type": "string"
+                  }
+                ],
+                "description": "how many meetings, first included (2 up to the event type's repeatMax)"
+              },
+              "every": {
+                "anyOf": [
+                  {
+                    "description": "weeks between meetings: 1, 2 or 4",
+                    "enum": [1, 2, 4],
+                    "type": "number"
+                  },
+                  {
+                    "description": "a string to be decoded into a number",
+                    "type": "string"
+                  }
+                ],
+                "description": "weeks between meetings: 1, 2 or 4"
+              },
+              "handle": {
+                "description": "a handle, the first part of a booking link (\"acme\" in meettempi.com/acme/demo), or the whole link",
+                "type": "string"
+              },
+              "slug": {
+                "description": "an event type slug from get_public_profile (\"demo\" in meettempi.com/acme/demo), or the whole link",
+                "type": "string"
+              },
+              "start": {
+                "description": "one of the `slots` values from get_available_slots, as given (ISO in UTC)",
+                "format": "date-time",
+                "type": "string"
+              },
+              "timezone": {
+                "description": "the invitee's time zone, an IANA id like America/New_York or an abbreviation like EST: each meeting's `when` is in it",
+                "type": "string"
+              }
+            },
+            "required": ["count", "every", "handle", "slug", "start"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "openWorldHint": false,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:9677d62d08ac24465b53e4afbeffe1d180991a7eae877c8fe60ecb2ca042d460"
+        },
+        {
+          "name": "create_booking",
+          "title": "Book a meeting",
+          "description": "Books `start`, which must be one of the `slots` from get_available_slots. Free events are confirmed at once, unless the event type has `requiresApproval`: then it's a request (status=pending_approval) that holds the time until a host approves or declines it, and the invitee hears either way by email. Nobody answering by its start (`holdExpiresAt`) lets it lapse. Tell the human it isn't confirmed yet. Paid events return status=pending_payment and a `paymentUrl`. Give it to the human to pay before `holdExpiresAt`, or the slot is released. Once confirmed, the event is added to the host's calendar if they connected one, and the invitee gets a confirmation email with a calendar file (.ics). Keep `manageUrl` and `token`: they are the only way to view, reschedule or cancel later. 409 slot_unavailable says why the time can't be booked and lists the `nearest` open times. The result's `when` is the start in the invitee's time zone, to tell them.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "cover": {
+                "description": "leave it out: the id of the painting the booking page showed, when the event type shows a different one each booking (cover \"hand\", \"light\" or \"still\"), so the booking keeps it. Anything else is ignored, and Tempi picks one",
+                "maxLength": 40,
+                "title": "maxLength(40)",
+                "type": "string"
+              },
+              "email": {
+                "description": "the invitee's email address, which gets the confirmation and its calendar file",
+                "format": "email",
+                "type": "string"
+              },
+              "handle": {
+                "description": "a handle, the first part of a booking link (\"acme\" in meettempi.com/acme/demo), or the whole link",
+                "type": "string"
+              },
+              "name": {
+                "description": "the invitee's full name",
+                "type": "string"
+              },
+              "notes": {
+                "description": "anything the invitee wants the host to know",
+                "maxLength": 2000,
+                "minLength": 0,
+                "title": "maxLength(2000)",
+                "type": "string"
+              },
+              "phone": {
+                "description": "the invitee's phone number with its country code, like +1 415 555 0134: required when the event type is a phone call (whereKind phone on get_public_profile), where the host calls them",
+                "maxLength": 40,
+                "minLength": 0,
+                "title": "maxLength(40)",
+                "type": "string"
+              },
+              "repeat": {
+                "additionalProperties": false,
+                "description": "book a series instead: `count` meetings, `every` 1, 2 or 4 weeks at the host's clock time, when the event type's repeatMax allows. All or nothing: check_series first. The result's `series.meetings` give each start as `when` in the invitee's time zone, and `series.clockNote` says when that moves",
+                "properties": {
+                  "count": {
+                    "description": "how many meetings, first included (2 up to the event type's repeatMax)",
+                    "maximum": 52,
+                    "minimum": 2,
+                    "title": "between(2, 52)",
+                    "type": "integer"
+                  },
+                  "every": {
+                    "description": "weeks between meetings: 1, 2 or 4",
+                    "enum": [1, 2, 4],
+                    "type": "number"
+                  }
+                },
+                "required": ["count", "every"],
+                "type": "object"
+              },
+              "slug": {
+                "description": "an event type slug from get_public_profile (\"demo\" in meettempi.com/acme/demo), or the whole link",
+                "type": "string"
+              },
+              "start": {
+                "description": "one of the `slots` values from get_available_slots, as given (ISO in UTC)",
+                "format": "date-time",
+                "type": "string"
+              },
+              "timezone": {
+                "description": "the invitee's time zone, an IANA id like America/New_York or an abbreviation like EST: their emails and reminders show times in it",
+                "type": "string"
+              }
+            },
+            "required": ["email", "handle", "name", "slug", "start", "timezone"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "openWorldHint": false,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": false,
+            "openWorld": false,
+            "readOnly": false
+          },
+          "meta": {
+            "ui": {
+              "resourceUri": "ui://tempi/booking-card.html"
+            },
+            "ui/resourceUri": "ui://tempi/booking-card.html"
+          },
+          "digest": "sha256:178b15c2907f928d87f1ba4929f2a6f8405476e84d34bf345895747551a9772e"
+        },
+        {
+          "name": "get_available_slots",
+          "title": "Find open times",
+          "description": "Returns the start times that can be booked, with the hosts' calendars, buffers and limits already applied. Pass the invitee's `timezone` and either `date` (YYYY-MM-DD in `timezone`) or `from` and `to` (ISO, at most 62 days apart). With neither, it covers the next 7 days. `days` groups the slots by date in `timezone`, and `times` gives each slot as a local time to show people. People can book up to `bookableUntil`. When the range has no open times, `next` is the next one. When `timezone` was an abbreviation that names more than one zone (CST, IST, BST), `timezoneNote` says which one was used: check it with the person. For new times for an existing booking, also pass its `bookingId` and `token`. Next: call create_booking (or reschedule_booking_as_invitee) with one of the `slots` values as `start`.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "bookingId": {
+                "description": "the booking id from create_booking, or its manageUrl",
+                "type": "string"
+              },
+              "date": {
+                "description": "one day to look at, as YYYY-MM-DD in `timezone`",
+                "format": "date",
+                "type": "string"
+              },
+              "from": {
+                "description": "start of the range, ISO with an offset",
+                "format": "date-time",
+                "type": "string"
+              },
+              "handle": {
+                "description": "a handle, the first part of a booking link (\"acme\" in meettempi.com/acme/demo), or the whole link",
+                "type": "string"
+              },
+              "slug": {
+                "description": "an event type slug from get_public_profile (\"demo\" in meettempi.com/acme/demo), or the whole link",
+                "type": "string"
+              },
+              "timezone": {
+                "description": "the invitee's time zone, an IANA id like America/New_York or an abbreviation like EST: days, dates and times are in it",
+                "type": "string"
+              },
+              "to": {
+                "description": "end of the range, ISO with an offset",
+                "format": "date-time",
+                "type": "string"
+              },
+              "token": {
+                "description": "the token from create_booking, or the manageUrl",
+                "type": "string"
+              }
+            },
+            "required": ["handle", "slug", "timezone"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "openWorldHint": false,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:9ac7bc4bd80da2b422d4cb4af4e5fa54fe75592e7bfb6764c82e56d3830b42dd"
+        },
+        {
+          "name": "get_booking",
+          "title": "View a booking (invitee)",
+          "description": "Returns a booking by its id and token (from create_booking), or its manageUrl passed as both, with `changeableUntil`, `refundableUntil` and `canCancel`. For a series, `series` lists every meeting with its own manageUrl.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "description": "the booking id from create_booking, or its manageUrl",
+                "type": "string"
+              },
+              "token": {
+                "description": "the token from create_booking, or the manageUrl",
+                "type": "string"
+              }
+            },
+            "required": ["id", "token"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "openWorldHint": false,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "ui": {
+              "resourceUri": "ui://tempi/booking-card.html"
+            },
+            "ui/resourceUri": "ui://tempi/booking-card.html"
+          },
+          "digest": "sha256:2a2dc71cbb417cb9f03e2062b9ef7f92e619ba3c0c3e812f187047de1e944cff"
+        },
+        {
+          "name": "get_public_profile",
+          "title": "List a person's or team's event types",
+          "description": "Takes a handle, the first path segment of a booking link (https://host/acme/demo → \"acme\"), or the link itself. Returns the person or team and their bookable event types, with duration, price, and hosts with their time zones (`hostTimezones`, so you can say what time a slot is for them). A handle from before a rename also works. Next: call get_available_slots with one of the event type slugs.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "handle": {
+                "description": "a handle, the first part of a booking link (\"acme\" in meettempi.com/acme/demo), or the whole link",
+                "type": "string"
+              }
+            },
+            "required": ["handle"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "openWorldHint": false,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:d407a7841413e0d1141028b74a43b9b6a86edadf7f2193b199ce606430ce2c1c"
+        },
+        {
+          "name": "get_shared_booking",
+          "title": "View a shared invitation",
+          "description": "Returns the invitation behind a shared booking’s link (\"…/i/<token>\"): what, when, with whom, its status (upcoming, cancelled or past), its style, and where to book the same host. 404 once its sharer stopped sharing it.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "token": {
+                "description": "the invitation’s address (\".../i/<token>\") or its token",
+                "type": "string"
+              }
+            },
+            "required": ["token"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "openWorldHint": false,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:11198815142e24a35ba4fe95bb2f2b5028cfa498d5e67ecfc80b6d75730fa8ab"
+        },
+        {
+          "name": "join_waitlist",
+          "title": "Join the private beta waitlist",
+          "description": "Requests access to host on Tempi (create event types, share a booking page). Not needed to book meetings, since booking pages are public. Returns the status: pending, approved (sign in to the Tempi web app), rejected, or open (no waitlist, sign in directly). Joining again with the same email returns the current status.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "email": {
+                "description": "an email address",
+                "format": "email",
+                "type": "string"
+              },
+              "name": {
+                "description": "the person’s name (at most 100 characters)",
+                "maxLength": 100,
+                "minLength": 0,
+                "title": "maxLength(100)",
+                "type": "string"
+              },
+              "note": {
+                "description": "anything the admins should know, e.g. what you want to use Tempi for",
+                "maxLength": 1000,
+                "minLength": 0,
+                "title": "maxLength(1000)",
+                "type": "string"
+              },
+              "ref": {
+                "description": "a short source tag of lowercase letters, digits, - or _, like \"embed\"",
+                "pattern": "^[a-z0-9_-]{1,32}$",
+                "type": "string"
+              }
+            },
+            "required": ["email"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "openWorldHint": false,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": false,
+            "openWorld": false,
+            "readOnly": false
+          },
+          "digest": "sha256:2e02b6ad19c06e9137b892c6da6de66292851e017629c6e60fbeb3813c382659"
+        },
+        {
+          "name": "reschedule_booking_as_invitee",
+          "title": "Reschedule a booking (invitee)",
+          "description": "Moves a confirmed booking to `start` with the same hosts. Get valid times from get_available_slots with this `bookingId` and `token`. The calendar event is updated and its provider notifies attendees. Payment carries over. Not possible after `changeableUntil` (409 change_too_late). A request (status=pending_approval) can’t be moved: cancel it and request another time.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "description": "the booking id from create_booking, or its manageUrl",
+                "type": "string"
+              },
+              "start": {
+                "description": "one of the `slots` values from get_available_slots, as given (ISO in UTC)",
+                "format": "date-time",
+                "type": "string"
+              },
+              "token": {
+                "description": "the token from create_booking, or the manageUrl",
+                "type": "string"
+              }
+            },
+            "required": ["id", "start", "token"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "openWorldHint": false,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": false,
+            "openWorld": false,
+            "readOnly": false
+          },
+          "meta": {
+            "ui": {
+              "resourceUri": "ui://tempi/booking-card.html"
+            },
+            "ui/resourceUri": "ui://tempi/booking-card.html"
+          },
+          "digest": "sha256:c118d9b6db92cfe6b8892fd3c091e9f78389ad35d11a119459f7252395ad51dc"
+        },
+        {
+          "name": "share_booking_as_invitee",
+          "title": "Share a booking as an invitation (invitee)",
+          "description": "Turns a confirmed booking into an invitation page anyone with its `url` can open: what, when (in the reader’s time zone) and with whom. It never shows the invitee’s email, phone or notes, and shows the meeting link only with `includeLink`. Calling it again changes the style or the link and keeps the same `url`. stop_sharing_booking_as_invitee ends it.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "description": "the booking id from create_booking, or its manageUrl",
+                "type": "string"
+              },
+              "includeLink": {
+                "description": "true: the invitation shows the meeting link, so anyone with it can join the call. Off by default.",
+                "type": "boolean"
+              },
+              "style": {
+                "description": "how the invitation looks: light (the default), poster (dark, the name large, in the event type's color) or glow (its painting as light). Older names still work and give the nearest of the three",
+                "enum": ["light", "poster", "glow", "painting", "night", "dots", "sky", "gradient", "paper", "dither"],
+                "type": "string"
+              },
+              "token": {
+                "description": "the token from create_booking, or the manageUrl",
+                "type": "string"
+              }
+            },
+            "required": ["id", "token"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "openWorldHint": false,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": false,
+            "openWorld": false,
+            "readOnly": false
+          },
+          "digest": "sha256:3f033a556ca96a912fe3e043096b9f361bbbcb3501d5a1fb03e659243318871c"
+        },
+        {
+          "name": "stop_sharing_booking_as_invitee",
+          "title": "Stop sharing a booking (invitee)",
+          "description": "Ends a booking’s invitation: its link stops working. Sharing again gives a new link.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "description": "the booking id from create_booking, or its manageUrl",
+                "type": "string"
+              },
+              "token": {
+                "description": "the token from create_booking, or the manageUrl",
+                "type": "string"
+              }
+            },
+            "required": ["id", "token"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "openWorldHint": false,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": false,
+            "openWorld": false,
+            "readOnly": false
+          },
+          "digest": "sha256:5c82c45f4f2eb22a282be5eec9ce47363621a18201503a2c384a443f96cb5560"
+        }
+      ],
+      "resources": [
+        {
+          "uri": "ui://tempi/booking-card.html",
+          "name": "booking-card",
+          "title": "Booking card",
+          "description": "A booking as a card: its painting, what and when in the invitee’s time zone, and a link to reschedule.",
+          "mimeType": "text/html;profile=mcp-app",
+          "meta": {
+            "ui": {
+              "csp": {
+                "connectDomains": [],
+                "resourceDomains": ["https://meettempi.com"]
+              },
+              "prefersBorder": false
+            }
+          },
+          "digest": "sha256:01f5ef9b959c16a7db8191acc22df534cb88e7f78dfacd14bc669b02094cccbe"
+        }
+      ],
+      "digest": "sha256:e1c59a306fdad1348a8442f0c29207d25c4ae11bfafcd631538e7f9c0894238a"
+    }
+  }
+}

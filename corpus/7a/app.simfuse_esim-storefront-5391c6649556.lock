@@ -1,0 +1,3038 @@
+{
+  "lockfileVersion": 2,
+  "subjects": {
+    "app.simfuse/esim-storefront": {
+      "kind": "mcp-server",
+      "source": {
+        "client": "manual",
+        "file": "registry.modelcontextprotocol.io"
+      },
+      "transport": {
+        "type": "http",
+        "url": "https://simfuse.app/agentic/mcp"
+      },
+      "protocol": {
+        "era": "legacy",
+        "version": "2025-11-25"
+      },
+      "serverInfo": {
+        "name": "SimFuse Storefront",
+        "version": "1.2.0"
+      },
+      "capabilities": {
+        "prompts": {
+          "listChanged": false
+        },
+        "resources": {
+          "listChanged": false
+        },
+        "tools": {
+          "listChanged": false
+        }
+      },
+      "instructions": "This server is the SimFuse eSIM storefront for AI assistants: browse\ndestinations and plans, price a whole trip, and open a checkout session.\nNo authentication is needed to read anything here.\n\nFor \"which eSIM should I get for this trip?\" go straight to `plan-trip`\nwith the stops (country code and days in each). It compares one plan\ncovering the whole route against one plan per country against a mix, on\nlive prices, and flags the cheapest complete option with a reason you can\nquote verbatim. Use it whenever a trip covers two or more countries.\n\nFor a single destination: `list-destinations` to resolve the country and\nits code, `get-destination-info` to describe one destination and what it\ncosts, `list-plans` for its plan ladder, `get-plan` for one plan's details.\nFor a regional or worldwide shelf: `list-regions` discovers the available\nregion slugs. Pass one to `list-plans` as `region`, never as `destination`.\nThese two filters cannot be combined. A region's members are not a promise\nthat every plan covers them all; check the chosen plan's actual coverage.\nFor \"does this plan work in X?\" use `check-coverage`, which answers yes or\nno; `get-plan-coverage` returns the whole country list when you need it.\nWhen the traveller says what they want rather than asking what to get\n(\"10 GB on Docomo for two weeks, with calls\"), use `build-plan`: it\nreturns the one real plan for that specification, snaps a shape nobody\nsells to the nearest one that is, and lists every such change in\n`adjustments` for you to read back. Its `plan.id` buys exactly like a\nplan id from list-plans.\n\nBUYING. Two paths, and picking the wrong one costs the sale:\n\n- A PERSON is paying: `get-checkout-link`. It returns a page that sells\n  exactly that plan with Apple Pay, Google Pay and card, takes the email at\n  payment and delivers the eSIM there. No account, nothing charged by the\n  call. This is the normal case.\n- YOU are paying, as an agent with your own funds:\n  `create-checkout-session` with the package ids plan-trip or list-plans\n  returned. Nothing is charged by that call either. It returns the priced\n  session with frozen totals, the payment instructions, and a bearer agent\n  key; payment, completion and cancellation happen over the agentic HTTP\n  API with that key, as the response's `note` describes.\n\nAFTER THE PURCHASE. These need the order id AND the email address the order\nwas bought with. Both are on the buyer's confirmation email. Ask them for\nboth; the order id alone is refused, and a wrong pair is refused exactly as\na non-existent order is, so read nothing into which half was wrong.\n\n- `get-order-status` - did it go through, and are the eSIMs provisioned yet.\n- `get-esim-activation` - the QR code, the LPA string and the manual install\n  details once they exist.\n- `check-esim-usage` - how much data is used and left, per ICCID.\n- `list-topup-options` - what more data would cost. READ ONLY: a top-up is\n  bought in the SimFuse app, and passing those package ids to\n  `create-checkout-session` would sell a second eSIM instead of filling\n  this one.\n\nNotes that will save you a wrong answer:\n- Every tool returns `structuredContent` matching the `outputSchema` it\n  publishes in tools/list. Read that rather than parsing the text block,\n  which is the same answer serialized for clients that cannot.\n- Prices are integer minor units (cents) of the currency you asked for, so\n  1250 in EUR is 12.50 EUR. Pass `currency` to price in another one.\n- Data allowances are megabytes; 1 GB is 1024 MB.\n- A plan id comes from a tool response or the product feed. Never invent\n  one, and never guess a destination code, look it up.\n- Quotes and sessions are offers, not reservations: the charged total is\n  always computed at checkout, and a session's prices are only frozen\n  until its `price_locked_until`.\n- Provisioning is dispatched, not awaited, so an order can be paid for\n  before its eSIM exists. An empty `esims` list moments after payment means\n  wait and ask again, never that something failed.\n- Usage readings come from a cache refreshed every couple of minutes.\n  `checked_at` says how old the number is; do not present it as live.\n- We do not publish which network operator or upstream supplier a plan\n  runs on beyond the carrier and network type already in the response. If\n  asked, say that rather than inferring it.",
+      "tools": [
+        {
+          "name": "build-plan",
+          "title": "Build an eSIM plan",
+          "description": "Build an eSIM plan to the traveller's liking for one destination: how much data, for how many days, optionally which network it runs on and whether calls and texts are bundled. Returns the one real plan that matches, with its id and live price, never a made-up combination: a shape nobody sells is snapped to the nearest one that is, one axis at a time, and every change is spelled out in `adjustments` so you can read it back. Use it when the traveller knows what they want (\"10 GB on Docomo for two weeks\"); use plan-trip when they want a recommendation or the trip has several countries. To buy, pass `plan.id` to get-checkout-link when a person is paying, or to create-checkout-session when you are. Read-only: it reserves nothing and charges nothing.",
+          "inputSchema": {
+            "properties": {
+              "country_code": {
+                "description": "ISO 3166-1 alpha-2 code of the destination, e.g. \"JP\". Look it up with list-destinations rather than guessing.",
+                "maxLength": 2,
+                "minLength": 2,
+                "type": "string"
+              },
+              "currency": {
+                "description": "Optional. ISO 4217 three-letter code the price is quoted in, e.g. \"USD\", \"EUR\", \"GBP\". Defaults to EUR. An unknown code falls back to EUR rather than failing.",
+                "type": "string"
+              },
+              "data_mb": {
+                "description": "Data allowance wanted, in megabytes: 1 GB is 1024 MB, so 5 GB is 5120. Pass 0 for an unlimited plan. Snapped to the nearest size sold when no plan has exactly this size.",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "network": {
+                "description": "Optional. The mobile network the plan should run on, by carrier name as `options.networks` lists them, e.g. \"NTT Docomo\" or \"au\". Matching is case-insensitive and a single carrier of a multi-network plan is enough. Omit for the cheapest network.",
+                "type": "string"
+              },
+              "validity_days": {
+                "description": "How many days the plan should stay valid, 1 to 365. Snapped to the nearest length sold for the chosen size.",
+                "maximum": 365,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "voice": {
+                "default": false,
+                "description": "Optional. True to require a plan that bundles calls and texts. Defaults to false, data only. If no such plan exists the answer is data only and says so.",
+                "type": "boolean"
+              }
+            },
+            "required": ["country_code", "data_mb", "validity_days"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "properties": {
+              "adjustments": {
+                "description": "Every way the built plan differs from what was asked, one sentence each, written to be read to the traveller. Empty when the plan matches the request exactly.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "built": {
+                "description": "The specification of the plan actually built, after any adjustment. Null when nothing was found.",
+                "properties": {
+                  "data_mb": {
+                    "description": "The data size of the plan built, in megabytes; 0 means unlimited.",
+                    "type": "integer"
+                  },
+                  "network": {
+                    "description": "The network of the plan built, or null for any network.",
+                    "type": ["string", "null"]
+                  },
+                  "validity_days": {
+                    "description": "The length of the plan built, in days.",
+                    "type": "integer"
+                  },
+                  "voice": {
+                    "description": "Whether calls and texts are bundled of the plan built.",
+                    "type": "boolean"
+                  }
+                },
+                "required": ["data_mb", "network", "validity_days", "voice"],
+                "type": ["object", "null"]
+              },
+              "found": {
+                "description": "True when a plan was built. False when the destination sells nothing at all, in which case `plan` is null.",
+                "type": "boolean"
+              },
+              "options": {
+                "description": "What else could be asked for, so a follow-up question can be answered without another call.",
+                "properties": {
+                  "data_mb": {
+                    "description": "Every data size sold for the destination, in megabytes, metered ascending and 0 (unlimited) last.",
+                    "items": {
+                      "type": "integer"
+                    },
+                    "type": "array"
+                  },
+                  "networks": {
+                    "description": "Every network the destination is sold on. Empty when no plan names its carrier.",
+                    "items": {
+                      "properties": {
+                        "network": {
+                          "description": "The value to pass as `network` to choose this one.",
+                          "type": "string"
+                        },
+                        "network_generation": {
+                          "description": "The fastest generation any plan on this network states. Null when none states one: not stated, not any generation.",
+                          "enum": ["3G", "4G", "5G", null],
+                          "type": ["string", "null"]
+                        },
+                        "network_type": {
+                          "description": "Deprecated two-valued form; read network_generation.",
+                          "enum": ["5G", "LTE"],
+                          "type": "string"
+                        },
+                        "operators": {
+                          "description": "The carriers behind it.",
+                          "items": {
+                            "type": "string"
+                          },
+                          "type": "array"
+                        }
+                      },
+                      "required": ["network", "network_generation", "network_type", "operators"],
+                      "type": "object"
+                    },
+                    "type": "array"
+                  },
+                  "validity_days": {
+                    "description": "Every length sold for the size that was built, in days.",
+                    "items": {
+                      "type": "integer"
+                    },
+                    "type": "array"
+                  },
+                  "voice": {
+                    "description": "True when at least one plan bundles calls and texts.",
+                    "type": "boolean"
+                  }
+                },
+                "required": ["data_mb", "networks", "validity_days", "voice"],
+                "type": "object"
+              },
+              "plan": {
+                "description": "The plan built: the same shape get-plan returns. Its `id` is what you buy with. Null when nothing was found.",
+                "properties": {
+                  "carrier": {
+                    "description": "The mobile network this plan runs on, when we can name it. Null when we cannot.",
+                    "properties": {
+                      "logo_url": {
+                        "description": "Carrier logo image URL.",
+                        "type": "string"
+                      },
+                      "name": {
+                        "description": "Carrier name, e.g. \"KPN\".",
+                        "type": "string"
+                      }
+                    },
+                    "required": ["logo_url", "name"],
+                    "type": ["object", "null"]
+                  },
+                  "country": {
+                    "description": "The one country this plan is filed under. Null for a regional or worldwide plan.",
+                    "properties": {
+                      "currency": {
+                        "description": "ISO 4217 code the from_price_cents beside it is expressed in, which is the currency you asked for, e.g. \"EUR\". Null exactly when from_price_cents is null, which is what a country nested on a plan answers: nothing priced it there.",
+                        "type": ["string", "null"]
+                      },
+                      "from_price_cents": {
+                        "description": "Cheapest plan for this destination, in minor units (cents) of the response currency, so 1250 is 12.50. Null when this response did not price the destination.",
+                        "type": ["integer", "null"]
+                      },
+                      "iso2": {
+                        "description": "ISO 3166-1 alpha-2 code, e.g. \"ES\". This is the code list-plans and plan-trip take.",
+                        "type": "string"
+                      },
+                      "iso3": {
+                        "description": "ISO 3166-1 alpha-3 code, e.g. \"ESP\".",
+                        "type": "string"
+                      },
+                      "links": {
+                        "properties": {
+                          "country": {
+                            "properties": {
+                              "path": {
+                                "description": "Path on the storefront, e.g. \"/esim/spain/\". Always the canonical page, never a redirect.",
+                                "type": "string"
+                              },
+                              "query": {
+                                "description": "Query parameters that belong on the path, as an object. Empty when there are none.",
+                                "type": "object"
+                              },
+                              "url": {
+                                "description": "The full storefront URL for this country's storefront page. Safe to show to a person.",
+                                "type": "string"
+                              }
+                            },
+                            "required": ["path", "query", "url"],
+                            "type": "object"
+                          }
+                        },
+                        "required": ["country"],
+                        "type": "object"
+                      },
+                      "name": {
+                        "description": "English country name, e.g. \"Spain\".",
+                        "type": "string"
+                      },
+                      "region": {
+                        "description": "The region this country is filed under, e.g. \"Europe\". Null when it is filed under none.",
+                        "type": ["string", "null"]
+                      }
+                    },
+                    "required": ["currency", "from_price_cents", "iso2", "iso3", "links", "name", "region"],
+                    "type": ["object", "null"]
+                  },
+                  "coverage_count": {
+                    "description": "How many countries coverage_countries holds.",
+                    "type": "integer"
+                  },
+                  "coverage_countries": {
+                    "description": "Every country the plan works in.",
+                    "items": {
+                      "properties": {
+                        "iso2": {
+                          "description": "ISO 3166-1 alpha-2 code, or null for a country we could not match to a code.",
+                          "type": ["string", "null"]
+                        },
+                        "name": {
+                          "description": "English country name.",
+                          "type": "string"
+                        },
+                        "operators": {
+                          "description": "Networks in that country, when the country could be attributed. Empty means not attributed, never \"no coverage\".",
+                          "items": {
+                            "type": "string"
+                          },
+                          "type": "array"
+                        }
+                      },
+                      "required": ["iso2", "name", "operators"],
+                      "type": "object"
+                    },
+                    "type": "array"
+                  },
+                  "coverage_type": {
+                    "description": "Scope of the plan: one country, a region, or worldwide.",
+                    "enum": ["country", "region", "global"],
+                    "type": "string"
+                  },
+                  "currency": {
+                    "description": "ISO 4217 code retail_price_cents is quoted in, e.g. \"EUR\".",
+                    "type": ["string", "null"]
+                  },
+                  "data_amount_mb": {
+                    "description": "Data allowance in megabytes (1 GB is 1024 MB). 0 on an unlimited plan, where data_usage_policy carries the real terms.",
+                    "type": "integer"
+                  },
+                  "data_restriction_type": {
+                    "description": "Whether the allowance is capped (\"limited\") or unmetered (\"unlimited\").",
+                    "enum": ["limited", "unlimited"],
+                    "type": "string"
+                  },
+                  "data_usage_policy": {
+                    "description": "What the plan really gives you. Null when the supplier has never published its terms, which is different from having no limits.",
+                    "properties": {
+                      "high_speed_data_mb": {
+                        "description": "Full-speed allowance in megabytes PER RESET PERIOD, so 1 GB a day for 30 days is 1024, not 30720. 0 means genuinely uncapped.",
+                        "type": ["integer", "null"]
+                      },
+                      "max_speed_kbps": {
+                        "description": "Speed ceiling in kbit/s from the first megabyte. Null means no ceiling.",
+                        "type": ["integer", "null"]
+                      },
+                      "reduced_speed_kbps": {
+                        "description": "Speed in kbit/s after the full-speed allowance is used. Null means the data STOPS rather than slowing down.",
+                        "type": ["integer", "null"]
+                      },
+                      "reset_period": {
+                        "description": "How often the full-speed allowance resets. Null means it covers the whole plan.",
+                        "enum": ["daily", "weekly", "monthly", null],
+                        "type": ["string", "null"]
+                      }
+                    },
+                    "required": ["high_speed_data_mb", "max_speed_kbps", "reduced_speed_kbps", "reset_period"],
+                    "type": ["object", "null"]
+                  },
+                  "excluded_count": {
+                    "description": "How many countries excluded_countries holds.",
+                    "type": "integer"
+                  },
+                  "excluded_countries": {
+                    "description": "Countries in this plan's own region that it does NOT cover. Always empty for a country plan and for a worldwide one.",
+                    "items": {
+                      "properties": {
+                        "iso2": {
+                          "description": "ISO 3166-1 alpha-2 code.",
+                          "type": ["string", "null"]
+                        },
+                        "name": {
+                          "description": "English country name.",
+                          "type": "string"
+                        }
+                      },
+                      "required": ["iso2", "name"],
+                      "type": "object"
+                    },
+                    "type": "array"
+                  },
+                  "hotspot_usage_policy": {
+                    "description": "What the plan lets you do with a hotspot. Null when the terms were never established, which is different from being allowed.",
+                    "properties": {
+                      "allowed": {
+                        "description": "Whether the plan may be shared as a hotspot at all.",
+                        "type": "boolean"
+                      },
+                      "high_speed_data_mb": {
+                        "description": "A separate tethering allowance in megabytes per reset period. Null means tethering draws on the plan data with no allowance of its own.",
+                        "type": ["integer", "null"]
+                      },
+                      "max_speed_kbps": {
+                        "description": "Speed ceiling in kbit/s while tethering. Null means no ceiling.",
+                        "type": ["integer", "null"]
+                      },
+                      "max_total_mb": {
+                        "description": "A hard cap on tethered data across the whole plan, in megabytes. Null means no such cap.",
+                        "type": ["integer", "null"]
+                      },
+                      "reduced_speed_kbps": {
+                        "description": "Speed in kbit/s once the tethering allowance is used. Null means tethering stops.",
+                        "type": ["integer", "null"]
+                      },
+                      "reset_period": {
+                        "description": "How often the tethering allowance resets. Null when it covers the whole plan.",
+                        "enum": ["daily", "weekly", "monthly", null],
+                        "type": ["string", "null"]
+                      }
+                    },
+                    "required": ["allowed", "high_speed_data_mb", "max_speed_kbps", "max_total_mb", "reduced_speed_kbps", "reset_period"],
+                    "type": ["object", "null"]
+                  },
+                  "id": {
+                    "description": "The plan id (a 26-character ULID). Pass it to get-plan, get-plan-coverage or create-checkout-session. Never invent one.",
+                    "type": "string"
+                  },
+                  "is_worldwide": {
+                    "description": "True when the plan is sold as a worldwide bundle.",
+                    "type": "boolean"
+                  },
+                  "links": {
+                    "description": "Where a person buys this plan on simfuse.app.",
+                    "properties": {
+                      "country": {
+                        "description": "The country page on its own, or null when the plan has no single country.",
+                        "properties": {
+                          "path": {
+                            "description": "Path on the storefront, e.g. \"/esim/spain/\". Always the canonical page, never a redirect.",
+                            "type": "string"
+                          },
+                          "query": {
+                            "description": "Query parameters that belong on the path, as an object. Empty when there are none.",
+                            "type": "object"
+                          },
+                          "url": {
+                            "description": "The full storefront URL for the plan's country page. Safe to show to a person.",
+                            "type": "string"
+                          }
+                        },
+                        "required": ["path", "query", "url"],
+                        "type": ["object", "null"]
+                      },
+                      "plan": {
+                        "properties": {
+                          "path": {
+                            "description": "Path on the storefront, e.g. \"/esim/spain/\". Always the canonical page, never a redirect.",
+                            "type": "string"
+                          },
+                          "query": {
+                            "description": "Query parameters that belong on the path, as an object. Empty when there are none.",
+                            "type": "object"
+                          },
+                          "url": {
+                            "description": "The full storefront URL for the page this plan is bought on, with the plan preselected. Safe to show to a person.",
+                            "type": "string"
+                          }
+                        },
+                        "required": ["path", "query", "url"],
+                        "type": "object"
+                      }
+                    },
+                    "required": ["country", "plan"],
+                    "type": "object"
+                  },
+                  "name": {
+                    "description": "Plan name as a traveller sees it, e.g. \"Spain 5GB\".",
+                    "type": "string"
+                  },
+                  "network": {
+                    "description": "The network name as plain text, or null when unknown.",
+                    "type": ["string", "null"]
+                  },
+                  "network_generation": {
+                    "description": "The network generation the plan is sold as, exactly as stated for it. Null means not stated, which is not the same as any generation; say \"not stated\" rather than assuming.",
+                    "enum": ["3G", "4G", "5G", null],
+                    "type": ["string", "null"]
+                  },
+                  "network_type": {
+                    "description": "Deprecated two-valued form: \"5G\" for a 5G plan, \"LTE\" for everything else including plans whose generation was never stated. Read network_generation.",
+                    "enum": ["5G", "LTE"],
+                    "type": "string"
+                  },
+                  "operators": {
+                    "description": "Network operators the plan roams on, as a list. Empty when none are published.",
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  "region": {
+                    "description": "Raw region value for a regional plan, e.g. \"Europe\". Null for a country plan.",
+                    "type": ["string", "null"]
+                  },
+                  "region_label": {
+                    "description": "The region formatted for a person to read. Null for a country plan.",
+                    "type": ["string", "null"]
+                  },
+                  "retail_price_cents": {
+                    "description": "Retail price in minor units (cents) of `currency`, so 1250 in EUR is 12.50 EUR. This is what a buyer pays for one eSIM.",
+                    "type": ["integer", "null"]
+                  },
+                  "retail_prices_cents": {
+                    "description": "Prices in other currencies, keyed by ISO 4217 code, in minor units. Only the multi-currency surfaces (the catalog export) carry one, so it is absent here: read retail_price_cents and currency instead.",
+                    "type": "object"
+                  },
+                  "supports_tethering": {
+                    "description": "Whether hotspot or tethering is allowed. Null means no supplier has declared it, which is not the same as \"no\".",
+                    "type": ["boolean", "null"]
+                  },
+                  "supports_topup": {
+                    "description": "Whether more data can be bought for the same eSIM once it runs low.",
+                    "type": "boolean"
+                  },
+                  "type": {
+                    "description": "What the plan sells: data only, or data plus a bundled voice and SMS allowance.",
+                    "enum": ["data", "data_voice_sms"],
+                    "type": "string"
+                  },
+                  "validity_days": {
+                    "description": "How many days the plan stays valid once it activates.",
+                    "type": "integer"
+                  }
+                },
+                "required": ["carrier", "country", "coverage_count", "coverage_countries", "coverage_type", "currency", "data_amount_mb", "data_restriction_type", "data_usage_policy", "excluded_count", "excluded_countries", "hotspot_usage_policy", "id", "is_worldwide", "links", "name", "network", "network_generation", "network_type", "operators", "region", "region_label", "retail_price_cents", "supports_tethering", "supports_topup", "type", "validity_days"],
+                "type": ["object", "null"]
+              },
+              "requested": {
+                "description": "The specification exactly as it was asked for.",
+                "properties": {
+                  "data_mb": {
+                    "description": "The data size as asked for, in megabytes; 0 means unlimited.",
+                    "type": "integer"
+                  },
+                  "network": {
+                    "description": "The network as asked for, or null for any network.",
+                    "type": ["string", "null"]
+                  },
+                  "validity_days": {
+                    "description": "The length as asked for, in days.",
+                    "type": "integer"
+                  },
+                  "voice": {
+                    "description": "Whether calls and texts are bundled as asked for.",
+                    "type": "boolean"
+                  }
+                },
+                "required": ["data_mb", "network", "validity_days", "voice"],
+                "type": "object"
+              }
+            },
+            "required": ["adjustments", "built", "found", "options", "plan", "requested"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Build an eSIM plan"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:177f63de849c9044b04d87272251fba971ad3acf1ec11e0e5bcd14de0dcccb0a"
+        },
+        {
+          "name": "check-coverage",
+          "title": "Check plan coverage for a destination",
+          "description": "Answer \"does this eSIM plan work in X?\" for one destination, as a yes or no rather than a country list. Takes a plan id and a destination (a country name or two-letter code). Reports whether the destination is covered, and separately whether it is explicitly excluded from an otherwise regional plan. Use get-plan-coverage when you need the full list of countries instead.",
+          "inputSchema": {
+            "properties": {
+              "destination": {
+                "description": "The country to check: a name (\"Japan\") or a two-letter code (\"JP\").",
+                "type": "string"
+              },
+              "plan_id": {
+                "description": "The plan id (a ULID) as returned by list-plans.",
+                "type": "string"
+              }
+            },
+            "required": ["destination", "plan_id"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "properties": {
+              "coverage_type": {
+                "description": "\"country\", \"region\" or \"global\".",
+                "type": "string"
+              },
+              "covered": {
+                "description": "Whether this plan works at that destination.",
+                "type": "boolean"
+              },
+              "destination": {
+                "properties": {
+                  "iso2": {
+                    "description": "ISO 3166-1 alpha-2 code, e.g. \"JP\". Null when the destination resolved to nothing, or when the plan names the country without publishing a code for it.",
+                    "type": ["string", "null"]
+                  },
+                  "name": {
+                    "description": "The country as we know it, e.g. \"Japan\". Null when the destination resolved to nothing.",
+                    "type": ["string", "null"]
+                  },
+                  "query": {
+                    "description": "What you asked about, echoed back.",
+                    "type": "string"
+                  }
+                },
+                "required": ["iso2", "name", "query"],
+                "type": "object"
+              },
+              "excluded": {
+                "description": "Whether the destination is explicitly carved OUT of an otherwise regional plan. A different fact from simply not being included, and the only one of the two that means \"do not buy this for that trip\". Never true at the same time as covered.",
+                "type": "boolean"
+              },
+              "is_worldwide": {
+                "description": "Whether the plan is sold as worldwide.",
+                "type": "boolean"
+              },
+              "note": {
+                "description": "The answer in a sentence, including what to do next when it is a no.",
+                "type": "string"
+              },
+              "plan_id": {
+                "description": "The plan that was checked.",
+                "type": "string"
+              },
+              "plan_name": {
+                "description": "Its name, e.g. \"Europe 10GB\".",
+                "type": "string"
+              },
+              "region_label": {
+                "description": "Readable scope of a regional plan, e.g. \"Europe\". Null for a country plan.",
+                "type": ["string", "null"]
+              },
+              "total_countries": {
+                "description": "How many countries the plan covers in total.",
+                "type": "integer"
+              }
+            },
+            "required": ["coverage_type", "covered", "destination", "excluded", "is_worldwide", "note", "plan_id", "plan_name", "region_label", "total_countries"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Check plan coverage for a destination"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:0c75b981be171f674d95077eb2b076848865a358be0a9eb2cec410fe61dede49"
+        },
+        {
+          "name": "check-esim-usage",
+          "title": "Check eSIM data usage",
+          "description": "How much data an eSIM has used and how much is left, for one eSIM on a paid order. Identified by the order id and the email that bought it, plus the ICCID from get-order-status or get-esim-activation. Allowances are in megabytes. Readings are served from a cache refreshed every couple of minutes: checked_at says when the reading was taken. An unlimited plan reports its full-speed allowance for the current period rather than a total.",
+          "inputSchema": {
+            "properties": {
+              "email": {
+                "description": "The email address the order was bought with.",
+                "type": "string"
+              },
+              "iccid": {
+                "description": "The ICCID of the eSIM to read, as returned by get-order-status.",
+                "type": "string"
+              },
+              "order_id": {
+                "description": "The order id from the buyer's confirmation email or order page.",
+                "type": "string"
+              }
+            },
+            "required": ["email", "iccid", "order_id"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "properties": {
+              "activated_at": {
+                "description": "When the eSIM first connected, ISO 8601. Null before activation.",
+                "type": ["string", "null"]
+              },
+              "checked_at": {
+                "description": "When this reading was TAKEN, ISO 8601. Readings come from a cache refreshed every couple of minutes, so do not present the number as live.",
+                "type": ["string", "null"]
+              },
+              "data_remaining_mb": {
+                "description": "Megabytes left. NULL on an unmetered plan, which does not mean zero: it means the supplier reports no allowance to count down.",
+                "type": ["integer", "null"]
+              },
+              "data_total_mb": {
+                "description": "Size of the current bundle in megabytes, reflecting any top-ups. Null on an unmetered plan.",
+                "type": ["integer", "null"]
+              },
+              "data_used_mb": {
+                "description": "Megabytes used on the current bundle; 1 GB is 1024 MB.",
+                "type": ["integer", "null"]
+              },
+              "expires_at": {
+                "description": "When the plan lapses, ISO 8601. Null when the supplier reports none.",
+                "type": ["string", "null"]
+              },
+              "iccid": {
+                "description": "The eSIM this reading belongs to.",
+                "type": "string"
+              },
+              "is_unlimited": {
+                "description": "Whether the plan is sold as unlimited. Almost none are uncapped: see the period fields for what that actually means here.",
+                "type": "boolean"
+              },
+              "percentage_remaining": {
+                "description": "Share of the bundle left, 0-100. Null on the same terms.",
+                "type": ["number", "null"]
+              },
+              "percentage_used": {
+                "description": "Share of the bundle spent, 0-100. Null on an unmetered plan, where there is no total to be a share of.",
+                "type": ["number", "null"]
+              },
+              "period_high_speed_mb": {
+                "description": "Size of that period allowance, so the figure above can be read as \"945 MB of 3 GB left today\".",
+                "type": ["integer", "null"]
+              },
+              "period_reduced_speed_kbps": {
+                "description": "Speed the plan throttles to once the period allowance is spent. NULL means the data STOPS instead, which is a different thing to tell a traveller.",
+                "type": ["integer", "null"]
+              },
+              "period_remaining_mb": {
+                "description": "Full-speed data left in the CURRENT reset period, for a plan whose allowance refills (say 3 GB a day). Null when the plan has no reset period. Deliberately separate from data_remaining_mb, which describes the whole plan.",
+                "type": ["integer", "null"]
+              },
+              "period_reset": {
+                "description": "How often it refills: \"daily\", \"weekly\" or \"monthly\". Null when it does not.",
+                "type": ["string", "null"]
+              },
+              "status": {
+                "description": "eSIM state at the time of the reading, e.g. \"active\".",
+                "type": ["string", "null"]
+              }
+            },
+            "required": ["activated_at", "checked_at", "data_remaining_mb", "data_total_mb", "data_used_mb", "expires_at", "iccid", "is_unlimited", "percentage_remaining", "percentage_used", "period_high_speed_mb", "period_reduced_speed_kbps", "period_remaining_mb", "period_reset", "status"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Check eSIM data usage"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:d59c6b9f39e4e30257ae7a00e87cdddf71c9ebc717135b3ad20ae0c275c674f9"
+        },
+        {
+          "name": "create-checkout-session",
+          "title": "Create checkout session",
+          "description": "Open a checkout session for one or more eSIM plans at frozen prices, using the plan ids that plan-trip, list-plans or get-plan returned. Use it once the traveller has chosen what to buy. It CHARGES NOTHING and reserves no stock: it prices the basket, freezes those prices until the session's price_locked_until, and hands back the session plus a bearer agent key. Payment, completion and cancellation happen afterwards over the SimFuse agentic HTTP API with that key, as the session's `note` explains, and the eSIM is delivered by email once payment settles. Each call opens a NEW session and mints a NEW key, so call it once per basket rather than retrying it to re-read one.",
+          "inputSchema": {
+            "properties": {
+              "agent_name": {
+                "description": "Optional. Name of the assistant or app opening the session, e.g. \"Claude\". Recorded on the agent key so we can tell integrations apart. Defaults to \"mcp-client\".",
+                "maxLength": 100,
+                "type": "string"
+              },
+              "buyer_email": {
+                "description": "Optional but strongly recommended. The traveller's email address, where the eSIM and its installation details are sent once payment settles. Ask for it rather than inventing one.",
+                "maxLength": 255,
+                "type": "string"
+              },
+              "currency": {
+                "description": "Optional. ISO 4217 three-letter code to price the session in, e.g. \"USD\", \"EUR\", \"GBP\". Defaults to EUR. Every amount in the answer is minor units (cents) of this currency.",
+                "maxLength": 3,
+                "minLength": 3,
+                "type": "string"
+              },
+              "items": {
+                "description": "What to buy: one entry per plan, 1 to 50 entries. Pass the whole basket in one call, e.g. [{\"id\":\"01JVQ...\",\"quantity\":1}].",
+                "items": {
+                  "properties": {
+                    "id": {
+                      "description": "A plan id (26-character ULID) from plan-trip, list-plans, get-plan or the product feed, e.g. \"01JVQ2S6D4X8N0RMB7YQZ5K3TA\". Never invent one.",
+                      "maxLength": 64,
+                      "type": "string"
+                    },
+                    "quantity": {
+                      "description": "How many of this plan to buy, 1 to 20. One eSIM per unit, so 2 means two separate eSIMs of the same plan (one traveller normally needs 1).",
+                      "maximum": 20,
+                      "minimum": 1,
+                      "type": "integer"
+                    }
+                  },
+                  "required": ["id", "quantity"],
+                  "type": "object"
+                },
+                "maxItems": 50,
+                "minItems": 1,
+                "type": "array"
+              }
+            },
+            "required": ["items"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "properties": {
+              "agent_key": {
+                "description": "The bearer key for every follow-up call on this session, shown ONCE and never again. Send it as \"Authorization: Bearer <key>\". It is a credential: use it, do not read it out to the traveller.",
+                "type": "string"
+              },
+              "api": {
+                "description": "The HTTP endpoints for this session, all taking the agent_key as a bearer token.",
+                "properties": {
+                  "cancel": {
+                    "description": "POST here to cancel the session.",
+                    "type": "string"
+                  },
+                  "complete": {
+                    "description": "POST here to complete the purchase, which is where payment happens.",
+                    "type": "string"
+                  },
+                  "session": {
+                    "description": "GET this to re-read the session and its current totals.",
+                    "type": "string"
+                  }
+                },
+                "required": ["cancel", "complete", "session"],
+                "type": "object"
+              },
+              "note": {
+                "description": "How to use the key and how long the prices hold. Worth following literally.",
+                "type": "string"
+              },
+              "session": {
+                "description": "The priced checkout session, in the same shape the agentic HTTP API returns it.",
+                "properties": {
+                  "buyer": {
+                    "description": "The buyer, when one was given. Null when no email was supplied, in which case ask for one before completing.",
+                    "properties": {
+                      "email": {
+                        "description": "Where the eSIM is sent.",
+                        "type": "string"
+                      }
+                    },
+                    "type": ["object", "null"]
+                  },
+                  "capabilities": {
+                    "description": "What this session supports.",
+                    "properties": {
+                      "payment": {
+                        "properties": {
+                          "handlers": {
+                            "description": "The ways this session can be paid.",
+                            "items": {
+                              "properties": {
+                                "config": {
+                                  "description": "Handler-specific settings.",
+                                  "properties": {
+                                    "default_asset": {
+                                      "description": "Default asset for a crypto handler.",
+                                      "type": "string"
+                                    },
+                                    "settlement": {
+                                      "description": "\"synchronous\" settles during completion; \"asynchronous\" settles later, so a 200 is not yet a purchase.",
+                                      "type": "string"
+                                    }
+                                  },
+                                  "type": "object"
+                                },
+                                "display_name": {
+                                  "description": "Handler written for a person.",
+                                  "type": "string"
+                                },
+                                "id": {
+                                  "description": "Handler id to name when completing the session.",
+                                  "type": "string"
+                                },
+                                "name": {
+                                  "description": "Fully qualified handler name.",
+                                  "type": "string"
+                                },
+                                "psp": {
+                                  "description": "Which processor settles it.",
+                                  "type": "string"
+                                },
+                                "requires_delegate_payment": {
+                                  "description": "Whether the agent must mint a delegated payment token first.",
+                                  "type": "boolean"
+                                },
+                                "requires_pci_compliance": {
+                                  "description": "Whether card data passes through the agent.",
+                                  "type": "boolean"
+                                },
+                                "spec": {
+                                  "description": "Where the handler is documented.",
+                                  "type": "string"
+                                },
+                                "version": {
+                                  "description": "Handler version.",
+                                  "type": "string"
+                                }
+                              },
+                              "required": ["config", "display_name", "id", "name", "psp", "requires_delegate_payment", "requires_pci_compliance", "spec", "version"],
+                              "type": "object"
+                            },
+                            "type": "array"
+                          }
+                        },
+                        "required": ["handlers"],
+                        "type": "object"
+                      }
+                    },
+                    "required": ["payment"],
+                    "type": "object"
+                  },
+                  "created_at": {
+                    "description": "ISO 8601 creation timestamp.",
+                    "type": ["string", "null"]
+                  },
+                  "currency": {
+                    "description": "Lower-case ISO 4217 code every amount is in, e.g. \"eur\".",
+                    "type": "string"
+                  },
+                  "expires_at": {
+                    "description": "ISO 8601 timestamp after which this session can no longer be completed.",
+                    "type": ["string", "null"]
+                  },
+                  "fulfillment_options": {
+                    "description": "How the eSIM is delivered. Instant and free, stated explicitly so nobody has to guess whether shipping is coming.",
+                    "items": {
+                      "properties": {
+                        "description": {
+                          "description": "What the traveller receives, and when.",
+                          "type": "string"
+                        },
+                        "id": {
+                          "description": "Option id.",
+                          "type": "string"
+                        },
+                        "title": {
+                          "description": "Option title.",
+                          "type": "string"
+                        },
+                        "totals": {
+                          "description": "What delivery costs. Always zero.",
+                          "items": {
+                            "description": "The delivery line, always zero.",
+                            "properties": {
+                              "amount": {
+                                "description": "Amount in minor units (cents) of the session currency. A discount is NEGATIVE, so the lines sum to the total.",
+                                "type": "integer"
+                              },
+                              "display_text": {
+                                "description": "The line written for a person.",
+                                "type": "string"
+                              },
+                              "type": {
+                                "description": "What this line is, e.g. \"subtotal\", \"discount\", \"total\".",
+                                "type": "string"
+                              }
+                            },
+                            "required": ["amount", "display_text", "type"],
+                            "type": "object"
+                          },
+                          "type": "array"
+                        },
+                        "type": {
+                          "description": "Always \"digital\" here: an eSIM has nothing to ship.",
+                          "type": "string"
+                        }
+                      },
+                      "required": ["description", "id", "title", "totals", "type"],
+                      "type": "object"
+                    },
+                    "type": "array"
+                  },
+                  "id": {
+                    "description": "Session id, used in every follow-up call.",
+                    "type": "string"
+                  },
+                  "line_items": {
+                    "description": "One entry per plan in the basket.",
+                    "items": {
+                      "properties": {
+                        "base_amount": {
+                          "description": "Price of one unit, in minor units.",
+                          "type": "integer"
+                        },
+                        "id": {
+                          "description": "Line id.",
+                          "type": "string"
+                        },
+                        "item": {
+                          "properties": {
+                            "id": {
+                              "description": "The plan id bought on this line.",
+                              "type": "string"
+                            },
+                            "quantity": {
+                              "description": "How many.",
+                              "type": "integer"
+                            }
+                          },
+                          "required": ["id", "quantity"],
+                          "type": "object"
+                        },
+                        "subtotal": {
+                          "description": "Line subtotal, in minor units.",
+                          "type": "integer"
+                        },
+                        "title": {
+                          "description": "Plan name, for display.",
+                          "type": ["string", "null"]
+                        },
+                        "total": {
+                          "description": "Line total, in minor units.",
+                          "type": "integer"
+                        }
+                      },
+                      "required": ["base_amount", "id", "item", "subtotal", "title", "total"],
+                      "type": "object"
+                    },
+                    "type": "array"
+                  },
+                  "links": {
+                    "description": "Seller policies, for a buyer who asks.",
+                    "items": {
+                      "properties": {
+                        "type": {
+                          "description": "Which document this is, e.g. \"terms_of_use\".",
+                          "type": "string"
+                        },
+                        "url": {
+                          "description": "Where it lives.",
+                          "type": "string"
+                        }
+                      },
+                      "required": ["type", "url"],
+                      "type": "object"
+                    },
+                    "type": "array"
+                  },
+                  "messages": {
+                    "description": "Anything the agent must read before completing: payment instructions, a gateway minimum this basket does not clear, or a warning that settlement is still pending.",
+                    "items": {
+                      "properties": {
+                        "code": {
+                          "description": "Machine-readable message code, e.g. \"payment_instructions\", \"below_payment_minimum\", \"awaiting_settlement\".",
+                          "type": "string"
+                        },
+                        "content": {
+                          "description": "The message itself. Payment instructions arrive here as fields (address, exact amount, memo): pass them through EXACTLY, never reformatted or rounded.",
+                          "type": ["object", "string"]
+                        },
+                        "content_type": {
+                          "description": "\"application/json\" when `content` is an object, \"text/plain\" when it is a sentence.",
+                          "type": "string"
+                        },
+                        "type": {
+                          "description": "Whether this is information or a caution.",
+                          "enum": ["info", "warning"],
+                          "type": "string"
+                        }
+                      },
+                      "required": ["code", "content", "content_type", "type"],
+                      "type": "object"
+                    },
+                    "type": "array"
+                  },
+                  "order": {
+                    "description": "The order this session produced, once it has one. Null until then.",
+                    "properties": {
+                      "id": {
+                        "description": "The order id.",
+                        "type": "string"
+                      }
+                    },
+                    "required": ["id"],
+                    "type": ["object", "null"]
+                  },
+                  "payment_handler_id": {
+                    "description": "The handler this session will settle through.",
+                    "type": ["string", "null"]
+                  },
+                  "price_locked_until": {
+                    "description": "ISO 8601 timestamp until which these totals hold. After it, re-read the session for fresh totals rather than quoting these.",
+                    "type": ["string", "null"]
+                  },
+                  "protocol": {
+                    "description": "Agentic Commerce Protocol version this session speaks.",
+                    "type": "string"
+                  },
+                  "status": {
+                    "description": "Where the session is: \"ready_for_payment\" means it can be completed; \"complete_in_progress\" means payment has not settled yet and the purchase is NOT done; \"completed\" means the eSIM is on its way. Also \"incomplete\", \"not_ready_for_payment\", \"canceled\" and \"expired\".",
+                    "type": "string"
+                  },
+                  "totals": {
+                    "description": "The money, ordered so the lines read down to the total.",
+                    "items": {
+                      "description": "One money line.",
+                      "properties": {
+                        "amount": {
+                          "description": "Amount in minor units (cents) of the session currency. A discount is NEGATIVE, so the lines sum to the total.",
+                          "type": "integer"
+                        },
+                        "display_text": {
+                          "description": "The line written for a person.",
+                          "type": "string"
+                        },
+                        "type": {
+                          "description": "What this line is, e.g. \"subtotal\", \"discount\", \"total\".",
+                          "type": "string"
+                        }
+                      },
+                      "required": ["amount", "display_text", "type"],
+                      "type": "object"
+                    },
+                    "type": "array"
+                  },
+                  "updated_at": {
+                    "description": "ISO 8601 update timestamp.",
+                    "type": ["string", "null"]
+                  }
+                },
+                "required": ["buyer", "capabilities", "created_at", "currency", "expires_at", "fulfillment_options", "id", "line_items", "links", "messages", "order", "payment_handler_id", "price_locked_until", "protocol", "status", "totals", "updated_at"],
+                "type": "object"
+              }
+            },
+            "required": ["agent_key", "api", "note", "session"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": false,
+            "openWorldHint": false,
+            "readOnlyHint": false,
+            "title": "Create checkout session"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": false,
+            "openWorld": false,
+            "readOnly": false
+          },
+          "digest": "sha256:9261b887e7dba4b568e21a94ee8e93474c77167e3ee630d612f1ff0bd08896c5"
+        },
+        {
+          "name": "get-checkout-link",
+          "title": "Get checkout link",
+          "description": "Get the page where a person buys one specific eSIM plan, for an assistant to hand them a link. The page sells exactly this plan with Apple Pay, Google Pay and card, takes the email at payment, and sends the eSIM there. Nothing is charged or reserved by this call and the buyer needs no account. Use this whenever a PERSON is going to pay. Use create-checkout-session instead when the agent is settling the purchase itself, or for more than one plan or unit.",
+          "inputSchema": {
+            "properties": {
+              "currency": {
+                "description": "Three-letter currency code for the price quoted back to you (e.g. \"USD\", \"EUR\"). Defaults to EUR. The page itself prices in the buyer's own currency.",
+                "type": "string"
+              },
+              "plan_id": {
+                "description": "The plan id (a ULID) as returned by list-plans, get-plan or plan-trip.",
+                "type": "string"
+              },
+              "source": {
+                "description": "The name of the assistant or app sending the buyer, recorded as the campaign source on the link (e.g. \"claude\"). Optional.",
+                "type": "string"
+              }
+            },
+            "required": ["plan_id"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "properties": {
+              "note": {
+                "description": "What the buyer will see on that page, in words you can repeat to them.",
+                "type": "string"
+              },
+              "plan": {
+                "properties": {
+                  "coverage_count": {
+                    "description": "How many countries the plan works in.",
+                    "type": "integer"
+                  },
+                  "coverage_type": {
+                    "description": "\"country\", \"region\" or \"global\".",
+                    "type": "string"
+                  },
+                  "currency": {
+                    "description": "ISO 4217 code price_cents is quoted in, e.g. \"EUR\".",
+                    "type": "string"
+                  },
+                  "data_amount_mb": {
+                    "description": "Full-speed allowance in megabytes; 1 GB is 1024 MB. 0 on an unlimited plan.",
+                    "type": "integer"
+                  },
+                  "data_restriction_type": {
+                    "description": "\"limited\" for a metered allowance, \"unlimited\" for one sold as uncapped.",
+                    "type": "string"
+                  },
+                  "id": {
+                    "description": "The plan id (a 26-character ULID) this link buys.",
+                    "type": "string"
+                  },
+                  "name": {
+                    "description": "Plan name as a traveller sees it, e.g. \"Spain 5GB\".",
+                    "type": "string"
+                  },
+                  "price_cents": {
+                    "description": "Indicative price in minor units (cents) of the currency below, so 1250 is 12.50. The page prices live in the buyer's own currency and that is what is charged.",
+                    "type": "integer"
+                  },
+                  "validity_days": {
+                    "description": "Days the plan stays valid once activated.",
+                    "type": "integer"
+                  }
+                },
+                "required": ["coverage_count", "coverage_type", "currency", "data_amount_mb", "data_restriction_type", "id", "name", "price_cents", "validity_days"],
+                "type": "object"
+              },
+              "url": {
+                "description": "The page to give the buyer. Opens the plan with Apple Pay, Google Pay and card on it. Safe to show to a person.",
+                "type": "string"
+              }
+            },
+            "required": ["note", "plan", "url"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Get checkout link"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:249da33f33d4a1f40f8acb1ff1b473d99b42d26d151adefd201c7c4d69bf18ce"
+        },
+        {
+          "name": "get-destination-info",
+          "title": "Get destination info",
+          "description": "Details for one destination: its name and codes, region, how many eSIM plans are sold there, the cheapest and most expensive, the smallest and largest data bundles, and its storefront page. Takes a country name (\"Japan\") or two-letter code (\"JP\"). Use this to describe a destination before pulling its full plan ladder with list-plans. Whether a plan can be topped up varies by plan and is reported by list-plans, not here.",
+          "inputSchema": {
+            "properties": {
+              "currency": {
+                "description": "Three-letter currency code for the prices (e.g. \"USD\", \"EUR\"). Defaults to EUR.",
+                "type": "string"
+              },
+              "destination": {
+                "description": "The destination: a country name (\"Japan\") or a two-letter code (\"JP\").",
+                "type": "string"
+              }
+            },
+            "required": ["destination"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "properties": {
+              "currency": {
+                "description": "ISO 4217 code every amount below is quoted in, e.g. \"EUR\".",
+                "type": "string"
+              },
+              "iso2": {
+                "description": "ISO 3166-1 alpha-2 code, e.g. \"JP\". This is the code list-plans and plan-trip take.",
+                "type": "string"
+              },
+              "iso3": {
+                "description": "ISO 3166-1 alpha-3 code, e.g. \"JPN\".",
+                "type": "string"
+              },
+              "links": {
+                "properties": {
+                  "country": {
+                    "properties": {
+                      "path": {
+                        "description": "Path on the storefront, e.g. \"/esim/spain/\". Always the canonical page, never a redirect.",
+                        "type": "string"
+                      },
+                      "query": {
+                        "description": "Query parameters that belong on the path, as an object. Empty when there are none.",
+                        "type": "object"
+                      },
+                      "url": {
+                        "description": "The full storefront URL for this country's storefront page. Safe to show to a person.",
+                        "type": "string"
+                      }
+                    },
+                    "required": ["path", "query", "url"],
+                    "type": "object"
+                  }
+                },
+                "required": ["country"],
+                "type": "object"
+              },
+              "name": {
+                "description": "English country name, e.g. \"Japan\".",
+                "type": "string"
+              },
+              "note": {
+                "description": "How to read the numbers above, and what to call next.",
+                "type": "string"
+              },
+              "plans": {
+                "properties": {
+                  "count": {
+                    "description": "How many plans are sold for this destination.",
+                    "type": "integer"
+                  },
+                  "highest_price_cents": {
+                    "description": "Dearest plan, in minor units (cents).",
+                    "type": "integer"
+                  },
+                  "largest_bundle_mb": {
+                    "description": "Largest metered allowance in megabytes, on the same terms.",
+                    "type": "integer"
+                  },
+                  "lowest_price_cents": {
+                    "description": "Cheapest plan, in minor units (cents), so 1250 is 12.50.",
+                    "type": "integer"
+                  },
+                  "smallest_bundle_mb": {
+                    "description": "Smallest metered allowance in megabytes. Unlimited plans store 0 MB and are counted in the price range and the plan count but not here, so this is 0 when every plan is unlimited.",
+                    "type": "integer"
+                  }
+                },
+                "required": ["count", "highest_price_cents", "largest_bundle_mb", "lowest_price_cents", "smallest_bundle_mb"],
+                "type": "object"
+              },
+              "region": {
+                "description": "The region this country is filed under, e.g. \"Asia\". Null when it is filed under none.",
+                "type": ["string", "null"]
+              }
+            },
+            "required": ["currency", "iso2", "iso3", "links", "name", "note", "plans", "region"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Get destination info"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:aec0de64ab200c55476fa9e9a0fbd576c8c0fcd90027631af53a70144d68f4a6"
+        },
+        {
+          "name": "get-esim-activation",
+          "title": "Get eSIM activation details",
+          "description": "Fetch the installable eSIM(s) for a paid order: the QR code image, the LPA activation string, the SM-DP+ address and activation code for manual entry, one-tap install links for iPhone and Android, and a hosted install page to send the buyer. Identified by the order id together with the email that bought it. Returns an empty esims list while provisioning is still in flight, which normally clears within a minute of payment.",
+          "inputSchema": {
+            "properties": {
+              "email": {
+                "description": "The email address the order was bought with. Required: the order id alone does not identify a buyer.",
+                "type": "string"
+              },
+              "order_id": {
+                "description": "The order id from the buyer's confirmation email or order page.",
+                "type": "string"
+              }
+            },
+            "required": ["email", "order_id"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "properties": {
+              "esims": {
+                "description": "Every eSIM on this order. EMPTY while provisioning is still in flight.",
+                "items": {
+                  "properties": {
+                    "activation_code": {
+                      "description": "The activation code, for entering the profile by hand. Null before provisioning finishes.",
+                      "type": ["string", "null"]
+                    },
+                    "android_link": {
+                      "description": "One-tap install on Android, on the same terms.",
+                      "type": ["string", "null"]
+                    },
+                    "apple_link": {
+                      "description": "One-tap install on iOS. Open it ON the device that will use the eSIM. Null whenever lpa is.",
+                      "type": ["string", "null"]
+                    },
+                    "iccid": {
+                      "description": "The eSIM's ICCID.",
+                      "type": "string"
+                    },
+                    "install_url": {
+                      "description": "A hosted install page, signed and safe to send a person. The same page the app and the activation email link to.",
+                      "type": "string"
+                    },
+                    "lpa": {
+                      "description": "The GSMA activation string, \"LPA:1$smdp$code\". Null when the details cannot form a valid payload, which is the case you handle by falling back to the two fields above.",
+                      "type": ["string", "null"]
+                    },
+                    "qr_code_url": {
+                      "description": "The install QR as a self-contained data: URI, so it can be rendered without a second fetch. Null whenever lpa is.",
+                      "type": ["string", "null"]
+                    },
+                    "smdp_address": {
+                      "description": "The SM-DP+ server address, the other half of a manual install. Null before provisioning finishes.",
+                      "type": ["string", "null"]
+                    },
+                    "status": {
+                      "description": "eSIM state, e.g. \"active\". Null before the supplier has reported one.",
+                      "type": ["string", "null"]
+                    }
+                  },
+                  "required": ["activation_code", "android_link", "apple_link", "iccid", "install_url", "lpa", "qr_code_url", "smdp_address", "status"],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "note": {
+                "description": "How to get the profile onto the traveller's phone.",
+                "type": "string"
+              },
+              "order_id": {
+                "description": "The order, echoed back.",
+                "type": "string"
+              },
+              "status": {
+                "description": "Order state, e.g. \"completed\".",
+                "type": "string"
+              }
+            },
+            "required": ["esims", "note", "order_id", "status"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Get eSIM activation details"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:eb54bb19b9d21ce2ecfaf8e78c3b43605fee52b610913bd9fe52c8a6b5f51dfa"
+        },
+        {
+          "name": "get-order-status",
+          "title": "Get order status",
+          "description": "Check an eSIM order after payment: whether it completed and whether its eSIMs have been provisioned yet. Identified by the order id together with the email that bought it, both of which are on the buyer's confirmation email. Provisioning usually finishes within a minute of payment, so an order that is paid but lists no eSIMs yet is normal: check again shortly. Once an eSIM is listed, use get-esim-activation to fetch its QR code and install details.",
+          "inputSchema": {
+            "properties": {
+              "email": {
+                "description": "The email address the order was bought with. Required: the order id alone does not identify a buyer.",
+                "type": "string"
+              },
+              "order_id": {
+                "description": "The order id from the buyer's confirmation email or order page.",
+                "type": "string"
+              }
+            },
+            "required": ["email", "order_id"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "properties": {
+              "esims": {
+                "description": "Every eSIM provisioned on this order. EMPTY while provisioning is still in flight, which is normal for the first minute after payment and never means the order failed.",
+                "items": {
+                  "properties": {
+                    "iccid": {
+                      "description": "The eSIM's ICCID. Pass it to check-esim-usage or list-topup-options.",
+                      "type": "string"
+                    },
+                    "status": {
+                      "description": "eSIM state, e.g. \"active\", \"pending\", \"expired\". Null before the supplier has reported one.",
+                      "type": ["string", "null"]
+                    }
+                  },
+                  "required": ["iccid", "status"],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "note": {
+                "description": "What to do next, given the list above.",
+                "type": "string"
+              },
+              "order_id": {
+                "description": "The order, echoed back.",
+                "type": "string"
+              },
+              "placed_at": {
+                "description": "When the order was created, ISO 8601. Null on the rare row that has no timestamp.",
+                "type": ["string", "null"]
+              },
+              "status": {
+                "description": "Order state, e.g. \"completed\" or \"pending\". \"completed\" is about the eSIM having provisioned, not about the money.",
+                "type": "string"
+              }
+            },
+            "required": ["esims", "note", "order_id", "placed_at", "status"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Get order status"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:d705b903655152b3743941268d22637323b6eada01f3e61cee8fc728aeded8ee"
+        },
+        {
+          "name": "get-plan",
+          "title": "Get eSIM plan details",
+          "description": "Read everything about one eSIM plan by its id: data allowance, how long it stays valid, what happens after a fair-use cap, whether hotspot and top-ups are supported, the network it runs on, and the retail price in the currency you ask for. Use it to answer a specific question about a plan already found with list-plans or plan-trip, and before buying, to confirm the plan really matches what the traveller asked for. Ask get-plan-coverage instead when the question is which countries it works in. Read-only: it reserves nothing and charges nothing.",
+          "inputSchema": {
+            "properties": {
+              "currency": {
+                "description": "Optional. ISO 4217 three-letter code the price is quoted in, e.g. \"USD\", \"EUR\", \"GBP\". Defaults to EUR. An unknown code falls back to EUR rather than failing.",
+                "maxLength": 3,
+                "minLength": 3,
+                "type": "string"
+              },
+              "plan_id": {
+                "description": "The plan id: a 26-character ULID as returned by list-plans or plan-trip, e.g. \"01JVQ2S6D4X8N0RMB7YQZ5K3TA\". Slugs and supplier codes are not accepted, and an id must never be invented.",
+                "type": "string"
+              }
+            },
+            "required": ["plan_id"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "properties": {
+              "carrier": {
+                "description": "The mobile network this plan runs on, when we can name it. Null when we cannot.",
+                "properties": {
+                  "logo_url": {
+                    "description": "Carrier logo image URL.",
+                    "type": "string"
+                  },
+                  "name": {
+                    "description": "Carrier name, e.g. \"KPN\".",
+                    "type": "string"
+                  }
+                },
+                "required": ["logo_url", "name"],
+                "type": ["object", "null"]
+              },
+              "country": {
+                "description": "The one country this plan is filed under. Null for a regional or worldwide plan.",
+                "properties": {
+                  "currency": {
+                    "description": "ISO 4217 code the from_price_cents beside it is expressed in, which is the currency you asked for, e.g. \"EUR\". Null exactly when from_price_cents is null, which is what a country nested on a plan answers: nothing priced it there.",
+                    "type": ["string", "null"]
+                  },
+                  "from_price_cents": {
+                    "description": "Cheapest plan for this destination, in minor units (cents) of the response currency, so 1250 is 12.50. Null when this response did not price the destination.",
+                    "type": ["integer", "null"]
+                  },
+                  "iso2": {
+                    "description": "ISO 3166-1 alpha-2 code, e.g. \"ES\". This is the code list-plans and plan-trip take.",
+                    "type": "string"
+                  },
+                  "iso3": {
+                    "description": "ISO 3166-1 alpha-3 code, e.g. \"ESP\".",
+                    "type": "string"
+                  },
+                  "links": {
+                    "properties": {
+                      "country": {
+                        "properties": {
+                          "path": {
+                            "description": "Path on the storefront, e.g. \"/esim/spain/\". Always the canonical page, never a redirect.",
+                            "type": "string"
+                          },
+                          "query": {
+                            "description": "Query parameters that belong on the path, as an object. Empty when there are none.",
+                            "type": "object"
+                          },
+                          "url": {
+                            "description": "The full storefront URL for this country's storefront page. Safe to show to a person.",
+                            "type": "string"
+                          }
+                        },
+                        "required": ["path", "query", "url"],
+                        "type": "object"
+                      }
+                    },
+                    "required": ["country"],
+                    "type": "object"
+                  },
+                  "name": {
+                    "description": "English country name, e.g. \"Spain\".",
+                    "type": "string"
+                  },
+                  "region": {
+                    "description": "The region this country is filed under, e.g. \"Europe\". Null when it is filed under none.",
+                    "type": ["string", "null"]
+                  }
+                },
+                "required": ["currency", "from_price_cents", "iso2", "iso3", "links", "name", "region"],
+                "type": ["object", "null"]
+              },
+              "coverage_count": {
+                "description": "How many countries coverage_countries holds.",
+                "type": "integer"
+              },
+              "coverage_countries": {
+                "description": "Every country the plan works in.",
+                "items": {
+                  "properties": {
+                    "iso2": {
+                      "description": "ISO 3166-1 alpha-2 code, or null for a country we could not match to a code.",
+                      "type": ["string", "null"]
+                    },
+                    "name": {
+                      "description": "English country name.",
+                      "type": "string"
+                    },
+                    "operators": {
+                      "description": "Networks in that country, when the country could be attributed. Empty means not attributed, never \"no coverage\".",
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    }
+                  },
+                  "required": ["iso2", "name", "operators"],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "coverage_type": {
+                "description": "Scope of the plan: one country, a region, or worldwide.",
+                "enum": ["country", "region", "global"],
+                "type": "string"
+              },
+              "currency": {
+                "description": "ISO 4217 code retail_price_cents is quoted in, e.g. \"EUR\".",
+                "type": ["string", "null"]
+              },
+              "data_amount_mb": {
+                "description": "Data allowance in megabytes (1 GB is 1024 MB). 0 on an unlimited plan, where data_usage_policy carries the real terms.",
+                "type": "integer"
+              },
+              "data_restriction_type": {
+                "description": "Whether the allowance is capped (\"limited\") or unmetered (\"unlimited\").",
+                "enum": ["limited", "unlimited"],
+                "type": "string"
+              },
+              "data_usage_policy": {
+                "description": "What the plan really gives you. Null when the supplier has never published its terms, which is different from having no limits.",
+                "properties": {
+                  "high_speed_data_mb": {
+                    "description": "Full-speed allowance in megabytes PER RESET PERIOD, so 1 GB a day for 30 days is 1024, not 30720. 0 means genuinely uncapped.",
+                    "type": ["integer", "null"]
+                  },
+                  "max_speed_kbps": {
+                    "description": "Speed ceiling in kbit/s from the first megabyte. Null means no ceiling.",
+                    "type": ["integer", "null"]
+                  },
+                  "reduced_speed_kbps": {
+                    "description": "Speed in kbit/s after the full-speed allowance is used. Null means the data STOPS rather than slowing down.",
+                    "type": ["integer", "null"]
+                  },
+                  "reset_period": {
+                    "description": "How often the full-speed allowance resets. Null means it covers the whole plan.",
+                    "enum": ["daily", "weekly", "monthly", null],
+                    "type": ["string", "null"]
+                  }
+                },
+                "required": ["high_speed_data_mb", "max_speed_kbps", "reduced_speed_kbps", "reset_period"],
+                "type": ["object", "null"]
+              },
+              "excluded_count": {
+                "description": "How many countries excluded_countries holds.",
+                "type": "integer"
+              },
+              "excluded_countries": {
+                "description": "Countries in this plan's own region that it does NOT cover. Always empty for a country plan and for a worldwide one.",
+                "items": {
+                  "properties": {
+                    "iso2": {
+                      "description": "ISO 3166-1 alpha-2 code.",
+                      "type": ["string", "null"]
+                    },
+                    "name": {
+                      "description": "English country name.",
+                      "type": "string"
+                    }
+                  },
+                  "required": ["iso2", "name"],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "hotspot_usage_policy": {
+                "description": "What the plan lets you do with a hotspot. Null when the terms were never established, which is different from being allowed.",
+                "properties": {
+                  "allowed": {
+                    "description": "Whether the plan may be shared as a hotspot at all.",
+                    "type": "boolean"
+                  },
+                  "high_speed_data_mb": {
+                    "description": "A separate tethering allowance in megabytes per reset period. Null means tethering draws on the plan data with no allowance of its own.",
+                    "type": ["integer", "null"]
+                  },
+                  "max_speed_kbps": {
+                    "description": "Speed ceiling in kbit/s while tethering. Null means no ceiling.",
+                    "type": ["integer", "null"]
+                  },
+                  "max_total_mb": {
+                    "description": "A hard cap on tethered data across the whole plan, in megabytes. Null means no such cap.",
+                    "type": ["integer", "null"]
+                  },
+                  "reduced_speed_kbps": {
+                    "description": "Speed in kbit/s once the tethering allowance is used. Null means tethering stops.",
+                    "type": ["integer", "null"]
+                  },
+                  "reset_period": {
+                    "description": "How often the tethering allowance resets. Null when it covers the whole plan.",
+                    "enum": ["daily", "weekly", "monthly", null],
+                    "type": ["string", "null"]
+                  }
+                },
+                "required": ["allowed", "high_speed_data_mb", "max_speed_kbps", "max_total_mb", "reduced_speed_kbps", "reset_period"],
+                "type": ["object", "null"]
+              },
+              "id": {
+                "description": "The plan id (a 26-character ULID). Pass it to get-plan, get-plan-coverage or create-checkout-session. Never invent one.",
+                "type": "string"
+              },
+              "is_worldwide": {
+                "description": "True when the plan is sold as a worldwide bundle.",
+                "type": "boolean"
+              },
+              "links": {
+                "description": "Where a person buys this plan on simfuse.app.",
+                "properties": {
+                  "country": {
+                    "description": "The country page on its own, or null when the plan has no single country.",
+                    "properties": {
+                      "path": {
+                        "description": "Path on the storefront, e.g. \"/esim/spain/\". Always the canonical page, never a redirect.",
+                        "type": "string"
+                      },
+                      "query": {
+                        "description": "Query parameters that belong on the path, as an object. Empty when there are none.",
+                        "type": "object"
+                      },
+                      "url": {
+                        "description": "The full storefront URL for the plan's country page. Safe to show to a person.",
+                        "type": "string"
+                      }
+                    },
+                    "required": ["path", "query", "url"],
+                    "type": ["object", "null"]
+                  },
+                  "plan": {
+                    "properties": {
+                      "path": {
+                        "description": "Path on the storefront, e.g. \"/esim/spain/\". Always the canonical page, never a redirect.",
+                        "type": "string"
+                      },
+                      "query": {
+                        "description": "Query parameters that belong on the path, as an object. Empty when there are none.",
+                        "type": "object"
+                      },
+                      "url": {
+                        "description": "The full storefront URL for the page this plan is bought on, with the plan preselected. Safe to show to a person.",
+                        "type": "string"
+                      }
+                    },
+                    "required": ["path", "query", "url"],
+                    "type": "object"
+                  }
+                },
+                "required": ["country", "plan"],
+                "type": "object"
+              },
+              "name": {
+                "description": "Plan name as a traveller sees it, e.g. \"Spain 5GB\".",
+                "type": "string"
+              },
+              "network": {
+                "description": "The network name as plain text, or null when unknown.",
+                "type": ["string", "null"]
+              },
+              "network_generation": {
+                "description": "The network generation the plan is sold as, exactly as stated for it. Null means not stated, which is not the same as any generation; say \"not stated\" rather than assuming.",
+                "enum": ["3G", "4G", "5G", null],
+                "type": ["string", "null"]
+              },
+              "network_type": {
+                "description": "Deprecated two-valued form: \"5G\" for a 5G plan, \"LTE\" for everything else including plans whose generation was never stated. Read network_generation.",
+                "enum": ["5G", "LTE"],
+                "type": "string"
+              },
+              "operators": {
+                "description": "Network operators the plan roams on, as a list. Empty when none are published.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "region": {
+                "description": "Raw region value for a regional plan, e.g. \"Europe\". Null for a country plan.",
+                "type": ["string", "null"]
+              },
+              "region_label": {
+                "description": "The region formatted for a person to read. Null for a country plan.",
+                "type": ["string", "null"]
+              },
+              "retail_price_cents": {
+                "description": "Retail price in minor units (cents) of `currency`, so 1250 in EUR is 12.50 EUR. This is what a buyer pays for one eSIM.",
+                "type": ["integer", "null"]
+              },
+              "retail_prices_cents": {
+                "description": "Prices in other currencies, keyed by ISO 4217 code, in minor units. Only the multi-currency surfaces (the catalog export) carry one, so it is absent here: read retail_price_cents and currency instead.",
+                "type": "object"
+              },
+              "supports_tethering": {
+                "description": "Whether hotspot or tethering is allowed. Null means no supplier has declared it, which is not the same as \"no\".",
+                "type": ["boolean", "null"]
+              },
+              "supports_topup": {
+                "description": "Whether more data can be bought for the same eSIM once it runs low.",
+                "type": "boolean"
+              },
+              "type": {
+                "description": "What the plan sells: data only, or data plus a bundled voice and SMS allowance.",
+                "enum": ["data", "data_voice_sms"],
+                "type": "string"
+              },
+              "validity_days": {
+                "description": "How many days the plan stays valid once it activates.",
+                "type": "integer"
+              }
+            },
+            "required": ["carrier", "country", "coverage_count", "coverage_countries", "coverage_type", "currency", "data_amount_mb", "data_restriction_type", "data_usage_policy", "excluded_count", "excluded_countries", "hotspot_usage_policy", "id", "is_worldwide", "links", "name", "network", "network_generation", "network_type", "operators", "region", "region_label", "retail_price_cents", "supports_tethering", "supports_topup", "type", "validity_days"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Get eSIM plan details"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:bd35a6f573b90d9f35520c76431692e75cda8b9ccd3329abf2ac156ae327e78c"
+        },
+        {
+          "name": "get-plan-coverage",
+          "title": "Get plan country coverage",
+          "description": "List every country one eSIM plan works in, plus any country of its own region that it leaves out. Use it to answer \"does this plan also cover Austria?\" for a regional or worldwide plan, where the plan name says a region and the traveller needs the actual list. For a single-country plan the answer is that one country. Ask get-plan instead for the data allowance, validity or price. Read-only.",
+          "inputSchema": {
+            "properties": {
+              "plan_id": {
+                "description": "The plan id: a 26-character ULID as returned by list-plans or plan-trip, e.g. \"01JVQ2S6D4X8N0RMB7YQZ5K3TA\". Slugs and supplier codes are not accepted, and an id must never be invented.",
+                "type": "string"
+              }
+            },
+            "required": ["plan_id"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "properties": {
+              "countries": {
+                "description": "Every country the plan works in. Match on iso2 to answer \"does this cover X?\".",
+                "items": {
+                  "properties": {
+                    "iso2": {
+                      "description": "ISO 3166-1 alpha-2 code, or null for a country we could not match to a code.",
+                      "type": ["string", "null"]
+                    },
+                    "name": {
+                      "description": "English country name, e.g. \"Spain\".",
+                      "type": "string"
+                    }
+                  },
+                  "required": ["iso2", "name"],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "coverage_type": {
+                "description": "Scope of the plan: one country, a region, or worldwide.",
+                "enum": ["country", "region", "global"],
+                "type": "string"
+              },
+              "excluded_countries": {
+                "description": "Countries in the plan's own region that it does not cover. Always empty for a country plan and for a worldwide one.",
+                "items": {
+                  "properties": {
+                    "iso2": {
+                      "description": "ISO 3166-1 alpha-2 code, or null for a country we could not match to a code.",
+                      "type": ["string", "null"]
+                    },
+                    "name": {
+                      "description": "English country name, e.g. \"Spain\".",
+                      "type": "string"
+                    }
+                  },
+                  "required": ["iso2", "name"],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "is_worldwide": {
+                "description": "True when the plan is sold as a worldwide bundle.",
+                "type": "boolean"
+              },
+              "region_label": {
+                "description": "The plan's region written for a person, e.g. \"Europe\". Null for a country plan.",
+                "type": ["string", "null"]
+              },
+              "total": {
+                "description": "How many countries the plan covers.",
+                "type": "integer"
+              },
+              "total_excluded": {
+                "description": "How many countries of the plan's own region it does NOT cover.",
+                "type": "integer"
+              }
+            },
+            "required": ["countries", "coverage_type", "excluded_countries", "is_worldwide", "region_label", "total", "total_excluded"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Get plan country coverage"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:2ea615465df4e3ae357cf1309fbfbeba38058ad25572cf11154fd8e225e2f763"
+        },
+        {
+          "name": "list-destinations",
+          "title": "List eSIM destinations",
+          "description": "Find the countries SimFuse sells eSIMs for, with the cheapest plan price (\"from\" price) for each in the currency you ask for. Start here when someone names a place: it turns \"Portugal\" into the two-letter country code the other tools take, and shows what that destination starts at. For one destination, follow it with list-plans; for a trip covering two or more countries, use plan-trip instead. Read-only, and it answers from the SimFuse catalog alone.",
+          "inputSchema": {
+            "properties": {
+              "currency": {
+                "description": "Optional. ISO 4217 three-letter code the \"from\" prices are quoted in, e.g. \"USD\", \"EUR\", \"GBP\". Defaults to EUR. An unknown code falls back to EUR rather than failing.",
+                "maxLength": 3,
+                "minLength": 3,
+                "type": "string"
+              },
+              "limit": {
+                "description": "Optional. Maximum destinations to return, 1 to 300. Defaults to 300, which is the whole list.",
+                "maximum": 300,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "search": {
+                "description": "Optional. Match destinations by name, ISO 3166-1 alpha-2 or alpha-3 code, case-insensitively. A partial name works: \"port\" matches Portugal. Omit to list every destination.",
+                "maxLength": 100,
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "outputSchema": {
+            "properties": {
+              "currency": {
+                "description": "ISO 4217 code every from_price_cents below is quoted in, e.g. \"EUR\".",
+                "type": "string"
+              },
+              "destinations": {
+                "description": "The matching destinations. Empty when nothing matched.",
+                "items": {
+                  "properties": {
+                    "currency": {
+                      "description": "ISO 4217 code the from_price_cents beside it is expressed in, which is the currency you asked for, e.g. \"EUR\". Null exactly when from_price_cents is null, which is what a country nested on a plan answers: nothing priced it there.",
+                      "type": ["string", "null"]
+                    },
+                    "from_price_cents": {
+                      "description": "Cheapest plan for this destination, in minor units (cents) of the response currency, so 1250 is 12.50. Null when this response did not price the destination.",
+                      "type": ["integer", "null"]
+                    },
+                    "iso2": {
+                      "description": "ISO 3166-1 alpha-2 code, e.g. \"ES\". This is the code list-plans and plan-trip take.",
+                      "type": "string"
+                    },
+                    "iso3": {
+                      "description": "ISO 3166-1 alpha-3 code, e.g. \"ESP\".",
+                      "type": "string"
+                    },
+                    "links": {
+                      "properties": {
+                        "country": {
+                          "properties": {
+                            "path": {
+                              "description": "Path on the storefront, e.g. \"/esim/spain/\". Always the canonical page, never a redirect.",
+                              "type": "string"
+                            },
+                            "query": {
+                              "description": "Query parameters that belong on the path, as an object. Empty when there are none.",
+                              "type": "object"
+                            },
+                            "url": {
+                              "description": "The full storefront URL for this country's storefront page. Safe to show to a person.",
+                              "type": "string"
+                            }
+                          },
+                          "required": ["path", "query", "url"],
+                          "type": "object"
+                        }
+                      },
+                      "required": ["country"],
+                      "type": "object"
+                    },
+                    "name": {
+                      "description": "English country name, e.g. \"Spain\".",
+                      "type": "string"
+                    },
+                    "region": {
+                      "description": "The region this country is filed under, e.g. \"Europe\". Null when it is filed under none.",
+                      "type": ["string", "null"]
+                    }
+                  },
+                  "required": ["currency", "from_price_cents", "iso2", "iso3", "links", "name", "region"],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "returned": {
+                "description": "How many destinations are in this response.",
+                "type": "integer"
+              },
+              "total": {
+                "description": "How many destinations matched, before `limit` was applied.",
+                "type": "integer"
+              }
+            },
+            "required": ["currency", "destinations", "returned", "total"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "List eSIM destinations"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:47cc78248f8b54d64dfe100e34a84c1b1e1ba2e3cac81cd7f2f828252efe5dc4"
+        },
+        {
+          "name": "list-plans",
+          "title": "List eSIM plans",
+          "description": "Show the eSIM plans on sale for one country or region, or search the whole catalog, narrowing by data allowance, validity and price. Use destination with a country code from list-destinations, or region with a slug from list-regions; never both. Use it when the traveller wants to compare what is available or find a plan inside a budget. Prices are live retail prices in the currency you ask for. For a trip covering two or more countries, use plan-trip first: it compares one plan for the whole route against one plan per country and picks the cheapest complete answer. Pass a plan id from here to get-plan, get-plan-coverage or create-checkout-session. Read-only, and it answers from the SimFuse catalog alone.",
+          "inputSchema": {
+            "properties": {
+              "currency": {
+                "description": "Optional. ISO 4217 three-letter code prices are quoted and filtered in, e.g. \"USD\", \"EUR\", \"GBP\". Defaults to EUR. An unknown code falls back to EUR rather than failing.",
+                "maxLength": 3,
+                "minLength": 3,
+                "type": "string"
+              },
+              "destination": {
+                "description": "Optional. ISO 3166-1 alpha-2 destination country code, e.g. \"US\", \"GB\", \"DE\". Look it up with list-destinations rather than guessing. Cannot be combined with region. Omit both destination and region to search the whole catalog.",
+                "maxLength": 2,
+                "minLength": 2,
+                "type": "string"
+              },
+              "limit": {
+                "description": "Optional. Maximum plans to return, 1 to 100. Defaults to 25.",
+                "maximum": 100,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "max_data_amount_mb": {
+                "description": "Optional. Only plans with at most this much data, in megabytes.",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "max_price_cents": {
+                "description": "Optional. Only plans at or below this retail price, in minor units (cents) of `currency`: 2500 is 25.00.",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "max_validity_days": {
+                "description": "Optional. Only plans valid for at most this many days.",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "min_data_amount_mb": {
+                "description": "Optional. Only plans with at least this much data, in MEGABYTES: 1 GB is 1024, 10 GB is 10240.",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "min_price_cents": {
+                "description": "Optional. Only plans at or above this retail price, in minor units (cents) of `currency`: 500 is 5.00.",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "min_validity_days": {
+                "description": "Optional. Only plans valid for at least this many days, e.g. 14 for a two-week trip.",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "region": {
+                "description": "Optional. Canonical region slug, e.g. \"europe\", \"southeast-asia\" or \"global\", to search that regional shelf. Cannot be combined with destination. Unknown regions return no plans.",
+                "maxLength": 100,
+                "minLength": 1,
+                "pattern": "^[a-zA-Z0-9]+(?:-[a-zA-Z0-9]+)*$",
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "outputSchema": {
+            "properties": {
+              "currency": {
+                "description": "ISO 4217 code every price below is quoted in, e.g. \"EUR\".",
+                "type": "string"
+              },
+              "matched": {
+                "description": "How many plans matched the filters, before `limit` was applied.",
+                "type": "integer"
+              },
+              "plans": {
+                "description": "The matching plans. Empty when nothing matched.",
+                "items": {
+                  "properties": {
+                    "carrier": {
+                      "description": "The mobile network this plan runs on, when we can name it. Null when we cannot.",
+                      "properties": {
+                        "logo_url": {
+                          "description": "Carrier logo image URL.",
+                          "type": "string"
+                        },
+                        "name": {
+                          "description": "Carrier name, e.g. \"KPN\".",
+                          "type": "string"
+                        }
+                      },
+                      "required": ["logo_url", "name"],
+                      "type": ["object", "null"]
+                    },
+                    "country": {
+                      "description": "The one country this plan is filed under. Null for a regional or worldwide plan.",
+                      "properties": {
+                        "currency": {
+                          "description": "ISO 4217 code the from_price_cents beside it is expressed in, which is the currency you asked for, e.g. \"EUR\". Null exactly when from_price_cents is null, which is what a country nested on a plan answers: nothing priced it there.",
+                          "type": ["string", "null"]
+                        },
+                        "from_price_cents": {
+                          "description": "Cheapest plan for this destination, in minor units (cents) of the response currency, so 1250 is 12.50. Null when this response did not price the destination.",
+                          "type": ["integer", "null"]
+                        },
+                        "iso2": {
+                          "description": "ISO 3166-1 alpha-2 code, e.g. \"ES\". This is the code list-plans and plan-trip take.",
+                          "type": "string"
+                        },
+                        "iso3": {
+                          "description": "ISO 3166-1 alpha-3 code, e.g. \"ESP\".",
+                          "type": "string"
+                        },
+                        "links": {
+                          "properties": {
+                            "country": {
+                              "properties": {
+                                "path": {
+                                  "description": "Path on the storefront, e.g. \"/esim/spain/\". Always the canonical page, never a redirect.",
+                                  "type": "string"
+                                },
+                                "query": {
+                                  "description": "Query parameters that belong on the path, as an object. Empty when there are none.",
+                                  "type": "object"
+                                },
+                                "url": {
+                                  "description": "The full storefront URL for this country's storefront page. Safe to show to a person.",
+                                  "type": "string"
+                                }
+                              },
+                              "required": ["path", "query", "url"],
+                              "type": "object"
+                            }
+                          },
+                          "required": ["country"],
+                          "type": "object"
+                        },
+                        "name": {
+                          "description": "English country name, e.g. \"Spain\".",
+                          "type": "string"
+                        },
+                        "region": {
+                          "description": "The region this country is filed under, e.g. \"Europe\". Null when it is filed under none.",
+                          "type": ["string", "null"]
+                        }
+                      },
+                      "required": ["currency", "from_price_cents", "iso2", "iso3", "links", "name", "region"],
+                      "type": ["object", "null"]
+                    },
+                    "coverage_count": {
+                      "description": "How many countries coverage_countries holds.",
+                      "type": "integer"
+                    },
+                    "coverage_countries": {
+                      "description": "Every country the plan works in.",
+                      "items": {
+                        "properties": {
+                          "iso2": {
+                            "description": "ISO 3166-1 alpha-2 code, or null for a country we could not match to a code.",
+                            "type": ["string", "null"]
+                          },
+                          "name": {
+                            "description": "English country name.",
+                            "type": "string"
+                          },
+                          "operators": {
+                            "description": "Networks in that country, when the country could be attributed. Empty means not attributed, never \"no coverage\".",
+                            "items": {
+                              "type": "string"
+                            },
+                            "type": "array"
+                          }
+                        },
+                        "required": ["iso2", "name", "operators"],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "coverage_type": {
+                      "description": "Scope of the plan: one country, a region, or worldwide.",
+                      "enum": ["country", "region", "global"],
+                      "type": "string"
+                    },
+                    "currency": {
+                      "description": "ISO 4217 code retail_price_cents is quoted in, e.g. \"EUR\".",
+                      "type": ["string", "null"]
+                    },
+                    "data_amount_mb": {
+                      "description": "Data allowance in megabytes (1 GB is 1024 MB). 0 on an unlimited plan, where data_usage_policy carries the real terms.",
+                      "type": "integer"
+                    },
+                    "data_restriction_type": {
+                      "description": "Whether the allowance is capped (\"limited\") or unmetered (\"unlimited\").",
+                      "enum": ["limited", "unlimited"],
+                      "type": "string"
+                    },
+                    "data_usage_policy": {
+                      "description": "What the plan really gives you. Null when the supplier has never published its terms, which is different from having no limits.",
+                      "properties": {
+                        "high_speed_data_mb": {
+                          "description": "Full-speed allowance in megabytes PER RESET PERIOD, so 1 GB a day for 30 days is 1024, not 30720. 0 means genuinely uncapped.",
+                          "type": ["integer", "null"]
+                        },
+                        "max_speed_kbps": {
+                          "description": "Speed ceiling in kbit/s from the first megabyte. Null means no ceiling.",
+                          "type": ["integer", "null"]
+                        },
+                        "reduced_speed_kbps": {
+                          "description": "Speed in kbit/s after the full-speed allowance is used. Null means the data STOPS rather than slowing down.",
+                          "type": ["integer", "null"]
+                        },
+                        "reset_period": {
+                          "description": "How often the full-speed allowance resets. Null means it covers the whole plan.",
+                          "enum": ["daily", "weekly", "monthly", null],
+                          "type": ["string", "null"]
+                        }
+                      },
+                      "required": ["high_speed_data_mb", "max_speed_kbps", "reduced_speed_kbps", "reset_period"],
+                      "type": ["object", "null"]
+                    },
+                    "excluded_count": {
+                      "description": "How many countries excluded_countries holds.",
+                      "type": "integer"
+                    },
+                    "excluded_countries": {
+                      "description": "Countries in this plan's own region that it does NOT cover. Always empty for a country plan and for a worldwide one.",
+                      "items": {
+                        "properties": {
+                          "iso2": {
+                            "description": "ISO 3166-1 alpha-2 code.",
+                            "type": ["string", "null"]
+                          },
+                          "name": {
+                            "description": "English country name.",
+                            "type": "string"
+                          }
+                        },
+                        "required": ["iso2", "name"],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "hotspot_usage_policy": {
+                      "description": "What the plan lets you do with a hotspot. Null when the terms were never established, which is different from being allowed.",
+                      "properties": {
+                        "allowed": {
+                          "description": "Whether the plan may be shared as a hotspot at all.",
+                          "type": "boolean"
+                        },
+                        "high_speed_data_mb": {
+                          "description": "A separate tethering allowance in megabytes per reset period. Null means tethering draws on the plan data with no allowance of its own.",
+                          "type": ["integer", "null"]
+                        },
+                        "max_speed_kbps": {
+                          "description": "Speed ceiling in kbit/s while tethering. Null means no ceiling.",
+                          "type": ["integer", "null"]
+                        },
+                        "max_total_mb": {
+                          "description": "A hard cap on tethered data across the whole plan, in megabytes. Null means no such cap.",
+                          "type": ["integer", "null"]
+                        },
+                        "reduced_speed_kbps": {
+                          "description": "Speed in kbit/s once the tethering allowance is used. Null means tethering stops.",
+                          "type": ["integer", "null"]
+                        },
+                        "reset_period": {
+                          "description": "How often the tethering allowance resets. Null when it covers the whole plan.",
+                          "enum": ["daily", "weekly", "monthly", null],
+                          "type": ["string", "null"]
+                        }
+                      },
+                      "required": ["allowed", "high_speed_data_mb", "max_speed_kbps", "max_total_mb", "reduced_speed_kbps", "reset_period"],
+                      "type": ["object", "null"]
+                    },
+                    "id": {
+                      "description": "The plan id (a 26-character ULID). Pass it to get-plan, get-plan-coverage or create-checkout-session. Never invent one.",
+                      "type": "string"
+                    },
+                    "is_worldwide": {
+                      "description": "True when the plan is sold as a worldwide bundle.",
+                      "type": "boolean"
+                    },
+                    "links": {
+                      "description": "Where a person buys this plan on simfuse.app.",
+                      "properties": {
+                        "country": {
+                          "description": "The country page on its own, or null when the plan has no single country.",
+                          "properties": {
+                            "path": {
+                              "description": "Path on the storefront, e.g. \"/esim/spain/\". Always the canonical page, never a redirect.",
+                              "type": "string"
+                            },
+                            "query": {
+                              "description": "Query parameters that belong on the path, as an object. Empty when there are none.",
+                              "type": "object"
+                            },
+                            "url": {
+                              "description": "The full storefront URL for the plan's country page. Safe to show to a person.",
+                              "type": "string"
+                            }
+                          },
+                          "required": ["path", "query", "url"],
+                          "type": ["object", "null"]
+                        },
+                        "plan": {
+                          "properties": {
+                            "path": {
+                              "description": "Path on the storefront, e.g. \"/esim/spain/\". Always the canonical page, never a redirect.",
+                              "type": "string"
+                            },
+                            "query": {
+                              "description": "Query parameters that belong on the path, as an object. Empty when there are none.",
+                              "type": "object"
+                            },
+                            "url": {
+                              "description": "The full storefront URL for the page this plan is bought on, with the plan preselected. Safe to show to a person.",
+                              "type": "string"
+                            }
+                          },
+                          "required": ["path", "query", "url"],
+                          "type": "object"
+                        }
+                      },
+                      "required": ["country", "plan"],
+                      "type": "object"
+                    },
+                    "name": {
+                      "description": "Plan name as a traveller sees it, e.g. \"Spain 5GB\".",
+                      "type": "string"
+                    },
+                    "network": {
+                      "description": "The network name as plain text, or null when unknown.",
+                      "type": ["string", "null"]
+                    },
+                    "network_generation": {
+                      "description": "The network generation the plan is sold as, exactly as stated for it. Null means not stated, which is not the same as any generation; say \"not stated\" rather than assuming.",
+                      "enum": ["3G", "4G", "5G", null],
+                      "type": ["string", "null"]
+                    },
+                    "network_type": {
+                      "description": "Deprecated two-valued form: \"5G\" for a 5G plan, \"LTE\" for everything else including plans whose generation was never stated. Read network_generation.",
+                      "enum": ["5G", "LTE"],
+                      "type": "string"
+                    },
+                    "operators": {
+                      "description": "Network operators the plan roams on, as a list. Empty when none are published.",
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "region": {
+                      "description": "Raw region value for a regional plan, e.g. \"Europe\". Null for a country plan.",
+                      "type": ["string", "null"]
+                    },
+                    "region_label": {
+                      "description": "The region formatted for a person to read. Null for a country plan.",
+                      "type": ["string", "null"]
+                    },
+                    "retail_price_cents": {
+                      "description": "Retail price in minor units (cents) of `currency`, so 1250 in EUR is 12.50 EUR. This is what a buyer pays for one eSIM.",
+                      "type": ["integer", "null"]
+                    },
+                    "retail_prices_cents": {
+                      "description": "Prices in other currencies, keyed by ISO 4217 code, in minor units. Only the multi-currency surfaces (the catalog export) carry one, so it is absent here: read retail_price_cents and currency instead.",
+                      "type": "object"
+                    },
+                    "supports_tethering": {
+                      "description": "Whether hotspot or tethering is allowed. Null means no supplier has declared it, which is not the same as \"no\".",
+                      "type": ["boolean", "null"]
+                    },
+                    "supports_topup": {
+                      "description": "Whether more data can be bought for the same eSIM once it runs low.",
+                      "type": "boolean"
+                    },
+                    "type": {
+                      "description": "What the plan sells: data only, or data plus a bundled voice and SMS allowance.",
+                      "enum": ["data", "data_voice_sms"],
+                      "type": "string"
+                    },
+                    "validity_days": {
+                      "description": "How many days the plan stays valid once it activates.",
+                      "type": "integer"
+                    }
+                  },
+                  "required": ["carrier", "country", "coverage_count", "coverage_countries", "coverage_type", "currency", "data_amount_mb", "data_restriction_type", "data_usage_policy", "excluded_count", "excluded_countries", "hotspot_usage_policy", "id", "is_worldwide", "links", "name", "network", "network_generation", "network_type", "operators", "region", "region_label", "retail_price_cents", "supports_tethering", "supports_topup", "type", "validity_days"],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "returned": {
+                "description": "How many plans are in this response.",
+                "type": "integer"
+              },
+              "truncated_by_candidate_cap": {
+                "description": "True when a catalog-wide search hit its internal candidate cap, so there are further matches this call could not see. Narrow it with a destination or a tighter data or validity filter rather than assuming you have seen everything.",
+                "type": "boolean"
+              }
+            },
+            "required": ["currency", "matched", "plans", "returned", "truncated_by_candidate_cap"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "List eSIM plans"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:27e4cc7e7df68d3b5ac54d80fbc6b99543cccc30ab5efa6c8f6ce62a7bb28e6e"
+        },
+        {
+          "name": "list-regions",
+          "title": "List eSIM regions",
+          "description": "Discover available eSIM regions, including worldwide scopes, with their canonical slugs, display names, member countries and starting prices. Only published regions with active displayed regional plans are listed. Pass a returned region slug to list-plans as region, not destination. Country membership describes the region, not a promise that every plan covers every member: check get-plan-coverage for a specific plan. Read-only; no account or key is needed.",
+          "inputSchema": {
+            "properties": {
+              "currency": {
+                "description": "Optional. ISO 4217 code for starting prices, e.g. \"EUR\" or \"USD\". Defaults to EUR; unknown codes fall back to the base currency.",
+                "maxLength": 3,
+                "minLength": 3,
+                "type": "string"
+              },
+              "limit": {
+                "description": "Optional. Maximum regions to return, 1 to 300. Defaults to 300. total reports the match count before this limit.",
+                "maximum": 300,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "search": {
+                "description": "Optional. Case-insensitive partial match on the canonical region slug or display name, e.g. \"asia\". Omit to list all available regions.",
+                "maxLength": 100,
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "outputSchema": {
+            "properties": {
+              "currency": {
+                "description": "ISO 4217 code for all starting prices.",
+                "type": "string"
+              },
+              "regions": {
+                "description": "Available regions in storefront order. Empty when nothing matches.",
+                "items": {
+                  "properties": {
+                    "countries": {
+                      "description": "Region membership as ISO2 codes, not the coverage of any one plan. Empty for worldwide scopes.",
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "countries_count": {
+                      "description": "Region size by catalog taxonomy. Do not use this as an individual plan coverage count.",
+                      "type": "integer"
+                    },
+                    "currency": {
+                      "description": "ISO 4217 code for from_price_cents.",
+                      "type": "string"
+                    },
+                    "from_price_cents": {
+                      "description": "Cheapest displayed regional plan price in minor units of currency, e.g. 1250 means EUR 12.50 when currency is EUR.",
+                      "type": "integer"
+                    },
+                    "plan_countries_count": {
+                      "description": "Widest single plan coverage. Say \"up to\" this many countries; the cheapest plan may cover fewer.",
+                      "type": "integer"
+                    },
+                    "region": {
+                      "description": "Canonical slug to pass to list-plans.region.",
+                      "type": "string"
+                    },
+                    "region_label": {
+                      "description": "Display name of the region.",
+                      "type": "string"
+                    }
+                  },
+                  "required": ["countries", "countries_count", "currency", "from_price_cents", "plan_countries_count", "region", "region_label"],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "returned": {
+                "description": "Number of regions in this response.",
+                "type": "integer"
+              },
+              "total": {
+                "description": "Matching regions before applying limit.",
+                "type": "integer"
+              }
+            },
+            "required": ["currency", "regions", "returned", "total"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "List eSIM regions"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:2c6cabeadbe98921d59cb57227bd124000245a1ad9ab2e161118860ae609d691"
+        },
+        {
+          "name": "list-topup-options",
+          "title": "List top-up options",
+          "description": "Data top-ups that can be added to an eSIM the buyer already has, narrowed to what its network will actually accept. Identified by the order id and the email that bought it, plus the ICCID. Read-only: a top-up is bought in the SimFuse app, not through this server, and the response carries the link that opens this eSIM there. Do not pass these package ids to create-checkout-session, which would buy a separate new eSIM rather than add data to this one.",
+          "inputSchema": {
+            "properties": {
+              "currency": {
+                "description": "Three-letter currency code for the prices (e.g. \"USD\", \"EUR\"). Defaults to EUR.",
+                "type": "string"
+              },
+              "email": {
+                "description": "The email address the order was bought with.",
+                "type": "string"
+              },
+              "iccid": {
+                "description": "The ICCID of the eSIM to top up, as returned by get-order-status.",
+                "type": "string"
+              },
+              "order_id": {
+                "description": "The order id from the buyer's confirmation email or order page.",
+                "type": "string"
+              }
+            },
+            "required": ["email", "iccid", "order_id"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "properties": {
+              "currency": {
+                "description": "ISO 4217 code every price below is quoted in, e.g. \"EUR\".",
+                "type": "string"
+              },
+              "iccid": {
+                "description": "The eSIM these options apply to.",
+                "type": "string"
+              },
+              "options": {
+                "description": "Top-ups the eSIM's own network will accept against this profile. EMPTY means it cannot be topped up at all, and more data means a new eSIM.",
+                "items": {
+                  "properties": {
+                    "currency": {
+                      "description": "ISO 4217 code of the price beside it.",
+                      "type": "string"
+                    },
+                    "data_amount_mb": {
+                      "description": "Allowance this top-up adds, in megabytes.",
+                      "type": "integer"
+                    },
+                    "data_restriction_type": {
+                      "description": "\"limited\" or \"unlimited\".",
+                      "type": "string"
+                    },
+                    "data_usage_policy": {
+                      "description": "What the plan really gives you. Null when the supplier has never published its terms, which is different from having no limits.",
+                      "properties": {
+                        "high_speed_data_mb": {
+                          "description": "Full-speed allowance in megabytes PER RESET PERIOD, so 1 GB a day for 30 days is 1024, not 30720. 0 means genuinely uncapped.",
+                          "type": ["integer", "null"]
+                        },
+                        "max_speed_kbps": {
+                          "description": "Speed ceiling in kbit/s from the first megabyte. Null means no ceiling.",
+                          "type": ["integer", "null"]
+                        },
+                        "reduced_speed_kbps": {
+                          "description": "Speed in kbit/s after the full-speed allowance is used. Null means the data STOPS rather than slowing down.",
+                          "type": ["integer", "null"]
+                        },
+                        "reset_period": {
+                          "description": "How often the full-speed allowance resets. Null means it covers the whole plan.",
+                          "enum": ["daily", "weekly", "monthly", null],
+                          "type": ["string", "null"]
+                        }
+                      },
+                      "required": ["high_speed_data_mb", "max_speed_kbps", "reduced_speed_kbps", "reset_period"],
+                      "type": ["object", "null"]
+                    },
+                    "id": {
+                      "description": "The top-up package id. Do NOT pass it to create-checkout-session: that buys a separate new eSIM instead of adding data to this one.",
+                      "type": "string"
+                    },
+                    "is_same_package": {
+                      "description": "Whether this is the plan the eSIM is running now (its latest top-up, or the plan it was bought on if never topped up). Topping up this plan adds to the data the eSIM has left, which is the usual \"more of the same\" choice.",
+                      "type": "boolean"
+                    },
+                    "name": {
+                      "description": "Top-up name as a traveller sees it.",
+                      "type": "string"
+                    },
+                    "replaces_current_plan": {
+                      "description": "Whether buying this option REPLACES the plan the eSIM is running now, so any data left on it is lost for good instead of being added to. When true, warn the customer before they buy, and suggest the option with is_same_package true if they want to keep their remaining data.",
+                      "type": "boolean"
+                    },
+                    "retail_price_cents": {
+                      "description": "Price in minor units (cents), so 1250 is 12.50.",
+                      "type": "integer"
+                    },
+                    "validity_days": {
+                      "description": "Days the top-up runs for.",
+                      "type": "integer"
+                    }
+                  },
+                  "required": ["currency", "data_amount_mb", "data_restriction_type", "data_usage_policy", "id", "is_same_package", "name", "replaces_current_plan", "retail_price_cents", "validity_days"],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "purchase": {
+                "properties": {
+                  "available_over_mcp": {
+                    "description": "Always false. A top-up charge is protected by device checks this connection cannot produce.",
+                    "type": "boolean"
+                  },
+                  "note": {
+                    "description": "What to tell the buyer, and what not to do with the ids above.",
+                    "type": "string"
+                  },
+                  "open_in_app": {
+                    "description": "A link that opens this eSIM in the SimFuse app, where the top-up is actually bought. Safe to send a person.",
+                    "type": "string"
+                  }
+                },
+                "required": ["available_over_mcp", "note", "open_in_app"],
+                "type": "object"
+              }
+            },
+            "required": ["currency", "iccid", "options", "purchase"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "List top-up options"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:02d3ace712e8722781a637bfc580d6ce4bd008319c5fe6e9988cd414571701cb"
+        },
+        {
+          "name": "plan-trip",
+          "title": "Plan eSIMs for a trip",
+          "description": "Answer \"which eSIM should I buy for this trip?\". Give it the stops, a country code and the days spent in each, and it compares one plan covering the whole route against one plan per country against a mix of the two, on live prices, then flags the cheapest option that covers everything and explains the choice in a sentence you can quote. It also estimates the data each stop needs, names any country SimFuse cannot cover, and returns package ids that go straight into create-checkout-session. Use it whenever a trip has two or more countries, and for a single country when the traveller wants a recommendation rather than a list. Read-only: nothing is reserved and nothing is charged, and the totals are today's catalog prices, not a quote held for later.",
+          "inputSchema": {
+            "properties": {
+              "currency": {
+                "description": "Optional. ISO 4217 three-letter code every price is quoted in, e.g. \"USD\", \"EUR\", \"GBP\". Defaults to EUR. An unknown code falls back to EUR rather than failing.",
+                "maxLength": 3,
+                "minLength": 3,
+                "type": "string"
+              },
+              "start": {
+                "description": "Optional. Departure date as YYYY-MM-DD, e.g. \"2026-04-18\". Only used to date the stops in the answer; it does not change prices. Defaults to today.",
+                "maxLength": 10,
+                "minLength": 10,
+                "type": "string"
+              },
+              "stops": {
+                "description": "The trip, one entry per country, in travel order. 1 to 12 stops, e.g. [{\"country\":\"JP\",\"days\":7},{\"country\":\"KR\",\"days\":5}].",
+                "items": {
+                  "properties": {
+                    "country": {
+                      "description": "ISO 3166-1 alpha-2 country code, e.g. \"JP\" for Japan. Look one up with list-destinations rather than guessing. Each country may appear once: give one stop with the total days rather than two visits.",
+                      "maxLength": 2,
+                      "minLength": 2,
+                      "type": "string"
+                    },
+                    "days": {
+                      "description": "Days spent in that country, 1 to 365. Count the nights of the stay.",
+                      "maximum": 365,
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "usage": {
+                      "description": "Optional. How heavily data is used during this stop: \"light\" (about 300 MB a day, maps and messaging), \"regular\" (about 800 MB a day) or \"heavy\" (about 2 GB a day, video and hotspot). Overrides the trip-wide `usage` for this stop only.",
+                      "enum": ["light", "regular", "heavy"],
+                      "type": "string"
+                    }
+                  },
+                  "required": ["country", "days"],
+                  "type": "object"
+                },
+                "maxItems": 12,
+                "minItems": 1,
+                "type": "array"
+              },
+              "usage": {
+                "default": "regular",
+                "description": "Optional. Trip-wide data usage for stops that do not set their own: \"light\" (about 300 MB a day), \"regular\" (about 800 MB a day) or \"heavy\" (about 2 GB a day). Defaults to \"regular\".",
+                "enum": ["light", "regular", "heavy"],
+                "type": "string"
+              }
+            },
+            "required": ["stops"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "properties": {
+              "checkout": {
+                "description": "How to act on the recommendation.",
+                "properties": {
+                  "checkout_sessions": {
+                    "description": "HTTP endpoint that opens a checkout session, if you would rather not use the create-checkout-session tool.",
+                    "type": "string"
+                  },
+                  "human_url": {
+                    "description": "Where to send a person to buy this themselves.",
+                    "type": "string"
+                  },
+                  "items": {
+                    "description": "The recommended option as checkout line items, ready to pass to create-checkout-session. Null when nothing covers the trip.",
+                    "items": {
+                      "properties": {
+                        "id": {
+                          "description": "Plan id.",
+                          "type": "string"
+                        },
+                        "quantity": {
+                          "description": "How many to buy.",
+                          "type": "integer"
+                        }
+                      },
+                      "required": ["id", "quantity"],
+                      "type": "object"
+                    },
+                    "type": ["array", "null"]
+                  },
+                  "note": {
+                    "description": "What the totals are and are not: catalog prices today, never a reservation.",
+                    "type": "string"
+                  },
+                  "register": {
+                    "description": "HTTP endpoint that mints an agent key for that API.",
+                    "type": "string"
+                  }
+                },
+                "required": ["checkout_sessions", "human_url", "items", "note", "register"],
+                "type": "object"
+              },
+              "contract": {
+                "description": "Version of this answer's shape. \"1\" today; it only changes when an existing field changes meaning.",
+                "type": "string"
+              },
+              "currency": {
+                "description": "ISO 4217 code every amount below is quoted in, e.g. \"EUR\".",
+                "type": "string"
+              },
+              "options": {
+                "description": "Every way of buying the trip that we could price, cheapest-first within each strategy. Empty when nothing we sell covers it.",
+                "items": {
+                  "properties": {
+                    "complete": {
+                      "description": "True when this option covers every stop. False means at least one stop is left without data.",
+                      "type": "boolean"
+                    },
+                    "esims": {
+                      "description": "How many eSIMs the traveller installs under this option.",
+                      "type": "integer"
+                    },
+                    "items": {
+                      "description": "The plans this option buys.",
+                      "items": {
+                        "properties": {
+                          "covers": {
+                            "description": "ISO 3166-1 alpha-2 codes of the stops this line covers.",
+                            "items": {
+                              "type": "string"
+                            },
+                            "type": "array"
+                          },
+                          "data": {
+                            "description": "Allowance written for a person, e.g. \"5 GB\" or \"Unlimited\".",
+                            "type": "string"
+                          },
+                          "data_mb": {
+                            "description": "Allowance in megabytes. 0 on an unlimited plan, where `policy` carries the real terms.",
+                            "type": ["integer", "null"]
+                          },
+                          "name": {
+                            "description": "Plan name as a traveller sees it.",
+                            "type": "string"
+                          },
+                          "package_id": {
+                            "description": "The plan id to buy. Pass it to create-checkout-session or get-plan.",
+                            "type": "string"
+                          },
+                          "policy": {
+                            "description": "What the plan really gives you. Null when the supplier has never published its terms, which is different from having no limits.",
+                            "properties": {
+                              "high_speed_data_mb": {
+                                "description": "Full-speed allowance in megabytes PER RESET PERIOD, so 1 GB a day for 30 days is 1024, not 30720. 0 means genuinely uncapped.",
+                                "type": ["integer", "null"]
+                              },
+                              "max_speed_kbps": {
+                                "description": "Speed ceiling in kbit/s from the first megabyte. Null means no ceiling.",
+                                "type": ["integer", "null"]
+                              },
+                              "reduced_speed_kbps": {
+                                "description": "Speed in kbit/s after the full-speed allowance is used. Null means the data STOPS rather than slowing down.",
+                                "type": ["integer", "null"]
+                              },
+                              "reset_period": {
+                                "description": "How often the full-speed allowance resets. Null means it covers the whole plan.",
+                                "enum": ["daily", "weekly", "monthly", null],
+                                "type": ["string", "null"]
+                              }
+                            },
+                            "required": ["high_speed_data_mb", "max_speed_kbps", "reduced_speed_kbps", "reset_period"],
+                            "type": ["object", "null"]
+                          },
+                          "price": {
+                            "description": "The same price formatted for a person.",
+                            "type": "string"
+                          },
+                          "price_cents": {
+                            "description": "Price for one of this plan, in minor units (cents) of the response currency.",
+                            "type": "integer"
+                          },
+                          "quantity": {
+                            "description": "How many of this plan to buy.",
+                            "type": "integer"
+                          },
+                          "unlimited": {
+                            "description": "True when the plan is sold as unlimited, which almost always means unlimited up to a fair-use cap.",
+                            "type": "boolean"
+                          },
+                          "validity_days": {
+                            "description": "How many days the plan stays valid once it activates.",
+                            "type": "integer"
+                          }
+                        },
+                        "required": ["covers", "data", "data_mb", "name", "package_id", "policy", "price", "price_cents", "quantity", "unlimited", "validity_days"],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "purchasable": {
+                      "description": "False when the option needs more eSIMs than one order can carry.",
+                      "type": "boolean"
+                    },
+                    "recommended": {
+                      "description": "True on the one option this answer recommends.",
+                      "type": "boolean"
+                    },
+                    "saves_cents": {
+                      "description": "What this option saves against the next cheapest complete alternative, in minor units. 0 when there is none or when it is dearer.",
+                      "type": "integer"
+                    },
+                    "strategy": {
+                      "description": "How this option buys the trip.",
+                      "enum": ["single", "per_country", "mixed"],
+                      "type": "string"
+                    },
+                    "total": {
+                      "description": "The same total formatted for a person, e.g. \"24.50 EUR\".",
+                      "type": "string"
+                    },
+                    "total_cents": {
+                      "description": "Total price in minor units (cents) of the response currency, so 2450 is 24.50.",
+                      "type": "integer"
+                    },
+                    "warnings": {
+                      "description": "What this option does not do: a stop it leaves uncovered, a plan that runs out or expires early. Empty when there is nothing to say.",
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    }
+                  },
+                  "required": ["complete", "esims", "items", "purchasable", "recommended", "saves_cents", "strategy", "total", "total_cents", "warnings"],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "planner_url": {
+                "description": "The same trip on the SimFuse website, for a person who wants to finish it themselves.",
+                "type": "string"
+              },
+              "reason": {
+                "description": "One sentence explaining the recommendation, written to be quoted to the traveller verbatim.",
+                "type": "string"
+              },
+              "recommendation": {
+                "description": "Which strategy won: one plan for the whole route, one plan per country, or a mix. Null when nothing we sell covers the trip.",
+                "enum": ["single", "per_country", "mixed"],
+                "type": ["string", "null"]
+              },
+              "trip": {
+                "description": "The trip as it was understood, which is worth reading back to the traveller.",
+                "properties": {
+                  "end": {
+                    "description": "Last day of the trip, YYYY-MM-DD.",
+                    "type": "string"
+                  },
+                  "span_days": {
+                    "description": "Total days from arrival at the first stop to departure from the last.",
+                    "type": "integer"
+                  },
+                  "start": {
+                    "description": "First day of the trip, YYYY-MM-DD.",
+                    "type": "string"
+                  },
+                  "stops": {
+                    "description": "The stops, in travel order, with their dates and data estimates.",
+                    "items": {
+                      "properties": {
+                        "arrive": {
+                          "description": "Arrival date, YYYY-MM-DD.",
+                          "type": "string"
+                        },
+                        "country": {
+                          "description": "ISO 3166-1 alpha-2 code of the stop.",
+                          "type": "string"
+                        },
+                        "depart": {
+                          "description": "Departure date, YYYY-MM-DD.",
+                          "type": "string"
+                        },
+                        "estimated_data": {
+                          "description": "The same estimate written for a person, e.g. \"3.9 GB\".",
+                          "type": "string"
+                        },
+                        "estimated_mb": {
+                          "description": "Data this stop is estimated to need, in megabytes (1 GB is 1024 MB).",
+                          "type": "integer"
+                        },
+                        "nights": {
+                          "description": "Days spent at this stop.",
+                          "type": "integer"
+                        },
+                        "usage": {
+                          "description": "The data appetite used for this stop.",
+                          "enum": ["light", "regular", "heavy"],
+                          "type": "string"
+                        }
+                      },
+                      "required": ["arrive", "country", "depart", "estimated_data", "estimated_mb", "nights", "usage"],
+                      "type": "object"
+                    },
+                    "type": "array"
+                  },
+                  "token": {
+                    "description": "Compact encoding of the trip, for the planner_url link.",
+                    "type": "string"
+                  }
+                },
+                "required": ["end", "span_days", "start", "stops", "token"],
+                "type": "object"
+              },
+              "warnings": {
+                "description": "Trip-level caveats: a country SimFuse does not sell, or a gap the recommended option leaves. Say these out loud rather than dropping them.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "required": ["checkout", "contract", "currency", "options", "planner_url", "reason", "recommendation", "trip", "warnings"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Plan eSIMs for a trip"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:f60dacb8d0eb4551fdfd367699d2416abc1ad064c7a78b6c30d899f089bc4da8"
+        }
+      ],
+      "digest": "sha256:b2f456958007959ed07d58e57fe6b80490d62ce94403742d2dde2b9618610813"
+    }
+  }
+}

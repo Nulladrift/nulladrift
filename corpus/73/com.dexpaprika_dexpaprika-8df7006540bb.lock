@@ -1,0 +1,3029 @@
+{
+  "lockfileVersion": 2,
+  "subjects": {
+    "com.dexpaprika/dexpaprika": {
+      "kind": "mcp-server",
+      "source": {
+        "client": "manual",
+        "file": "registry.modelcontextprotocol.io"
+      },
+      "transport": {
+        "type": "http",
+        "url": "https://mcp.dexpaprika.com/streamable-http"
+      },
+      "protocol": {
+        "era": "legacy",
+        "version": "2025-11-25"
+      },
+      "serverInfo": {
+        "name": "DexPaprika MCP Server",
+        "version": "2.12.1"
+      },
+      "capabilities": {
+        "tools": {
+          "listChanged": true
+        }
+      },
+      "instructions": "# DexPaprika MCP: agent usage notes\n\n## `rationale` field (required on every read tool)\nEvery read tool (`getNetworks`, `getPoolDetails`, etc.) requires a `rationale` string of 20-500 chars.\nFormat: 1-2 sentences referencing (a) what triggered the call and (b) downstream use.\nDo not include user PII or secrets. Rationales are logged for MCP improvement and never shown to end users.\n\nExamples:\n- \"User asked for SOL price; calling getTokenDetails to fetch current USD value.\"\n- \"Building a portfolio dashboard; need top pools for WETH on ethereum to estimate liquidity.\"\n- \"Backtesting USDC/WETH spread; fetching 24h OHLCV at 1h interval.\"\n\n`submitFeedback` is the exception: it has its own `goal`/`expected`/`observed` fields which serve as the rationale.\n\n## Tool discovery\nStart with `getNetworks` (discover supported chains) or `getCapabilities` (agent-onboarding doc: network synonyms, workflow patterns, common pitfalls). Both are free, cached, and have no parameters beyond rationale.\n\n## Your own API key: getTokenOHLCV, getPoolTransactions and getTokenIndicator\n`getTokenOHLCV` (USD candles for a token across all its pools), `getPoolTransactions` (a pool's individual swaps) and `getTokenIndicator` (RSI, EMA, MACD, Bollinger Bands or VWAP on those token candles) need a Dev, Pro or Enterprise plan and run on the caller's own key, never on this server's. The user sets the key as the `Authorization` header on their connection to this server, the key on its own, then reconnects. Without it these tools return `DP401_API_KEY_REQUIRED` and call nothing upstream; relay the setup steps (`setup_url` in the error) or use the error's `fallback_tool` (`getPoolOHLCV` or `getPoolIndicator` on the token's most liquid pool; `getPoolDetails` for a pool's 24h transaction counts). `getPoolOHLCV` and `getPoolIndicator` run on this server's key for candles of 10m and longer within the last 7 days; for finer candles or older history they use the caller's key when the connection carries one, and otherwise return `DP403_PLAN_REQUIRED`. Every other tool works with or without a key.\n\n## Technical indicators\n`getPoolIndicator` returns RSI, EMA, MACD, Bollinger Bands or VWAP for a pool, computed server-side from its OHLCV candles, so there is no need to fetch candles and compute them. Pick one with `indicator` and always pass `interval`. Send only the parameters of that indicator (`period`; `fast_period`/`slow_period`/`signal_period` for macd; `std_dev` for bbands): any other is refused with 400.\n\n## Parameter naming\nSort parameters accept both legacy and canonical names; pick whichever is clearer, the server normalizes both. Canonical names (preferred going forward):\n- `sort_dir` (legacy: `sort`): sort direction, \"asc\" or \"desc\".\n- `sort_by` (legacy: `order_by`): sort field, tool-specific enum.\n\n`getTokenPools` proxies the network-scoped /pools/search with a `token_address` filter (the old /tokens/{token_address}/pools endpoint was removed). The token filter has no cross-network equivalent. Results are pool-perspective only: the old `inversed`/`reorder` flip and `paired_token_address`/`address` second-token filter were removed with the endpoint and return an explicit error if supplied.\n\n`getDexPools` kept its name and its `dex` argument, but on 2026-08-05 the endpoint underneath changed: /networks/{network}/dexes/{dex}/pools was removed and the tool now proxies /networks/{network}/pools/search with a `dex_name` filter. Rows arrive under `results` with `has_next_page` + `next_cursor`, not under `pools` with `page_info`, and the 24h volume field is `volume_usd_24h`, not `volume_usd`. `cursor` replaces `page`: page 2 and above return an explicit error rather than silently repeating page 1.\n\nPagination is 1-indexed; the server accepts `page=0` as a backward-compat alias for `page=1`.\n\n## Time formats\n- `getPoolOHLCV.start` / `.end` (and the same on `getTokenOHLCV`, `getPoolIndicator` and `getTokenIndicator`): a relative offset from now is simplest (`-24h` = last 24 hours, `-7d`, `-90m`; units s, m, h, d) and needs no knowledge of today's date. Also accepts RFC3339 (`2024-01-01T00:00:00Z`), Unix epoch seconds and `YYYY-MM-DD` (treated as 00:00:00 UTC).\n- `getPoolTransactions.from` / `.to`, and `created_after` / `created_before` on getNetworkPoolsFilter and filterNetworkTokens: the same shapes as `start`, so a relative offset (`-1h`, `-24h`, `-7d`), Unix epoch seconds, RFC3339 or `YYYY-MM-DD`. Transactions: window capped to last 7 days.\n- Pool and token search on this server runs an hour behind, like a free key: pools and tokens created in the last hour are left out, so a `created_after` window shorter than an hour comes back empty. A Dev plan or higher on your own key, calling the API directly, sees them as they are indexed.\n\n## Output shape\nAll tools return both `content[0].text` (JSON string, for older clients) and `structuredContent` (validated against the tool's `outputSchema`, 2025-06-18+). Prefer `structuredContent` to avoid the parse round-trip.\n\nArray-returning tools wrap the array under a named key in structuredContent: `getNetworks` gives `{ networks: [...] }`, `getPoolOHLCV` and `getTokenOHLCV` give `{ ohlcv: [...] }`, `getTokenMultiPrices` gives `{ prices: [...] }`.",
+      "tools": [
+        {
+          "name": "filterNetworkTokens",
+          "description": "Get tokens on one network matching numeric thresholds, returned under 'results' with has_next_page and next_cursor. Read-only and keyless. Choose this over getTopTokens when the user gives numeric constraints or a time window. Use for 'tokens with FDV over $10M on Base', 'newly created tokens today', or 'low-liquidity high-volume tokens'. Optional filters (AND-combined): volume_24h_min/max, liquidity_usd_min/max, fdv_min/max, txns_24h_min, price_change_percentage_24h_min/max, created_after/created_before (a relative offset such as '-24h', Unix seconds, RFC3339 or YYYY-MM-DD). Also network (required); limit (default 50, max 100); cursor to page; sort_by (default 'volume_usd_24h', alias order_by); sort_dir asc/desc (default 'desc', alias sort). Pools and tokens created in the last hour are left out: this server searches like a free key, so a created_after window shorter than an hour comes back empty. A Dev plan or higher on your own key, calling the API directly, sees them as they are indexed.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "created_after": {
+                "description": "OPTIONAL: Only tokens created at or after this time: a relative offset such as '-24h' or '-7d', Unix seconds, RFC3339 or YYYY-MM-DD",
+                "type": "string"
+              },
+              "created_before": {
+                "description": "OPTIONAL: Only tokens created at or before this time, same formats as created_after (e.g. '-1h')",
+                "type": "string"
+              },
+              "cursor": {
+                "description": "OPTIONAL: Pagination cursor. Pass `next_cursor` from a previous response to fetch the next page. Replaces the old page number.",
+                "type": "string"
+              },
+              "fdv_max": {
+                "description": "OPTIONAL: Maximum FDV in USD",
+                "type": "number"
+              },
+              "fdv_min": {
+                "description": "OPTIONAL: Minimum FDV in USD",
+                "type": "number"
+              },
+              "limit": {
+                "default": 50,
+                "description": "OPTIONAL: Items per page (default: 50, max: 100)",
+                "type": "number"
+              },
+              "liquidity_usd_max": {
+                "description": "OPTIONAL: Maximum token liquidity in USD",
+                "type": "number"
+              },
+              "liquidity_usd_min": {
+                "description": "OPTIONAL: Minimum token liquidity in USD",
+                "type": "number"
+              },
+              "network": {
+                "description": "REQUIRED: Network ID from getNetworks",
+                "type": "string"
+              },
+              "order_by": {
+                "description": "OPTIONAL: alias of sort_by; both are accepted. Not deprecated at the REST layer: api.dexpaprika.com itself takes order_by, so use this name when calling the REST API directly.",
+                "enum": ["volume_usd_24h", "volume_usd_7d", "volume_usd_30d", "liquidity_usd", "txns_24h", "fdv_usd", "created_at", "price_change_percentage_24h", "volume_24h", "volume_7d", "volume_30d", "txns", "price_change", "fdv", "price_usd"],
+                "type": "string"
+              },
+              "price_change_percentage_24h_max": {
+                "description": "OPTIONAL: Maximum 24h price change, in percent",
+                "type": "number"
+              },
+              "price_change_percentage_24h_min": {
+                "description": "OPTIONAL: Minimum 24h price change, in percent. Negatives are allowed, so -20 finds tokens down at least 20%. This is the only price-change window tokens carry; for 6h, 1h or 5m use getNetworkPoolsFilter.",
+                "type": "number"
+              },
+              "rationale": {
+                "description": "REQUIRED. 1-2 sentence rationale for this call (e.g. \"User asked for X; calling Y to fetch Z\"). Logged for MCP improvement, never shown to end users. No PII or secrets. See the server `instructions` field for the full convention and worked examples.",
+                "maxLength": 500,
+                "minLength": 20,
+                "type": "string"
+              },
+              "sort": {
+                "description": "OPTIONAL: alias of sort_dir; both are accepted. Not deprecated at the REST layer: api.dexpaprika.com itself takes sort, so use this name when calling the REST API directly.",
+                "enum": ["asc", "desc"],
+                "type": "string"
+              },
+              "sort_by": {
+                "description": "OPTIONAL: Sort field. Defaults to 'volume_usd_24h'. Prefer the canonical names; short legacy names are still accepted. The REST API calls this parameter order_by.",
+                "enum": ["volume_usd_24h", "volume_usd_7d", "volume_usd_30d", "liquidity_usd", "txns_24h", "fdv_usd", "created_at", "price_change_percentage_24h", "volume_24h", "volume_7d", "volume_30d", "txns", "price_change", "fdv", "price_usd"],
+                "type": "string"
+              },
+              "sort_dir": {
+                "description": "OPTIONAL: Sort direction (asc/desc). Canonical parameter name. Defaults to 'desc' if neither sort_dir nor sort is provided. The REST API calls this parameter sort.",
+                "enum": ["asc", "desc"],
+                "type": "string"
+              },
+              "txns_24h_min": {
+                "description": "OPTIONAL: Minimum transactions in 24h",
+                "type": "number"
+              },
+              "volume_24h_max": {
+                "description": "OPTIONAL: Maximum 24h volume in USD",
+                "type": "number"
+              },
+              "volume_24h_min": {
+                "description": "OPTIONAL: Minimum 24h volume in USD",
+                "type": "number"
+              }
+            },
+            "required": ["network", "rationale"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": true,
+            "properties": {
+              "has_next_page": {
+                "description": "True if more results are available; fetch them by passing next_cursor as `cursor`.",
+                "type": ["boolean", "null"]
+              },
+              "next_cursor": {
+                "description": "Opaque pagination cursor. Pass back as the `cursor` argument to fetch the next page; null/absent on the last page.",
+                "type": ["string", "null"]
+              },
+              "query": {
+                "anyOf": [
+                  {
+                    "additionalProperties": {},
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Echo of the resolved query and filters the API applied."
+              },
+              "results": {
+                "items": {
+                  "anyOf": [
+                    {
+                      "additionalProperties": true,
+                      "properties": {
+                        "added_at": {
+                          "description": "ISO 8601 timestamp when DexPaprika first indexed this token.",
+                          "type": ["string", "null"]
+                        },
+                        "chain": {
+                          "type": ["string", "null"]
+                        },
+                        "decimals": {
+                          "type": ["number", "null"]
+                        },
+                        "fdv": {
+                          "description": "Fully-diluted valuation in USD.",
+                          "type": ["number", "null"]
+                        },
+                        "id": {
+                          "description": "Token contract address (chain-canonical form).",
+                          "type": ["string", "null"]
+                        },
+                        "name": {
+                          "type": ["string", "null"]
+                        },
+                        "symbol": {
+                          "type": ["string", "null"]
+                        }
+                      },
+                      "type": "object"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "type": "array"
+              }
+            },
+            "required": ["results"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:d6b1ac70c831cefad6e60253fd882dcab9e707d412ca3a543d373a3bdd2d84b9"
+        },
+        {
+          "name": "getCapabilities",
+          "description": "Get the static agent onboarding guide for this server: supported workflows, network name synonyms (mapping words like 'eth' to the canonical slug 'ethereum'), recommended call sequences, and common pitfalls. Read-only and keyless. Read it once at the start of a session before your first query, or when asked 'how do I use this API?', 'what order should I call things in?', or 'which slug maps to eth?'. This returns onboarding docs, not live market data; for the actual list of network slugs use getNetworks, and for coverage totals use getStats. Takes no parameters beyond a short rationale.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "rationale": {
+                "description": "REQUIRED. 1-2 sentence rationale for this call (e.g. \"User asked for X; calling Y to fetch Z\"). Logged for MCP improvement, never shown to end users. No PII or secrets. See the server `instructions` field for the full convention and worked examples.",
+                "maxLength": 500,
+                "minLength": 20,
+                "type": "string"
+              }
+            },
+            "required": ["rationale"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": true,
+            "properties": {
+              "agent_skills": {
+                "type": ["string", "null"]
+              },
+              "common_pitfalls": {
+                "description": "Known edge cases agents should be aware of.",
+                "items": {
+                  "type": ["string", "null"]
+                },
+                "type": "array"
+              },
+              "documentation": {
+                "type": ["string", "null"]
+              },
+              "network_synonyms": {
+                "anyOf": [
+                  {
+                    "additionalProperties": {
+                      "anyOf": [
+                        {
+                          "items": {
+                            "type": ["string", "null"]
+                          },
+                          "type": "array"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Canonical network id -> common alternates an agent might try."
+              },
+              "rate_limits": {
+                "anyOf": [
+                  {
+                    "additionalProperties": true,
+                    "properties": {
+                      "basis": {
+                        "type": ["string", "null"]
+                      },
+                      "on_limit": {
+                        "type": ["string", "null"]
+                      },
+                      "own_key_note": {
+                        "type": ["string", "null"]
+                      },
+                      "own_key_tools": {
+                        "anyOf": [
+                          {
+                            "items": {
+                              "type": ["string", "null"]
+                            },
+                            "type": "array"
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "rest_api_limits_url": {
+                        "type": ["string", "null"]
+                      }
+                    },
+                    "required": ["basis", "on_limit", "own_key_note", "own_key_tools", "rest_api_limits_url"],
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "How limits work for hosted tool calls. Not the REST allowances: your own plan does not apply, except to own_key_tools."
+              },
+              "server": {
+                "anyOf": [
+                  {
+                    "additionalProperties": true,
+                    "properties": {
+                      "name": {
+                        "type": ["string", "null"]
+                      },
+                      "version": {
+                        "type": ["string", "null"]
+                      }
+                    },
+                    "required": ["name", "version"],
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "stats": {
+                "anyOf": [
+                  {
+                    "additionalProperties": true,
+                    "properties": {
+                      "console_url": {
+                        "type": ["string", "null"]
+                      },
+                      "docs_url": {
+                        "type": ["string", "null"]
+                      },
+                      "free_key_credits_per_month": {
+                        "type": ["number", "null"]
+                      },
+                      "free_key_requests_per_minute": {
+                        "type": ["number", "null"]
+                      },
+                      "free_tier": {
+                        "type": ["boolean", "null"]
+                      },
+                      "free_tier_credits_per_month": {
+                        "type": ["number", "null"]
+                      },
+                      "free_tier_max_data_delay_seconds": {
+                        "type": ["number", "null"]
+                      },
+                      "free_tier_requests_per_minute": {
+                        "type": ["number", "null"]
+                      },
+                      "key_required_to_start": {
+                        "type": ["boolean", "null"]
+                      },
+                      "networks": {
+                        "type": ["number", "null"]
+                      },
+                      "pools_approx": {
+                        "type": ["number", "null"]
+                      },
+                      "pricing_url": {
+                        "type": ["string", "null"]
+                      },
+                      "tokens_approx": {
+                        "type": ["number", "null"]
+                      }
+                    },
+                    "required": ["free_tier", "key_required_to_start", "networks", "pools_approx", "tokens_approx"],
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "workflows": {
+                "anyOf": [
+                  {
+                    "additionalProperties": {
+                      "anyOf": [
+                        {
+                          "items": {
+                            "type": ["string", "null"]
+                          },
+                          "type": "array"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Named tool sequences for common agent tasks."
+              }
+            },
+            "required": ["agent_skills", "common_pitfalls", "documentation", "network_synonyms", "server", "stats", "workflows"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:cc0137f4b2004103b52554fd577c25e9fab07a764edaf9815015f463cb9b6e7f"
+        },
+        {
+          "name": "getDexPools",
+          "description": "Get the pools belonging to one specific DEX on one network, e.g. all Uniswap v3 pools on ethereum, returned under 'results' with has_next_page and next_cursor. Read-only and keyless. Proxies /networks/{network}/pools/search with a dex_name filter; the old /networks/{network}/dexes/{dex}/pools endpoint was removed, so the 24h volume field is now volume_usd_24h and there is no page_info. Narrower than getNetworkPools (a single exchange, not the whole chain). Use for 'show me Raydium pools', 'top pairs on PancakeSwap', or 'liquidity on Orca'. Get the dex id from getNetworkDexes or search first, and pass that response's dex_id field ('uniswap_v3'), matched case-insensitively. Do not pass its dex_name field ('Uniswap V3'): a human display name returns HTTP 200 with an empty results[] rather than an error, so an empty answer here usually means the wrong form of the name was sent. Params: network (required slug); dex (required id, e.g. 'uniswap_v3'; the REST API calls this query parameter dex_name); limit (default 10, max 100); cursor (pass the previous next_cursor to page); sort_by (default 'volume_usd_24h', canonical *_24h fields, short legacy names still accepted, alias order_by); sort_dir 'asc'/'desc' (default 'desc', alias sort). The old page number is superseded: page 2 and above return an error pointing at cursor.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "cursor": {
+                "description": "OPTIONAL: Pagination cursor. Pass `next_cursor` from a previous response to fetch the next page (read `has_next_page` to know if more remain). Replaces the old page number.",
+                "type": "string"
+              },
+              "dex": {
+                "description": "REQUIRED: the dex_id field from getNetworkDexes (e.g., 'uniswap_v3'), matched case-insensitively. Do not pass that response's dex_name field, the human display name (e.g., 'Uniswap V3'): it returns an empty results[] instead of an error, so a wrong value looks like a real but empty answer. The REST API calls this parameter dex_name.",
+                "type": "string"
+              },
+              "limit": {
+                "default": 10,
+                "description": "OPTIONAL: Number of items per page (default: 10, max: 100)",
+                "type": "number"
+              },
+              "network": {
+                "description": "REQUIRED: Network ID from getNetworks (e.g., 'ethereum', 'solana')",
+                "type": "string"
+              },
+              "order_by": {
+                "description": "OPTIONAL: alias of sort_by; both are accepted. Not deprecated at the REST layer: api.dexpaprika.com itself takes order_by, so use this name when calling the REST API directly.",
+                "enum": ["volume_usd_24h", "volume_usd_7d", "volume_usd_30d", "liquidity_usd", "txns_24h", "created_at", "price_usd", "price_change_percentage_24h", "price_change_percentage_48h", "price_change_percentage_6h", "price_change_percentage_1h", "price_change_percentage_5m", "volume_usd", "transactions", "last_price_change_usd_24h", "volume_24h", "volume_7d", "volume_30d", "liquidity"],
+                "type": "string"
+              },
+              "page": {
+                "description": "SUPERSEDED: the replacement endpoint is cursor-paginated and ignores page. page=1 (or 0) still returns the first page as before; page=2 or above returns an error telling you to use cursor.",
+                "type": "number"
+              },
+              "rationale": {
+                "description": "REQUIRED. 1-2 sentence rationale for this call (e.g. \"User asked for X; calling Y to fetch Z\"). Logged for MCP improvement, never shown to end users. No PII or secrets. See the server `instructions` field for the full convention and worked examples.",
+                "maxLength": 500,
+                "minLength": 20,
+                "type": "string"
+              },
+              "sort": {
+                "description": "OPTIONAL: alias of sort_dir; both are accepted. Not deprecated at the REST layer: api.dexpaprika.com itself takes sort, so use this name when calling the REST API directly.",
+                "enum": ["asc", "desc"],
+                "type": "string"
+              },
+              "sort_by": {
+                "description": "OPTIONAL: Sort field. Canonical parameter name. Defaults to 'volume_usd_24h'. Prefer the canonical *_24h names; short legacy names (volume_usd, transactions, last_price_change_usd_24h) are still accepted and normalized. The REST API calls this parameter order_by.",
+                "enum": ["volume_usd_24h", "volume_usd_7d", "volume_usd_30d", "liquidity_usd", "txns_24h", "created_at", "price_usd", "price_change_percentage_24h", "price_change_percentage_48h", "price_change_percentage_6h", "price_change_percentage_1h", "price_change_percentage_5m", "volume_usd", "transactions", "last_price_change_usd_24h", "volume_24h", "volume_7d", "volume_30d", "liquidity"],
+                "type": "string"
+              },
+              "sort_dir": {
+                "description": "OPTIONAL: Sort direction (asc/desc). Canonical parameter name. Defaults to 'desc' if neither sort_dir nor sort is provided. The REST API calls this parameter sort.",
+                "enum": ["asc", "desc"],
+                "type": "string"
+              }
+            },
+            "required": ["dex", "network", "rationale"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": true,
+            "properties": {
+              "has_next_page": {
+                "description": "True if more results are available; fetch them by passing next_cursor as `cursor`.",
+                "type": ["boolean", "null"]
+              },
+              "next_cursor": {
+                "description": "Opaque pagination cursor. Pass back as the `cursor` argument to fetch the next page; null/absent on the last page.",
+                "type": ["string", "null"]
+              },
+              "query": {
+                "anyOf": [
+                  {
+                    "additionalProperties": {},
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Echo of the resolved query and filters the API applied."
+              },
+              "results": {
+                "items": {
+                  "anyOf": [
+                    {
+                      "additionalProperties": true,
+                      "properties": {
+                        "chain": {
+                          "description": "Network slug (e.g. 'ethereum'). Note: also exposed as 'network' on some endpoints.",
+                          "type": ["string", "null"]
+                        },
+                        "created_at": {
+                          "description": "ISO 8601 pool-creation timestamp.",
+                          "type": ["string", "null"]
+                        },
+                        "created_at_block_number": {
+                          "type": ["number", "null"]
+                        },
+                        "dex_id": {
+                          "type": ["string", "null"]
+                        },
+                        "dex_name": {
+                          "type": ["string", "null"]
+                        },
+                        "fee": {
+                          "description": "Pool fee (units depend on DEX; null for some DEXes).",
+                          "type": ["number", "null"]
+                        },
+                        "id": {
+                          "description": "Pool contract address.",
+                          "type": ["string", "null"]
+                        },
+                        "last_price": {
+                          "type": ["number", "null"]
+                        },
+                        "last_price_usd": {
+                          "type": ["number", "null"]
+                        },
+                        "tokens": {
+                          "anyOf": [
+                            {
+                              "items": {
+                                "anyOf": [
+                                  {
+                                    "additionalProperties": true,
+                                    "properties": {
+                                      "added_at": {
+                                        "description": "ISO 8601 timestamp when DexPaprika first indexed this token.",
+                                        "type": ["string", "null"]
+                                      },
+                                      "chain": {
+                                        "type": ["string", "null"]
+                                      },
+                                      "decimals": {
+                                        "type": ["number", "null"]
+                                      },
+                                      "fdv": {
+                                        "description": "Fully-diluted valuation in USD.",
+                                        "type": ["number", "null"]
+                                      },
+                                      "id": {
+                                        "description": "Token contract address (chain-canonical form).",
+                                        "type": ["string", "null"]
+                                      },
+                                      "name": {
+                                        "type": ["string", "null"]
+                                      },
+                                      "symbol": {
+                                        "type": ["string", "null"]
+                                      }
+                                    },
+                                    "type": "object"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "type": "array"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      },
+                      "type": "object"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "type": "array"
+              }
+            },
+            "required": ["results"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:c228d204992b36393d9d0bc7ff2e09a87b57dd7ee7122dc07b1862ca48102193"
+        },
+        {
+          "name": "getNetworkDexes",
+          "description": "List the DEXes (exchanges) operating on one network, such as Uniswap on ethereum or Raydium on solana, returned under 'dexes' with page_info (page, total_pages). Read-only and keyless. Use for 'which DEXes are on Base?', 'does Solana have Orca?', or to get a dex id to feed into getDexPools. Scope is a single network; call getNetworks first for the slug. Params: network (required slug); limit (default 10, max 100); page (default 1, 1-indexed); sort_by (only 'pool'; legacy alias order_by); sort_dir 'asc' or 'desc' (default 'desc'; legacy alias sort).",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "limit": {
+                "default": 10,
+                "description": "OPTIONAL: Number of items per page (default: 10, max: 100)",
+                "type": "number"
+              },
+              "network": {
+                "description": "REQUIRED: Network ID from getNetworks (e.g., 'ethereum', 'solana')",
+                "type": "string"
+              },
+              "order_by": {
+                "description": "OPTIONAL: alias of sort_by; both are accepted. Not deprecated at the REST layer: api.dexpaprika.com itself takes order_by, so use this name when calling the REST API directly.",
+                "enum": ["pool"],
+                "type": "string"
+              },
+              "page": {
+                "default": 1,
+                "description": "OPTIONAL: Page number, 1-indexed. Server accepts page=0 (treated as page=1) for backward compatibility.",
+                "type": "number"
+              },
+              "rationale": {
+                "description": "REQUIRED. 1-2 sentence rationale for this call (e.g. \"User asked for X; calling Y to fetch Z\"). Logged for MCP improvement, never shown to end users. No PII or secrets. See the server `instructions` field for the full convention and worked examples.",
+                "maxLength": 500,
+                "minLength": 20,
+                "type": "string"
+              },
+              "sort": {
+                "description": "OPTIONAL: alias of sort_dir; both are accepted. Not deprecated at the REST layer: api.dexpaprika.com itself takes sort, so use this name when calling the REST API directly.",
+                "enum": ["asc", "desc"],
+                "type": "string"
+              },
+              "sort_by": {
+                "description": "OPTIONAL: Sort field. Canonical parameter name; older tools used order_by. The REST API calls this parameter order_by.",
+                "enum": ["pool"],
+                "type": "string"
+              },
+              "sort_dir": {
+                "description": "OPTIONAL: Sort direction (asc/desc). Canonical parameter name. Defaults to 'desc' if neither sort_dir nor sort is provided. The REST API calls this parameter sort.",
+                "enum": ["asc", "desc"],
+                "type": "string"
+              }
+            },
+            "required": ["network", "rationale"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": true,
+            "properties": {
+              "dexes": {
+                "items": {
+                  "anyOf": [
+                    {
+                      "additionalProperties": true,
+                      "properties": {
+                        "chain": {
+                          "type": ["string", "null"]
+                        },
+                        "dex_id": {
+                          "type": ["string", "null"]
+                        },
+                        "dex_name": {
+                          "type": ["string", "null"]
+                        },
+                        "display_name": {
+                          "type": ["string", "null"]
+                        },
+                        "id": {
+                          "type": ["string", "null"]
+                        },
+                        "network_id": {
+                          "type": ["string", "null"]
+                        },
+                        "pools_count": {
+                          "type": ["number", "null"]
+                        },
+                        "protocol": {
+                          "type": ["string", "null"]
+                        },
+                        "txns_24h": {
+                          "type": ["number", "null"]
+                        },
+                        "volume_usd_24h": {
+                          "type": ["number", "null"]
+                        }
+                      },
+                      "type": "object"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "type": "array"
+              },
+              "page_info": {
+                "anyOf": [
+                  {
+                    "additionalProperties": true,
+                    "properties": {
+                      "limit": {
+                        "description": "Items per page in the request.",
+                        "type": ["number", "null"]
+                      },
+                      "page": {
+                        "description": "Current page number (1-indexed).",
+                        "type": ["number", "null"]
+                      },
+                      "total_items": {
+                        "description": "Total number of items across all pages.",
+                        "type": ["number", "null"]
+                      },
+                      "total_pages": {
+                        "description": "Total number of pages available.",
+                        "type": ["number", "null"]
+                      }
+                    },
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": ["dexes", "page_info"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:41603f29729e54a3b95f4591e86540b37620982fc6f76c7199cf2829a6ab37b0"
+        },
+        {
+          "name": "getNetworkPools",
+          "description": "Get the top liquidity pools across a whole network, ranked by 24h volume by default, returned under 'results' with has_next_page and next_cursor. Read-only and keyless. This is the primary chain-wide pool discovery tool. Use for 'biggest pools on ethereum', 'top trading pairs on Base', or 'most active pools on Solana'. Narrow to one exchange with getDexPools, or apply numeric/time filters with getNetworkPoolsFilter. Params: network (required slug); limit (default 10, max 100); cursor (pass previous next_cursor to page); sort_by (default 'volume_usd_24h', canonical *_24h fields, alias order_by); sort_dir 'asc' or 'desc' (default 'desc', alias sort).",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "cursor": {
+                "description": "OPTIONAL: Pagination cursor. Pass `next_cursor` from a previous response to fetch the next page (read `has_next_page` to know if more remain). Replaces the old page number.",
+                "type": "string"
+              },
+              "limit": {
+                "default": 10,
+                "description": "OPTIONAL: Number of items per page (default: 10, max: 100)",
+                "type": "number"
+              },
+              "network": {
+                "description": "REQUIRED: Network ID from getNetworks (e.g., 'ethereum', 'solana')",
+                "type": "string"
+              },
+              "order_by": {
+                "description": "OPTIONAL: alias of sort_by; both are accepted. Not deprecated at the REST layer: api.dexpaprika.com itself takes order_by, so use this name when calling the REST API directly.",
+                "enum": ["volume_usd_24h", "volume_usd_7d", "volume_usd_30d", "liquidity_usd", "txns_24h", "created_at", "price_usd", "price_change_percentage_24h", "price_change_percentage_48h", "price_change_percentage_6h", "price_change_percentage_1h", "price_change_percentage_5m", "volume_usd", "transactions", "last_price_change_usd_24h", "volume_24h", "volume_7d", "volume_30d", "liquidity"],
+                "type": "string"
+              },
+              "rationale": {
+                "description": "REQUIRED. 1-2 sentence rationale for this call (e.g. \"User asked for X; calling Y to fetch Z\"). Logged for MCP improvement, never shown to end users. No PII or secrets. See the server `instructions` field for the full convention and worked examples.",
+                "maxLength": 500,
+                "minLength": 20,
+                "type": "string"
+              },
+              "sort": {
+                "description": "OPTIONAL: alias of sort_dir; both are accepted. Not deprecated at the REST layer: api.dexpaprika.com itself takes sort, so use this name when calling the REST API directly.",
+                "enum": ["asc", "desc"],
+                "type": "string"
+              },
+              "sort_by": {
+                "description": "OPTIONAL: Sort field. Canonical parameter name. Defaults to 'volume_usd_24h'. Prefer the canonical *_24h names; short legacy names (volume_usd, transactions, last_price_change_usd_24h) are still accepted. The REST API calls this parameter order_by.",
+                "enum": ["volume_usd_24h", "volume_usd_7d", "volume_usd_30d", "liquidity_usd", "txns_24h", "created_at", "price_usd", "price_change_percentage_24h", "price_change_percentage_48h", "price_change_percentage_6h", "price_change_percentage_1h", "price_change_percentage_5m", "volume_usd", "transactions", "last_price_change_usd_24h", "volume_24h", "volume_7d", "volume_30d", "liquidity"],
+                "type": "string"
+              },
+              "sort_dir": {
+                "description": "OPTIONAL: Sort direction (asc/desc). Canonical parameter name. Defaults to 'desc' if neither sort_dir nor sort is provided. The REST API calls this parameter sort.",
+                "enum": ["asc", "desc"],
+                "type": "string"
+              }
+            },
+            "required": ["network", "rationale"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": true,
+            "properties": {
+              "has_next_page": {
+                "description": "True if more results are available; fetch them by passing next_cursor as `cursor`.",
+                "type": ["boolean", "null"]
+              },
+              "next_cursor": {
+                "description": "Opaque pagination cursor. Pass back as the `cursor` argument to fetch the next page; null/absent on the last page.",
+                "type": ["string", "null"]
+              },
+              "query": {
+                "anyOf": [
+                  {
+                    "additionalProperties": {},
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Echo of the resolved query and filters the API applied."
+              },
+              "results": {
+                "items": {
+                  "anyOf": [
+                    {
+                      "additionalProperties": true,
+                      "properties": {
+                        "chain": {
+                          "description": "Network slug (e.g. 'ethereum'). Note: also exposed as 'network' on some endpoints.",
+                          "type": ["string", "null"]
+                        },
+                        "created_at": {
+                          "description": "ISO 8601 pool-creation timestamp.",
+                          "type": ["string", "null"]
+                        },
+                        "created_at_block_number": {
+                          "type": ["number", "null"]
+                        },
+                        "dex_id": {
+                          "type": ["string", "null"]
+                        },
+                        "dex_name": {
+                          "type": ["string", "null"]
+                        },
+                        "fee": {
+                          "description": "Pool fee (units depend on DEX; null for some DEXes).",
+                          "type": ["number", "null"]
+                        },
+                        "id": {
+                          "description": "Pool contract address.",
+                          "type": ["string", "null"]
+                        },
+                        "last_price": {
+                          "type": ["number", "null"]
+                        },
+                        "last_price_usd": {
+                          "type": ["number", "null"]
+                        },
+                        "tokens": {
+                          "anyOf": [
+                            {
+                              "items": {
+                                "anyOf": [
+                                  {
+                                    "additionalProperties": true,
+                                    "properties": {
+                                      "added_at": {
+                                        "description": "ISO 8601 timestamp when DexPaprika first indexed this token.",
+                                        "type": ["string", "null"]
+                                      },
+                                      "chain": {
+                                        "type": ["string", "null"]
+                                      },
+                                      "decimals": {
+                                        "type": ["number", "null"]
+                                      },
+                                      "fdv": {
+                                        "description": "Fully-diluted valuation in USD.",
+                                        "type": ["number", "null"]
+                                      },
+                                      "id": {
+                                        "description": "Token contract address (chain-canonical form).",
+                                        "type": ["string", "null"]
+                                      },
+                                      "name": {
+                                        "type": ["string", "null"]
+                                      },
+                                      "symbol": {
+                                        "type": ["string", "null"]
+                                      }
+                                    },
+                                    "type": "object"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "type": "array"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      },
+                      "type": "object"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "type": "array"
+              }
+            },
+            "required": ["results"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:7da9cef58527f461e380224b211f9139e5f602fb2d4cadefc2a27db35c3d003d"
+        },
+        {
+          "name": "getNetworkPoolsFilter",
+          "description": "Get pools on one network filtered by numeric thresholds, returned under 'results' with has_next_page and next_cursor. Read-only and keyless. Choose this over getNetworkPools when the user gives numeric constraints or a time window. Use for 'pools over $1M liquidity on Base', 'pools created in the last 24h', or 'high-volume low-liquidity pairs'. Optional filters (AND-combined): volume_24h_min/max, volume_7d_min/max, liquidity_usd_min/max, txns_24h_min, price_change_percentage_{24h,48h,6h,1h,5m}_min/max (percent, negatives allowed), created_after/created_before (a relative offset such as '-24h', Unix seconds, RFC3339 or YYYY-MM-DD). Also network (required); limit (default 50, max 100); cursor to page; sort_by (default 'volume_usd_24h', alias order_by); sort_dir asc/desc (default 'desc', alias sort). Pools and tokens created in the last hour are left out: this server searches like a free key, so a created_after window shorter than an hour comes back empty. A Dev plan or higher on your own key, calling the API directly, sees them as they are indexed.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "created_after": {
+                "description": "OPTIONAL: Only pools created at or after this time: a relative offset such as '-24h' or '-7d', Unix seconds, RFC3339 or YYYY-MM-DD",
+                "type": "string"
+              },
+              "created_before": {
+                "description": "OPTIONAL: Only pools created at or before this time, same formats as created_after (e.g. '-1h')",
+                "type": "string"
+              },
+              "cursor": {
+                "description": "OPTIONAL: Pagination cursor. Pass `next_cursor` from a previous response to fetch the next page. Replaces the old page number.",
+                "type": "string"
+              },
+              "limit": {
+                "default": 50,
+                "description": "OPTIONAL: Items per page (default: 50, max: 100)",
+                "type": "number"
+              },
+              "liquidity_usd_max": {
+                "description": "OPTIONAL: Maximum pool liquidity in USD",
+                "type": "number"
+              },
+              "liquidity_usd_min": {
+                "description": "OPTIONAL: Minimum pool liquidity in USD",
+                "type": "number"
+              },
+              "network": {
+                "description": "REQUIRED: Network ID from getNetworks (e.g., 'ethereum', 'solana')",
+                "type": "string"
+              },
+              "order_by": {
+                "description": "OPTIONAL: alias of sort_by; both are accepted. Not deprecated at the REST layer: api.dexpaprika.com itself takes order_by, so use this name when calling the REST API directly.",
+                "enum": ["volume_usd_24h", "volume_usd_7d", "volume_usd_30d", "liquidity_usd", "txns_24h", "created_at", "price_usd", "price_change_percentage_24h", "price_change_percentage_48h", "price_change_percentage_6h", "price_change_percentage_1h", "price_change_percentage_5m", "volume_usd", "transactions", "last_price_change_usd_24h", "volume_24h", "volume_7d", "volume_30d", "liquidity"],
+                "type": "string"
+              },
+              "price_change_percentage_1h_max": {
+                "description": "OPTIONAL: Maximum 1h price change, in percent",
+                "type": "number"
+              },
+              "price_change_percentage_1h_min": {
+                "description": "OPTIONAL: Minimum 1h price change, in percent",
+                "type": "number"
+              },
+              "price_change_percentage_24h_max": {
+                "description": "OPTIONAL: Maximum 24h price change, in percent",
+                "type": "number"
+              },
+              "price_change_percentage_24h_min": {
+                "description": "OPTIONAL: Minimum 24h price change, in percent. Negatives are allowed, so -20 finds pools down at least 20%.",
+                "type": "number"
+              },
+              "price_change_percentage_48h_max": {
+                "description": "OPTIONAL: Maximum 48h price change, in percent",
+                "type": "number"
+              },
+              "price_change_percentage_48h_min": {
+                "description": "OPTIONAL: Minimum 48h price change, in percent",
+                "type": "number"
+              },
+              "price_change_percentage_5m_max": {
+                "description": "OPTIONAL: Maximum 5m price change, in percent",
+                "type": "number"
+              },
+              "price_change_percentage_5m_min": {
+                "description": "OPTIONAL: Minimum 5m price change, in percent. The shortest window we carry, so it is the one to reach for on 'what is moving right now'.",
+                "type": "number"
+              },
+              "price_change_percentage_6h_max": {
+                "description": "OPTIONAL: Maximum 6h price change, in percent",
+                "type": "number"
+              },
+              "price_change_percentage_6h_min": {
+                "description": "OPTIONAL: Minimum 6h price change, in percent",
+                "type": "number"
+              },
+              "rationale": {
+                "description": "REQUIRED. 1-2 sentence rationale for this call (e.g. \"User asked for X; calling Y to fetch Z\"). Logged for MCP improvement, never shown to end users. No PII or secrets. See the server `instructions` field for the full convention and worked examples.",
+                "maxLength": 500,
+                "minLength": 20,
+                "type": "string"
+              },
+              "sort": {
+                "description": "OPTIONAL: alias of sort_dir; both are accepted. Not deprecated at the REST layer: api.dexpaprika.com itself takes sort, so use this name when calling the REST API directly.",
+                "enum": ["asc", "desc"],
+                "type": "string"
+              },
+              "sort_by": {
+                "description": "OPTIONAL: Sort field. Canonical parameter name. Defaults to 'volume_usd_24h'. Prefer the canonical *_24h names; short legacy names (volume_24h, volume_7d, liquidity) are still accepted. The REST API calls this parameter order_by.",
+                "enum": ["volume_usd_24h", "volume_usd_7d", "volume_usd_30d", "liquidity_usd", "txns_24h", "created_at", "price_usd", "price_change_percentage_24h", "price_change_percentage_48h", "price_change_percentage_6h", "price_change_percentage_1h", "price_change_percentage_5m", "volume_usd", "transactions", "last_price_change_usd_24h", "volume_24h", "volume_7d", "volume_30d", "liquidity"],
+                "type": "string"
+              },
+              "sort_dir": {
+                "description": "OPTIONAL: Sort direction (asc/desc). Canonical parameter name. Defaults to 'desc' if neither sort_dir nor sort is provided. The REST API calls this parameter sort.",
+                "enum": ["asc", "desc"],
+                "type": "string"
+              },
+              "txns_24h_min": {
+                "description": "OPTIONAL: Minimum transactions in 24h",
+                "type": "number"
+              },
+              "volume_24h_max": {
+                "description": "OPTIONAL: Maximum 24h volume in USD",
+                "type": "number"
+              },
+              "volume_24h_min": {
+                "description": "OPTIONAL: Minimum 24h volume in USD",
+                "type": "number"
+              },
+              "volume_7d_max": {
+                "description": "OPTIONAL: Maximum 7d volume in USD",
+                "type": "number"
+              },
+              "volume_7d_min": {
+                "description": "OPTIONAL: Minimum 7d volume in USD",
+                "type": "number"
+              }
+            },
+            "required": ["network", "rationale"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": true,
+            "properties": {
+              "has_next_page": {
+                "description": "True if more results are available; fetch them by passing next_cursor as `cursor`.",
+                "type": ["boolean", "null"]
+              },
+              "next_cursor": {
+                "description": "Opaque pagination cursor. Pass back as the `cursor` argument to fetch the next page; null/absent on the last page.",
+                "type": ["string", "null"]
+              },
+              "query": {
+                "anyOf": [
+                  {
+                    "additionalProperties": {},
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Echo of the resolved query and filters the API applied."
+              },
+              "results": {
+                "items": {
+                  "anyOf": [
+                    {
+                      "additionalProperties": true,
+                      "properties": {
+                        "chain": {
+                          "description": "Network slug (e.g. 'ethereum'). Note: also exposed as 'network' on some endpoints.",
+                          "type": ["string", "null"]
+                        },
+                        "created_at": {
+                          "description": "ISO 8601 pool-creation timestamp.",
+                          "type": ["string", "null"]
+                        },
+                        "created_at_block_number": {
+                          "type": ["number", "null"]
+                        },
+                        "dex_id": {
+                          "type": ["string", "null"]
+                        },
+                        "dex_name": {
+                          "type": ["string", "null"]
+                        },
+                        "fee": {
+                          "description": "Pool fee (units depend on DEX; null for some DEXes).",
+                          "type": ["number", "null"]
+                        },
+                        "id": {
+                          "description": "Pool contract address.",
+                          "type": ["string", "null"]
+                        },
+                        "last_price": {
+                          "type": ["number", "null"]
+                        },
+                        "last_price_usd": {
+                          "type": ["number", "null"]
+                        },
+                        "tokens": {
+                          "anyOf": [
+                            {
+                              "items": {
+                                "anyOf": [
+                                  {
+                                    "additionalProperties": true,
+                                    "properties": {
+                                      "added_at": {
+                                        "description": "ISO 8601 timestamp when DexPaprika first indexed this token.",
+                                        "type": ["string", "null"]
+                                      },
+                                      "chain": {
+                                        "type": ["string", "null"]
+                                      },
+                                      "decimals": {
+                                        "type": ["number", "null"]
+                                      },
+                                      "fdv": {
+                                        "description": "Fully-diluted valuation in USD.",
+                                        "type": ["number", "null"]
+                                      },
+                                      "id": {
+                                        "description": "Token contract address (chain-canonical form).",
+                                        "type": ["string", "null"]
+                                      },
+                                      "name": {
+                                        "type": ["string", "null"]
+                                      },
+                                      "symbol": {
+                                        "type": ["string", "null"]
+                                      }
+                                    },
+                                    "type": "object"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "type": "array"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      },
+                      "type": "object"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "type": "array"
+              }
+            },
+            "required": ["results"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:7c66889213bbea92fa4b063240ec9b034a56b7c8ad33e1c601b270eacccb4841"
+        },
+        {
+          "name": "getNetworks",
+          "description": "List every blockchain network DexPaprika indexes, each row carrying its network id (slug), 24h volume, transaction count, and pool count. Read-only and keyless. Start here (or getCapabilities) to get the exact network slug that nearly every other tool requires as its 'network' argument. Use for 'which chains do you support?', 'is Base/Solana/Arbitrum covered?', or 'what is the slug for Polygon?'. Returns the full array with no pagination or sorting; takes no parameters beyond a short rationale. For platform-wide totals rather than a per-network list use getStats.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "rationale": {
+                "description": "REQUIRED. 1-2 sentence rationale for this call (e.g. \"User asked for X; calling Y to fetch Z\"). Logged for MCP improvement, never shown to end users. No PII or secrets. See the server `instructions` field for the full convention and worked examples.",
+                "maxLength": 500,
+                "minLength": 20,
+                "type": "string"
+              }
+            },
+            "required": ["rationale"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": true,
+            "properties": {
+              "networks": {
+                "description": "All supported blockchain networks with current 24h volume + indexing stats.",
+                "items": {
+                  "anyOf": [
+                    {
+                      "additionalProperties": true,
+                      "properties": {
+                        "display_name": {
+                          "description": "Human-readable network name (e.g. 'Ethereum').",
+                          "type": ["string", "null"]
+                        },
+                        "id": {
+                          "description": "Network slug for use in other endpoints (e.g. 'ethereum').",
+                          "type": ["string", "null"]
+                        },
+                        "pools_count": {
+                          "description": "Number of indexed pools on this network.",
+                          "type": ["number", "null"]
+                        },
+                        "txns_24h": {
+                          "description": "Total transactions in the last 24h on this network.",
+                          "type": ["number", "null"]
+                        },
+                        "volume_usd_24h": {
+                          "description": "Total 24h trading volume across all pools on this network, USD.",
+                          "type": ["number", "null"]
+                        }
+                      },
+                      "type": "object"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "type": "array"
+              }
+            },
+            "required": ["networks"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:a80b3a41400b86be345a82f507f7904d1e72c32aba262f9d43bb6bd3ef7a07ce"
+        },
+        {
+          "name": "getPoolDetails",
+          "description": "Get the full current snapshot for one pool by address: its two tokens, current price, liquidity/TVL, 24h volume, and transaction counts, returned as a single pool object (not a list). Read-only and keyless. Use after search or getNetworkPools surfaces a pool, or for 'price/TVL of this pool?' or 'details for pool 0x...'. Returns live values only; for historical candles use getPoolOHLCV, and for the raw swap feed use getPoolTransactions. Params: network (required slug); pool_address (required, e.g. '0x88e6a0c2ddd26feeb64f039a2c41296fcb3f5640'); inversed (optional bool, default false, flips the token price ratio to token1/token0).",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "inversed": {
+                "default": false,
+                "description": "OPTIONAL: Whether to invert the price ratio (default: false)",
+                "type": "boolean"
+              },
+              "network": {
+                "description": "REQUIRED: Network ID from getNetworks (e.g., 'ethereum', 'solana')",
+                "type": "string"
+              },
+              "pool_address": {
+                "description": "REQUIRED: Pool address or identifier (e.g., '0x88e6a0c2ddd26feeb64f039a2c41296fcb3f5640')",
+                "type": "string"
+              },
+              "rationale": {
+                "description": "REQUIRED. 1-2 sentence rationale for this call (e.g. \"User asked for X; calling Y to fetch Z\"). Logged for MCP improvement, never shown to end users. No PII or secrets. See the server `instructions` field for the full convention and worked examples.",
+                "maxLength": 500,
+                "minLength": 20,
+                "type": "string"
+              }
+            },
+            "required": ["network", "pool_address", "rationale"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": true,
+            "properties": {
+              "chain": {
+                "type": ["string", "null"]
+              },
+              "created_at": {
+                "type": ["string", "null"]
+              },
+              "created_at_block_number": {
+                "type": ["number", "null"]
+              },
+              "dex_id": {
+                "type": ["string", "null"]
+              },
+              "dex_name": {
+                "type": ["string", "null"]
+              },
+              "factory_id": {
+                "type": ["string", "null"]
+              },
+              "fee": {
+                "type": ["number", "null"]
+              },
+              "id": {
+                "type": ["string", "null"]
+              },
+              "last_price": {
+                "type": ["number", "null"]
+              },
+              "last_price_usd": {
+                "type": ["number", "null"]
+              },
+              "price_stats": {},
+              "price_time": {
+                "type": ["string", "null"]
+              },
+              "token_reserves": {
+                "items": {},
+                "type": "array"
+              },
+              "tokens": {
+                "items": {
+                  "anyOf": [
+                    {
+                      "additionalProperties": true,
+                      "properties": {
+                        "added_at": {
+                          "description": "ISO 8601 timestamp when DexPaprika first indexed this token.",
+                          "type": ["string", "null"]
+                        },
+                        "chain": {
+                          "type": ["string", "null"]
+                        },
+                        "decimals": {
+                          "type": ["number", "null"]
+                        },
+                        "fdv": {
+                          "description": "Fully-diluted valuation in USD.",
+                          "type": ["number", "null"]
+                        },
+                        "id": {
+                          "description": "Token contract address (chain-canonical form).",
+                          "type": ["string", "null"]
+                        },
+                        "name": {
+                          "type": ["string", "null"]
+                        },
+                        "symbol": {
+                          "type": ["string", "null"]
+                        }
+                      },
+                      "type": "object"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "type": "array"
+              }
+            },
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:5b04767968bbbad59c805e486c62c3dd79576e11ca61875aaefa52beeced98f9"
+        },
+        {
+          "name": "getPoolIndicator",
+          "description": "Get a technical indicator (RSI, EMA, MACD, Bollinger Bands or VWAP) for one pool, computed server-side from the pool's completed OHLCV candles and returned as a time series. Read-only and keyless. Use for 'is this pool overbought?', 'RSI of this pair', 'MACD cross on the last candle', or as a ready-made signal input for a trading or screening agent, instead of fetching getPoolOHLCV and computing the indicator yourself. The indicator follows the pool's price as getPoolOHLCV reports it, with no inversed parameter. Values come oldest first, one per completed candle: rsi, ema and vwap return `value`; macd returns `macd`, `signal` and `histogram`; bbands returns `upper`, `middle` and `lower`. RSI over 70 is commonly read as overbought and under 30 as oversold; a MACD histogram that changes sign means MACD crossed its signal line. RSI, EMA and MACD are smoothed, so start at least ten periods before the first value you rely on. Params: network (required); pool_address (required); indicator (required): 'rsi', 'ema', 'macd', 'bbands' or 'vwap'; interval (pass it every time: '1m','5m','10m','15m','30m','1h','6h','12h','24h' or '1d'); start (optional; a relative offset such as '-24h' or '-7d', Unix seconds, RFC3339 or yyyy-mm-dd; without it you get the last `limit` values); end (optional, exclusive); limit (default 100, max 1000); cursor (next_cursor of the previous page, not with start); period for rsi (default 14), ema (20), bbands (20) and vwap (14); fast_period (12), slow_period (26) and signal_period (9) for macd only; std_dev (2) for bbands only. A parameter that belongs to another indicator is refused. This server computes them from what a free DexPaprika key gets: interval '10m' or longer and history within the last 7 days, so a start further back, a finer interval or a cursor runs on the caller's own Dev, Pro or Enterprise key when the connection carries one (the Authorization header, the key on its own) and otherwise returns DP403_PLAN_REQUIRED, and without start the page holds only the values that fit in those 7 days.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "cursor": {
+                "description": "OPTIONAL: next_cursor from the previous page. Do not combine with start",
+                "type": "string"
+              },
+              "end": {
+                "description": "OPTIONAL: End of the range, exclusive, same formats as start. Defaults to now",
+                "type": "string"
+              },
+              "fast_period": {
+                "description": "OPTIONAL, macd only: fast EMA period (default 12)",
+                "maximum": 200,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "indicator": {
+                "description": "REQUIRED: 'rsi', 'ema', 'macd', 'bbands' (Bollinger Bands) or 'vwap'",
+                "enum": ["rsi", "ema", "macd", "bbands", "vwap"],
+                "type": "string"
+              },
+              "interval": {
+                "description": "Candle interval the indicator is computed on. Pass it every time; '1d' equals '24h'",
+                "enum": ["1m", "5m", "10m", "15m", "30m", "1h", "6h", "12h", "24h", "1d"],
+                "type": "string"
+              },
+              "limit": {
+                "description": "OPTIONAL: Values per response (default 100, max 1000)",
+                "maximum": 1000,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "network": {
+                "description": "REQUIRED: Network ID from getNetworks (e.g., 'ethereum', 'solana')",
+                "type": "string"
+              },
+              "period": {
+                "description": "OPTIONAL: rsi (default 14), ema (default 20), bbands (default 20), vwap (default 14). Not for macd",
+                "maximum": 200,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "pool_address": {
+                "description": "REQUIRED: Pool address or identifier",
+                "type": "string"
+              },
+              "rationale": {
+                "description": "REQUIRED. 1-2 sentence rationale for this call (e.g. \"User asked for X; calling Y to fetch Z\"). Logged for MCP improvement, never shown to end users. No PII or secrets. See the server `instructions` field for the full convention and worked examples.",
+                "maxLength": 500,
+                "minLength": 20,
+                "type": "string"
+              },
+              "signal_period": {
+                "description": "OPTIONAL, macd only: signal line period (default 9)",
+                "maximum": 200,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "slow_period": {
+                "description": "OPTIONAL, macd only: slow EMA period (default 26), must be above fast_period",
+                "maximum": 200,
+                "minimum": 2,
+                "type": "integer"
+              },
+              "start": {
+                "description": "OPTIONAL: First candle. A relative offset from now is simplest: '-24h', '-7d' (units s, m, h, d). Also Unix seconds, RFC3339 or YYYY-MM-DD. Without it you get the last `limit` values",
+                "type": "string"
+              },
+              "std_dev": {
+                "description": "OPTIONAL, bbands only: band width in standard deviations (default 2)",
+                "exclusiveMinimum": 0,
+                "maximum": 10,
+                "type": "number"
+              }
+            },
+            "required": ["indicator", "network", "pool_address", "rationale"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": true,
+            "properties": {
+              "data": {
+                "description": "One value per completed candle, oldest first.",
+                "items": {
+                  "anyOf": [
+                    {
+                      "additionalProperties": true,
+                      "properties": {
+                        "histogram": {
+                          "description": "macd minus signal; a sign change is a crossover.",
+                          "type": ["number", "null"]
+                        },
+                        "lower": {
+                          "description": "bbands lower band.",
+                          "type": ["number", "null"]
+                        },
+                        "macd": {
+                          "type": ["number", "null"]
+                        },
+                        "middle": {
+                          "description": "bbands middle band (the moving average).",
+                          "type": ["number", "null"]
+                        },
+                        "signal": {
+                          "type": ["number", "null"]
+                        },
+                        "timestamp": {
+                          "description": "Open time of the candle, RFC3339.",
+                          "type": ["string", "null"]
+                        },
+                        "upper": {
+                          "description": "bbands upper band.",
+                          "type": ["number", "null"]
+                        },
+                        "value": {
+                          "description": "rsi, ema and vwap.",
+                          "type": ["number", "null"]
+                        }
+                      },
+                      "required": ["timestamp"],
+                      "type": "object"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "type": "array"
+              },
+              "has_next_page": {
+                "type": ["boolean", "null"]
+              },
+              "indicator": {
+                "type": ["string", "null"]
+              },
+              "interval": {
+                "type": ["string", "null"]
+              },
+              "network": {
+                "type": ["string", "null"]
+              },
+              "next_cursor": {
+                "description": "Pass as cursor for the next page; empty on the last page.",
+                "type": ["string", "null"]
+              },
+              "parameters": {
+                "anyOf": [
+                  {
+                    "additionalProperties": {},
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Parameters used, defaults included."
+              },
+              "pool_address": {
+                "description": "Set on pool indicators.",
+                "type": ["string", "null"]
+              },
+              "token_address": {
+                "description": "Set on token indicators.",
+                "type": ["string", "null"]
+              }
+            },
+            "required": ["data"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:ee4bf1dd7059360fe9fdfd6e7ad07da935398a8944c8c3265f0fa6b799c54979"
+        },
+        {
+          "name": "getPoolOHLCV",
+          "description": "Get historical OHLCV candles (open, high, low, close, volume) for one pool over a time range, returned as a time-series array. Read-only and keyless. Use for 'price history of this pair', 'hourly chart for the last week', 'candles since Jan 1', or backtesting; for the single current price use getPoolDetails instead. Params: network (required); pool_address (required); start (required; easiest as a relative offset from now such as '-24h' or '-7d', so you need not know today's date; also Unix seconds, RFC3339 or yyyy-mm-dd); end (optional); interval one of '1m','5m','10m','15m','30m','1h','6h','12h','24h' (default '24h'); limit (default 100, max 1000 candles); inversed (optional bool, default false). This server serves candles as a free DexPaprika key gets them: interval '10m' or longer, start and end within the last 7 days; outside that, it runs on the caller's own Dev, Pro or Enterprise key when the connection carries one (the Authorization header, the key on its own), and otherwise returns DP403_PLAN_REQUIRED and sends nothing upstream.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "end": {
+                "description": "OPTIONAL: End time for historical data, same formats as start (e.g. '-1h')",
+                "type": "string"
+              },
+              "interval": {
+                "default": "24h",
+                "description": "OPTIONAL: Interval granularity (default: '24h')",
+                "enum": ["1m", "5m", "10m", "15m", "30m", "1h", "6h", "12h", "24h"],
+                "type": "string"
+              },
+              "inversed": {
+                "default": false,
+                "description": "OPTIONAL: Whether to invert the price ratio for alternative pair perspective (default: false)",
+                "type": "boolean"
+              },
+              "limit": {
+                "default": 100,
+                "description": "OPTIONAL: Number of OHLCV data points to retrieve (default: 100, max: 1000). One row per `interval`.",
+                "type": "number"
+              },
+              "network": {
+                "description": "REQUIRED: Network ID from getNetworks (e.g., 'ethereum', 'solana')",
+                "type": "string"
+              },
+              "pool_address": {
+                "description": "REQUIRED: Pool address or identifier",
+                "type": "string"
+              },
+              "rationale": {
+                "description": "REQUIRED. 1-2 sentence rationale for this call (e.g. \"User asked for X; calling Y to fetch Z\"). Logged for MCP improvement, never shown to end users. No PII or secrets. See the server `instructions` field for the full convention and worked examples.",
+                "maxLength": 500,
+                "minLength": 20,
+                "type": "string"
+              },
+              "start": {
+                "description": "REQUIRED: Start time. A relative offset from now is simplest and needs no knowledge of today's date: '-24h' (last 24 hours), '-7d', '-90m' (units s, m, h, d). Also accepts RFC3339 (e.g. '2024-01-01T00:00:00Z'), Unix epoch seconds and YYYY-MM-DD (treated as 00:00:00 UTC).",
+                "type": "string"
+              }
+            },
+            "required": ["network", "pool_address", "rationale", "start"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": true,
+            "properties": {
+              "ohlcv": {
+                "description": "Open-High-Low-Close-Volume rows ordered by time_open ascending.",
+                "items": {
+                  "anyOf": [
+                    {
+                      "additionalProperties": true,
+                      "properties": {
+                        "close": {
+                          "type": ["number", "null"]
+                        },
+                        "high": {
+                          "type": ["number", "null"]
+                        },
+                        "low": {
+                          "type": ["number", "null"]
+                        },
+                        "open": {
+                          "type": ["number", "null"]
+                        },
+                        "time_close": {
+                          "description": "ISO 8601 timestamp of bucket close (inclusive at 23:59:59 for 24h).",
+                          "type": ["string", "null"]
+                        },
+                        "time_open": {
+                          "description": "ISO 8601 timestamp of bucket open.",
+                          "type": ["string", "null"]
+                        },
+                        "volume": {
+                          "description": "Trade volume in the bucket, in pair-quote units (or USD where applicable).",
+                          "type": ["number", "null"]
+                        }
+                      },
+                      "type": "object"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "type": "array"
+              }
+            },
+            "required": ["ohlcv"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:5efb46210157dcde5be26119501e0edbaca5aa437a9fd3618079940976417da4"
+        },
+        {
+          "name": "getPoolTransactions",
+          "description": "Get one pool's recent individual swap transactions, newest first, returned under 'transactions' (paginate with page, or a cursor). Read-only. Runs on the caller's own Dev, Pro or Enterprise API key, set as the Authorization header on the connection to this server; without one it returns DP401_API_KEY_REQUIRED and sends nothing upstream, and a free key gets 403. In either case getPoolDetails still gives the pool's 24h transaction counts and volume. These are per-trade records, not aggregated candles (use getPoolOHLCV) or a summary snapshot (use getPoolDetails). Use for 'recent trades on this pool', 'who swapped in the last hour', or 'raw transaction feed'. Params: network (required); pool_address (required); limit (default 10, max 100); page (default 1, up to 100 pages) or cursor (a transaction id); from (optional, inclusive: a relative offset such as '-1h', Unix seconds, RFC3339 or YYYY-MM-DD; capped to the last 7 days); to (optional, exclusive, same formats, must be after from).",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "cursor": {
+                "description": "OPTIONAL: Transaction ID used for cursor-based pagination",
+                "type": "string"
+              },
+              "from": {
+                "description": "OPTIONAL: Filter transactions starting from this time (inclusive): a relative offset such as '-1h' or '-24h', Unix seconds, RFC3339 or YYYY-MM-DD. Results always capped to last 7 days.",
+                "type": "string"
+              },
+              "limit": {
+                "default": 10,
+                "description": "OPTIONAL: Number of items per page (default: 10, max: 100)",
+                "type": "number"
+              },
+              "network": {
+                "description": "REQUIRED: Network ID from getNetworks (e.g., 'ethereum', 'solana')",
+                "type": "string"
+              },
+              "page": {
+                "default": 1,
+                "description": "OPTIONAL: Page number, 1-indexed. Up to 100 pages. Server accepts page=0 (treated as page=1) for backward compatibility.",
+                "type": "number"
+              },
+              "pool_address": {
+                "description": "REQUIRED: Pool address or identifier",
+                "type": "string"
+              },
+              "rationale": {
+                "description": "REQUIRED. 1-2 sentence rationale for this call (e.g. \"User asked for X; calling Y to fetch Z\"). Logged for MCP improvement, never shown to end users. No PII or secrets. See the server `instructions` field for the full convention and worked examples.",
+                "maxLength": 500,
+                "minLength": 20,
+                "type": "string"
+              },
+              "to": {
+                "description": "OPTIONAL: Filter transactions up to this time (exclusive), same formats as from. Must be after 'from'.",
+                "type": "string"
+              }
+            },
+            "required": ["network", "pool_address", "rationale"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": true,
+            "properties": {
+              "page_info": {
+                "anyOf": [
+                  {
+                    "additionalProperties": true,
+                    "properties": {
+                      "limit": {
+                        "description": "Items per page in the request.",
+                        "type": ["number", "null"]
+                      },
+                      "page": {
+                        "description": "Current page number (1-indexed).",
+                        "type": ["number", "null"]
+                      },
+                      "total_items": {
+                        "description": "Total number of items across all pages.",
+                        "type": ["number", "null"]
+                      },
+                      "total_pages": {
+                        "description": "Total number of pages available.",
+                        "type": ["number", "null"]
+                      }
+                    },
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "transactions": {
+                "items": {
+                  "anyOf": [
+                    {
+                      "additionalProperties": true,
+                      "properties": {
+                        "amount_usd": {
+                          "type": ["number", "null"]
+                        },
+                        "block_number": {
+                          "type": ["number", "null"]
+                        },
+                        "block_timestamp": {
+                          "type": ["string", "null"]
+                        },
+                        "id": {
+                          "type": ["string", "null"]
+                        },
+                        "pool_id": {
+                          "type": ["string", "null"]
+                        },
+                        "token0": {},
+                        "token1": {}
+                      },
+                      "type": "object"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "type": "array"
+              }
+            },
+            "required": ["page_info", "transactions"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:edb464388f2f6bb967d73792c241d3b74bdb0f2c8bf1baf5ded56cbc8ae5e763"
+        },
+        {
+          "name": "getStats",
+          "description": "Get platform-wide totals for DexPaprika: the number of networks, DEXes, pools, and tokens indexed, returned as a single summary object. Read-only and keyless. Use for 'how much data do you cover?', 'how many chains or pools total?', or a one-line coverage summary. These are ecosystem-wide counts, not per-network figures; use getNetworks for the per-chain breakdown, or getCapabilities for onboarding docs. Takes no parameters beyond a short rationale.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "rationale": {
+                "description": "REQUIRED. 1-2 sentence rationale for this call (e.g. \"User asked for X; calling Y to fetch Z\"). Logged for MCP improvement, never shown to end users. No PII or secrets. See the server `instructions` field for the full convention and worked examples.",
+                "maxLength": 500,
+                "minLength": 20,
+                "type": "string"
+              }
+            },
+            "required": ["rationale"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": true,
+            "properties": {
+              "chains": {
+                "description": "Total chains indexed.",
+                "type": ["number", "null"]
+              },
+              "factories": {
+                "description": "Total DEX factory contracts indexed.",
+                "type": ["number", "null"]
+              },
+              "pools": {
+                "description": "Total pools indexed across all chains.",
+                "type": ["number", "null"]
+              },
+              "tokens": {
+                "description": "Total tokens indexed.",
+                "type": ["number", "null"]
+              }
+            },
+            "required": ["chains", "factories", "pools", "tokens"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:7a7d2ed22f62aa4111804f4abd5dd43a01fb11830830ea1c6538520ebb239ee0"
+        },
+        {
+          "name": "getTokenDetails",
+          "description": "Get one token's data and metadata by contract address on one network: multi-timeframe price and volume metrics, plus name, website, Twitter, and Telegram links, returned as a single token object. Read-only and keyless. Use for 'price and volume for 0x... on Base' or 'tell me about this token'. If you only have a symbol like WETH, call search first to resolve the address and network. For many tokens' prices at once use getTokenMultiPrices; for the pools holding this token use getTokenPools. Params: network (required slug); token_address (required contract address, e.g. 'JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN' on solana).",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "network": {
+                "description": "REQUIRED: Network ID from getNetworks (e.g., 'ethereum', 'solana')",
+                "type": "string"
+              },
+              "rationale": {
+                "description": "REQUIRED. 1-2 sentence rationale for this call (e.g. \"User asked for X; calling Y to fetch Z\"). Logged for MCP improvement, never shown to end users. No PII or secrets. See the server `instructions` field for the full convention and worked examples.",
+                "maxLength": 500,
+                "minLength": 20,
+                "type": "string"
+              },
+              "token_address": {
+                "description": "REQUIRED: Token contract address (e.g., 'JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN' for Jupiter on Solana)",
+                "type": "string"
+              }
+            },
+            "required": ["network", "rationale", "token_address"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": true,
+            "properties": {
+              "added_at": {
+                "type": ["string", "null"]
+              },
+              "chain": {
+                "type": ["string", "null"]
+              },
+              "decimals": {
+                "type": ["number", "null"]
+              },
+              "description": {
+                "type": ["string", "null"]
+              },
+              "has_image": {
+                "type": ["boolean", "null"]
+              },
+              "id": {
+                "type": ["string", "null"]
+              },
+              "name": {
+                "type": ["string", "null"]
+              },
+              "price_stats": {},
+              "summary": {},
+              "symbol": {
+                "type": ["string", "null"]
+              },
+              "total_supply": {
+                "anyOf": [
+                  {
+                    "type": ["number", "string"]
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Raw on-chain total supply. Big numbers may overflow JS Number; handle as string for tokens with 18+ decimals."
+              },
+              "website": {
+                "type": ["string", "null"]
+              }
+            },
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:695eb69332bb56aa3f847fe1762290ee91ee73614be02900d723fb3f144e1099"
+        },
+        {
+          "name": "getTokenIndicator",
+          "description": "Get a technical indicator (RSI, EMA, MACD, Bollinger Bands or VWAP) for one token, computed server-side from the token's USD candles across every pool it trades in on the network (the same series as getTokenOHLCV), returned as a time series. Read-only. Runs on the caller's own Dev, Pro or Enterprise API key, set as the Authorization header on the connection to this server; without one it returns DP401_API_KEY_REQUIRED and sends nothing upstream, and a free key gets 403. In either case fall back to getPoolIndicator on the token's most liquid pool, found with getTokenPools sorted by volume. Values come oldest first, one per completed candle: rsi, ema and vwap return `value`; macd returns `macd`, `signal` and `histogram`; bbands returns `upper`, `middle` and `lower`. RSI over 70 is commonly read as overbought and under 30 as oversold; a MACD histogram that changes sign means MACD crossed its signal line. RSI, EMA and MACD are smoothed, so start at least ten periods before the first value you rely on. Params: network (required); token_address (required); indicator (required): 'rsi', 'ema', 'macd', 'bbands' or 'vwap'; interval (pass it every time: '1m','5m','10m','15m','30m','1h','6h','12h','24h' or '1d'); start (optional; a relative offset such as '-24h' or '-7d', Unix seconds, RFC3339 or yyyy-mm-dd; without it you get the last `limit` values); end (optional, exclusive); limit (default 100, max 1000); cursor (next_cursor of the previous page, not with start); period for rsi (default 14), ema (20), bbands (20) and vwap (14); fast_period (12), slow_period (26) and signal_period (9) for macd only; std_dev (2) for bbands only. A parameter that belongs to another indicator is refused.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "cursor": {
+                "description": "OPTIONAL: next_cursor from the previous page. Do not combine with start",
+                "type": "string"
+              },
+              "end": {
+                "description": "OPTIONAL: End of the range, exclusive, same formats as start. Defaults to now",
+                "type": "string"
+              },
+              "fast_period": {
+                "description": "OPTIONAL, macd only: fast EMA period (default 12)",
+                "maximum": 200,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "indicator": {
+                "description": "REQUIRED: 'rsi', 'ema', 'macd', 'bbands' (Bollinger Bands) or 'vwap'",
+                "enum": ["rsi", "ema", "macd", "bbands", "vwap"],
+                "type": "string"
+              },
+              "interval": {
+                "description": "Candle interval the indicator is computed on. Pass it every time; '1d' equals '24h'",
+                "enum": ["1m", "5m", "10m", "15m", "30m", "1h", "6h", "12h", "24h", "1d"],
+                "type": "string"
+              },
+              "limit": {
+                "description": "OPTIONAL: Values per response (default 100, max 1000)",
+                "maximum": 1000,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "network": {
+                "description": "REQUIRED: Network ID from getNetworks (e.g., 'ethereum', 'solana')",
+                "type": "string"
+              },
+              "period": {
+                "description": "OPTIONAL: rsi (default 14), ema (default 20), bbands (default 20), vwap (default 14). Not for macd",
+                "maximum": 200,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "rationale": {
+                "description": "REQUIRED. 1-2 sentence rationale for this call (e.g. \"User asked for X; calling Y to fetch Z\"). Logged for MCP improvement, never shown to end users. No PII or secrets. See the server `instructions` field for the full convention and worked examples.",
+                "maxLength": 500,
+                "minLength": 20,
+                "type": "string"
+              },
+              "signal_period": {
+                "description": "OPTIONAL, macd only: signal line period (default 9)",
+                "maximum": 200,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "slow_period": {
+                "description": "OPTIONAL, macd only: slow EMA period (default 26), must be above fast_period",
+                "maximum": 200,
+                "minimum": 2,
+                "type": "integer"
+              },
+              "start": {
+                "description": "OPTIONAL: First candle. A relative offset from now is simplest: '-24h', '-7d' (units s, m, h, d). Also Unix seconds, RFC3339 or YYYY-MM-DD. Without it you get the last `limit` values",
+                "type": "string"
+              },
+              "std_dev": {
+                "description": "OPTIONAL, bbands only: band width in standard deviations (default 2)",
+                "exclusiveMinimum": 0,
+                "maximum": 10,
+                "type": "number"
+              },
+              "token_address": {
+                "description": "REQUIRED: Token contract address",
+                "type": "string"
+              }
+            },
+            "required": ["indicator", "network", "rationale", "token_address"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": true,
+            "properties": {
+              "data": {
+                "description": "One value per completed candle, oldest first.",
+                "items": {
+                  "anyOf": [
+                    {
+                      "additionalProperties": true,
+                      "properties": {
+                        "histogram": {
+                          "description": "macd minus signal; a sign change is a crossover.",
+                          "type": ["number", "null"]
+                        },
+                        "lower": {
+                          "description": "bbands lower band.",
+                          "type": ["number", "null"]
+                        },
+                        "macd": {
+                          "type": ["number", "null"]
+                        },
+                        "middle": {
+                          "description": "bbands middle band (the moving average).",
+                          "type": ["number", "null"]
+                        },
+                        "signal": {
+                          "type": ["number", "null"]
+                        },
+                        "timestamp": {
+                          "description": "Open time of the candle, RFC3339.",
+                          "type": ["string", "null"]
+                        },
+                        "upper": {
+                          "description": "bbands upper band.",
+                          "type": ["number", "null"]
+                        },
+                        "value": {
+                          "description": "rsi, ema and vwap.",
+                          "type": ["number", "null"]
+                        }
+                      },
+                      "required": ["timestamp"],
+                      "type": "object"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "type": "array"
+              },
+              "has_next_page": {
+                "type": ["boolean", "null"]
+              },
+              "indicator": {
+                "type": ["string", "null"]
+              },
+              "interval": {
+                "type": ["string", "null"]
+              },
+              "network": {
+                "type": ["string", "null"]
+              },
+              "next_cursor": {
+                "description": "Pass as cursor for the next page; empty on the last page.",
+                "type": ["string", "null"]
+              },
+              "parameters": {
+                "anyOf": [
+                  {
+                    "additionalProperties": {},
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Parameters used, defaults included."
+              },
+              "pool_address": {
+                "description": "Set on pool indicators.",
+                "type": ["string", "null"]
+              },
+              "token_address": {
+                "description": "Set on token indicators.",
+                "type": ["string", "null"]
+              }
+            },
+            "required": ["data"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:c5fbf2e3df0c0a9ff57d51b61fbea0dd23a85e2a921259a19f2f1271e5e67a84"
+        },
+        {
+          "name": "getTokenMultiPrices",
+          "description": "Get current USD prices for up to 10 tokens on the same network in one batched call, returned as a prices array plus a missing_tokens list. Read-only and keyless. Tokens that cannot be priced come back in missing_tokens rather than being dropped, so check that list for partial failures. Use for 'prices for these tokens', 'compare the price of X, Y and Z', or building a portfolio/dashboard snapshot. For one token with full metadata and multi-timeframe stats use getTokenDetails. Params: network (required slug, all tokens must share it); tokens (required array of 1 to 10 contract addresses).",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "network": {
+                "description": "REQUIRED: Network ID from getNetworks",
+                "type": "string"
+              },
+              "rationale": {
+                "description": "REQUIRED. 1-2 sentence rationale for this call (e.g. \"User asked for X; calling Y to fetch Z\"). Logged for MCP improvement, never shown to end users. No PII or secrets. See the server `instructions` field for the full convention and worked examples.",
+                "maxLength": 500,
+                "minLength": 20,
+                "type": "string"
+              },
+              "tokens": {
+                "description": "REQUIRED: Up to 10 token contract addresses on the same network.",
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 10,
+                "minItems": 1,
+                "type": "array"
+              }
+            },
+            "required": ["network", "rationale", "tokens"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": true,
+            "properties": {
+              "missing_tokens": {
+                "description": "Input tokens that upstream could not price (invalid address, no liquidity, unknown contract). Empty array when all input tokens were resolved.",
+                "items": {
+                  "type": ["string", "null"]
+                },
+                "type": "array"
+              },
+              "prices": {
+                "description": "USD prices for the requested tokens, in input order.",
+                "items": {
+                  "anyOf": [
+                    {
+                      "additionalProperties": true,
+                      "properties": {
+                        "chain": {
+                          "type": ["string", "null"]
+                        },
+                        "id": {
+                          "description": "Token contract address.",
+                          "type": ["string", "null"]
+                        },
+                        "price_usd": {
+                          "description": "Current USD price; null if not available.",
+                          "type": ["number", "null"]
+                        }
+                      },
+                      "type": "object"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "type": "array"
+              }
+            },
+            "required": ["prices"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:0a2692038216ad651020e4e29e5cf3c4209dc1aa88cda08ad628e3d7fa3e65ee"
+        },
+        {
+          "name": "getTokenOHLCV",
+          "description": "Get historical USD OHLCV candles for one token over a time range, returned as a time-series array. The price and volume are computed across every pool the token trades in on the network (a volume-weighted price, and volume summed across those pools), not a single pair. Runs on the caller's own Dev, Pro or Enterprise API key, set as the Authorization header on the connection to this server; without one it returns DP401_API_KEY_REQUIRED and sends nothing upstream, and a free key gets 403. In either case fall back to getPoolOHLCV on the token's main pool, found with getTokenPools sorted by volume. Use for 'price history of this token' or 'USD chart for this token'; for a single pair's candles use getPoolOHLCV, and for the current price use getTokenDetails. Params: network (required); token_address (required); start (required; easiest as a relative offset from now such as '-24h', so you need not know today's date; also Unix seconds, RFC3339 or yyyy-mm-dd); end (optional, same formats); interval one of '1m','5m','10m','15m','30m','1h','6h','12h','24h' (default '24h'); limit (default 10, max 1000 candles). Dev plan history is limited to the last 30 days. There is no inversed parameter on this endpoint.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "end": {
+                "description": "OPTIONAL: End time, same formats as start (e.g. '-1h')",
+                "type": "string"
+              },
+              "interval": {
+                "default": "24h",
+                "description": "OPTIONAL: Interval granularity (default: '24h')",
+                "enum": ["1m", "5m", "10m", "15m", "30m", "1h", "6h", "12h", "24h"],
+                "type": "string"
+              },
+              "limit": {
+                "default": 10,
+                "description": "OPTIONAL: Number of data points to retrieve (default: 10, max: 1000)",
+                "type": "number"
+              },
+              "network": {
+                "description": "REQUIRED: Network ID from getNetworks (e.g., 'ethereum', 'solana')",
+                "type": "string"
+              },
+              "rationale": {
+                "description": "REQUIRED. 1-2 sentence rationale for this call (e.g. \"User asked for X; calling Y to fetch Z\"). Logged for MCP improvement, never shown to end users. No PII or secrets. See the server `instructions` field for the full convention and worked examples.",
+                "maxLength": 500,
+                "minLength": 20,
+                "type": "string"
+              },
+              "start": {
+                "description": "REQUIRED: Start time. A relative offset from now is simplest and needs no knowledge of today's date: '-24h' (last 24 hours), '-7d', '-90m' (units s, m, h, d). Also accepts RFC3339 (e.g. '2024-01-01T00:00:00Z'), Unix epoch seconds and YYYY-MM-DD (treated as 00:00:00 UTC).",
+                "type": "string"
+              },
+              "token_address": {
+                "description": "REQUIRED: Token contract address",
+                "type": "string"
+              }
+            },
+            "required": ["network", "rationale", "start", "token_address"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": true,
+            "properties": {
+              "ohlcv": {
+                "description": "USD candles for the token across all its pools, ordered by time_open ascending.",
+                "items": {
+                  "anyOf": [
+                    {
+                      "additionalProperties": true,
+                      "properties": {
+                        "close": {
+                          "type": ["number", "null"]
+                        },
+                        "high": {
+                          "type": ["number", "null"]
+                        },
+                        "low": {
+                          "type": ["number", "null"]
+                        },
+                        "open": {
+                          "type": ["number", "null"]
+                        },
+                        "time_close": {
+                          "description": "ISO 8601 timestamp of bucket close (inclusive at 23:59:59 for 24h).",
+                          "type": ["string", "null"]
+                        },
+                        "time_open": {
+                          "description": "ISO 8601 timestamp of bucket open.",
+                          "type": ["string", "null"]
+                        },
+                        "volume": {
+                          "description": "Trade volume in the bucket, in pair-quote units (or USD where applicable).",
+                          "type": ["number", "null"]
+                        }
+                      },
+                      "type": "object"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "type": "array"
+              }
+            },
+            "required": ["ohlcv"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:c97242f5e6f1bcfa08574319780182157efe3ef00c2fe96ba34cea0e12f28c71"
+        },
+        {
+          "name": "getTokenPools",
+          "description": "Get the liquidity pools that contain a specific token on one network, returned under 'results' with has_next_page and next_cursor. Read-only and keyless. Use for 'which pools hold WETH on ethereum?' or 'liquidity venues for 0x...'. Network-scoped, so run search first if unsure of the network; unknown addresses return empty results, not an error. For the token's own price use getTokenDetails. Params: network (required); token_address (required); limit (default 10, max 100); cursor to page; sort_by (default 'volume_usd_24h', alias order_by); sort_dir asc/desc (default 'desc', alias sort). Extra params such as inversed or paired_token_address are unsupported and error.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "address": {
+                "description": "REMOVED alias for paired_token_address. No longer supported by the API; supplying it returns an error.",
+                "type": "string"
+              },
+              "cursor": {
+                "description": "OPTIONAL: Pagination cursor. Pass `next_cursor` from a previous response to fetch the next page (read `has_next_page` to know if more remain). Replaces the old page number.",
+                "type": "string"
+              },
+              "inversed": {
+                "description": "REMOVED: the pair-perspective flip is no longer supported by the API; the pools/search replacement returns pool-perspective metrics only. Supplying true returns an error. For a single pool, getPoolDetails with inversed=true still flips the perspective.",
+                "type": "boolean"
+              },
+              "limit": {
+                "default": 10,
+                "description": "OPTIONAL: Number of items per page (default: 10, max: 100)",
+                "type": "number"
+              },
+              "network": {
+                "description": "REQUIRED: Network ID from getNetworks (e.g., 'ethereum', 'solana')",
+                "type": "string"
+              },
+              "order_by": {
+                "description": "OPTIONAL: alias of sort_by; both are accepted. Not deprecated at the REST layer: api.dexpaprika.com itself takes order_by, so use this name when calling the REST API directly.",
+                "enum": ["volume_usd_24h", "volume_usd_7d", "volume_usd_30d", "liquidity_usd", "txns_24h", "created_at", "price_usd", "price_change_percentage_24h", "price_change_percentage_48h", "price_change_percentage_6h", "price_change_percentage_1h", "price_change_percentage_5m", "volume_usd", "transactions", "last_price_change_usd_24h", "volume_24h", "volume_7d", "volume_30d", "liquidity"],
+                "type": "string"
+              },
+              "paired_token_address": {
+                "description": "REMOVED: the second-token pair filter is no longer supported by the API. Supplying it returns an error. Filter client-side on each result's tokens[] instead.",
+                "type": "string"
+              },
+              "rationale": {
+                "description": "REQUIRED. 1-2 sentence rationale for this call (e.g. \"User asked for X; calling Y to fetch Z\"). Logged for MCP improvement, never shown to end users. No PII or secrets. See the server `instructions` field for the full convention and worked examples.",
+                "maxLength": 500,
+                "minLength": 20,
+                "type": "string"
+              },
+              "reorder": {
+                "description": "REMOVED alias for inversed. No longer supported by the API; supplying true returns an error.",
+                "type": "boolean"
+              },
+              "sort": {
+                "description": "OPTIONAL: alias of sort_dir; both are accepted. Not deprecated at the REST layer: api.dexpaprika.com itself takes sort, so use this name when calling the REST API directly.",
+                "enum": ["asc", "desc"],
+                "type": "string"
+              },
+              "sort_by": {
+                "description": "OPTIONAL: Sort field. Canonical parameter name. Defaults to 'volume_usd_24h'. Prefer the canonical *_24h names; short legacy names (volume_usd, transactions, last_price_change_usd_24h) are still accepted. The REST API calls this parameter order_by.",
+                "enum": ["volume_usd_24h", "volume_usd_7d", "volume_usd_30d", "liquidity_usd", "txns_24h", "created_at", "price_usd", "price_change_percentage_24h", "price_change_percentage_48h", "price_change_percentage_6h", "price_change_percentage_1h", "price_change_percentage_5m", "volume_usd", "transactions", "last_price_change_usd_24h", "volume_24h", "volume_7d", "volume_30d", "liquidity"],
+                "type": "string"
+              },
+              "sort_dir": {
+                "description": "OPTIONAL: Sort direction (asc/desc). Canonical parameter name. Defaults to 'desc' if neither sort_dir nor sort is provided. The REST API calls this parameter sort.",
+                "enum": ["asc", "desc"],
+                "type": "string"
+              },
+              "token_address": {
+                "description": "REQUIRED: Token contract address",
+                "type": "string"
+              }
+            },
+            "required": ["network", "rationale", "token_address"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": true,
+            "properties": {
+              "has_next_page": {
+                "description": "True if more results are available; fetch them by passing next_cursor as `cursor`.",
+                "type": ["boolean", "null"]
+              },
+              "next_cursor": {
+                "description": "Opaque pagination cursor. Pass back as the `cursor` argument to fetch the next page; null/absent on the last page.",
+                "type": ["string", "null"]
+              },
+              "query": {
+                "anyOf": [
+                  {
+                    "additionalProperties": {},
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Echo of the resolved query and filters the API applied."
+              },
+              "results": {
+                "items": {
+                  "anyOf": [
+                    {
+                      "additionalProperties": true,
+                      "properties": {
+                        "chain": {
+                          "description": "Network slug (e.g. 'ethereum'). Note: also exposed as 'network' on some endpoints.",
+                          "type": ["string", "null"]
+                        },
+                        "created_at": {
+                          "description": "ISO 8601 pool-creation timestamp.",
+                          "type": ["string", "null"]
+                        },
+                        "created_at_block_number": {
+                          "type": ["number", "null"]
+                        },
+                        "dex_id": {
+                          "type": ["string", "null"]
+                        },
+                        "dex_name": {
+                          "type": ["string", "null"]
+                        },
+                        "fee": {
+                          "description": "Pool fee (units depend on DEX; null for some DEXes).",
+                          "type": ["number", "null"]
+                        },
+                        "id": {
+                          "description": "Pool contract address.",
+                          "type": ["string", "null"]
+                        },
+                        "last_price": {
+                          "type": ["number", "null"]
+                        },
+                        "last_price_usd": {
+                          "type": ["number", "null"]
+                        },
+                        "tokens": {
+                          "anyOf": [
+                            {
+                              "items": {
+                                "anyOf": [
+                                  {
+                                    "additionalProperties": true,
+                                    "properties": {
+                                      "added_at": {
+                                        "description": "ISO 8601 timestamp when DexPaprika first indexed this token.",
+                                        "type": ["string", "null"]
+                                      },
+                                      "chain": {
+                                        "type": ["string", "null"]
+                                      },
+                                      "decimals": {
+                                        "type": ["number", "null"]
+                                      },
+                                      "fdv": {
+                                        "description": "Fully-diluted valuation in USD.",
+                                        "type": ["number", "null"]
+                                      },
+                                      "id": {
+                                        "description": "Token contract address (chain-canonical form).",
+                                        "type": ["string", "null"]
+                                      },
+                                      "name": {
+                                        "type": ["string", "null"]
+                                      },
+                                      "symbol": {
+                                        "type": ["string", "null"]
+                                      }
+                                    },
+                                    "type": "object"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "type": "array"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      },
+                      "type": "object"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "type": "array"
+              }
+            },
+            "required": ["results"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:49e289f6edabf90aa9846e16009ab5a69cb26eef3e9221de52d5acbec7076608"
+        },
+        {
+          "name": "getTopTokens",
+          "description": "Get the top tokens on one network ranked by volume, liquidity, transactions, FDV, or 24h price change, returned under 'results' with has_next_page and next_cursor. Read-only and keyless. Use for 'top gainers on Solana', 'highest-volume tokens on Base', or 'biggest tokens by FDV on ethereum'. For arbitrary numeric filters or a time window use filterNetworkTokens instead. Params: network (required slug); limit (default 50, max 100); cursor (pass previous next_cursor to page); sort_by (default 'volume_usd_24h', alias order_by), noting that ranking by raw price is unsupported and silently falls back to volume; sort_dir asc/desc (default 'desc', alias sort).",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "cursor": {
+                "description": "OPTIONAL: Pagination cursor. Pass `next_cursor` from a previous response to fetch the next page. Replaces the old page number.",
+                "type": "string"
+              },
+              "limit": {
+                "default": 50,
+                "description": "OPTIONAL: Items per page (default: 50, max: 100)",
+                "type": "number"
+              },
+              "network": {
+                "description": "REQUIRED: Network ID from getNetworks",
+                "type": "string"
+              },
+              "order_by": {
+                "description": "OPTIONAL: alias of sort_by; both are accepted. Not deprecated at the REST layer: api.dexpaprika.com itself takes order_by, so use this name when calling the REST API directly.",
+                "enum": ["volume_usd_24h", "volume_usd_7d", "volume_usd_30d", "liquidity_usd", "txns_24h", "fdv_usd", "created_at", "price_change_percentage_24h", "volume_24h", "volume_7d", "volume_30d", "txns", "price_change", "fdv", "price_usd"],
+                "type": "string"
+              },
+              "rationale": {
+                "description": "REQUIRED. 1-2 sentence rationale for this call (e.g. \"User asked for X; calling Y to fetch Z\"). Logged for MCP improvement, never shown to end users. No PII or secrets. See the server `instructions` field for the full convention and worked examples.",
+                "maxLength": 500,
+                "minLength": 20,
+                "type": "string"
+              },
+              "sort": {
+                "description": "OPTIONAL: alias of sort_dir; both are accepted. Not deprecated at the REST layer: api.dexpaprika.com itself takes sort, so use this name when calling the REST API directly.",
+                "enum": ["asc", "desc"],
+                "type": "string"
+              },
+              "sort_by": {
+                "description": "OPTIONAL: Ranking field. Defaults to 'volume_usd_24h'. Prefer the canonical names (volume_usd_24h, liquidity_usd, txns_24h, fdv_usd, price_change_percentage_24h); short legacy names are still accepted. Note: ordering by price is not supported and falls back to volume. The REST API calls this parameter order_by.",
+                "enum": ["volume_usd_24h", "volume_usd_7d", "volume_usd_30d", "liquidity_usd", "txns_24h", "fdv_usd", "created_at", "price_change_percentage_24h", "volume_24h", "volume_7d", "volume_30d", "txns", "price_change", "fdv", "price_usd"],
+                "type": "string"
+              },
+              "sort_dir": {
+                "description": "OPTIONAL: Sort direction (asc/desc). Canonical parameter name. Defaults to 'desc' if neither sort_dir nor sort is provided. The REST API calls this parameter sort.",
+                "enum": ["asc", "desc"],
+                "type": "string"
+              }
+            },
+            "required": ["network", "rationale"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": true,
+            "properties": {
+              "has_next_page": {
+                "description": "True if more results are available; fetch them by passing next_cursor as `cursor`.",
+                "type": ["boolean", "null"]
+              },
+              "next_cursor": {
+                "description": "Opaque pagination cursor. Pass back as the `cursor` argument to fetch the next page; null/absent on the last page.",
+                "type": ["string", "null"]
+              },
+              "query": {
+                "anyOf": [
+                  {
+                    "additionalProperties": {},
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Echo of the resolved query and filters the API applied."
+              },
+              "results": {
+                "items": {
+                  "anyOf": [
+                    {
+                      "additionalProperties": true,
+                      "properties": {
+                        "added_at": {
+                          "description": "ISO 8601 timestamp when DexPaprika first indexed this token.",
+                          "type": ["string", "null"]
+                        },
+                        "chain": {
+                          "type": ["string", "null"]
+                        },
+                        "decimals": {
+                          "type": ["number", "null"]
+                        },
+                        "fdv": {
+                          "description": "Fully-diluted valuation in USD.",
+                          "type": ["number", "null"]
+                        },
+                        "id": {
+                          "description": "Token contract address (chain-canonical form).",
+                          "type": ["string", "null"]
+                        },
+                        "name": {
+                          "type": ["string", "null"]
+                        },
+                        "symbol": {
+                          "type": ["string", "null"]
+                        }
+                      },
+                      "type": "object"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "type": "array"
+              }
+            },
+            "required": ["results"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:46c61918c38274e9cb7ed5a318b49a62b0c149168f76a67ff8140903806e67af"
+        },
+        {
+          "name": "search",
+          "description": "Search across ALL networks at once for tokens, pools, and DEXes by name, symbol, or address, returning three arrays: 'tokens', 'pools', and 'dexes'. Read-only and keyless. This is the cross-chain entry point when you do not yet know which network something lives on; once you have a network slug from the results, switch to the network-scoped tools. Use for 'find PEPE', 'what is the address for USDC', or 'which chain is this token on?'. Several words work: 'WETH USDC' returns the pools pairing both, and a network name ('brett base') narrows results to that chain. No matches returns empty arrays, not an error. Params: query (required; a name, symbol, or contract address, e.g. 'uniswap', 'bitcoin', or '0x...'); limit (optional, caps results per category, applied client-side).",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "limit": {
+                "description": "OPTIONAL: Cap items returned per category (tokens, pools, dexes). Upstream returns all matches by default; this client-side slice keeps payloads small for agents. Applies independently to each category.",
+                "type": "number"
+              },
+              "query": {
+                "description": "REQUIRED: Search term (e.g., 'uniswap', 'bitcoin', 'ethereum', 'WETH USDC', or a token address).",
+                "type": "string"
+              },
+              "rationale": {
+                "description": "REQUIRED. 1-2 sentence rationale for this call (e.g. \"User asked for X; calling Y to fetch Z\"). Logged for MCP improvement, never shown to end users. No PII or secrets. See the server `instructions` field for the full convention and worked examples.",
+                "maxLength": 500,
+                "minLength": 20,
+                "type": "string"
+              }
+            },
+            "required": ["query", "rationale"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": true,
+            "properties": {
+              "dexes": {
+                "items": {
+                  "anyOf": [
+                    {
+                      "additionalProperties": true,
+                      "properties": {
+                        "chain": {
+                          "type": ["string", "null"]
+                        },
+                        "dex_id": {
+                          "type": ["string", "null"]
+                        },
+                        "dex_name": {
+                          "type": ["string", "null"]
+                        },
+                        "display_name": {
+                          "type": ["string", "null"]
+                        },
+                        "id": {
+                          "type": ["string", "null"]
+                        },
+                        "network_id": {
+                          "type": ["string", "null"]
+                        },
+                        "pools_count": {
+                          "type": ["number", "null"]
+                        },
+                        "protocol": {
+                          "type": ["string", "null"]
+                        },
+                        "txns_24h": {
+                          "type": ["number", "null"]
+                        },
+                        "volume_usd_24h": {
+                          "type": ["number", "null"]
+                        }
+                      },
+                      "type": "object"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "type": "array"
+              },
+              "pools": {
+                "items": {
+                  "anyOf": [
+                    {
+                      "additionalProperties": true,
+                      "properties": {
+                        "chain": {
+                          "description": "Network slug (e.g. 'ethereum'). Note: also exposed as 'network' on some endpoints.",
+                          "type": ["string", "null"]
+                        },
+                        "created_at": {
+                          "description": "ISO 8601 pool-creation timestamp.",
+                          "type": ["string", "null"]
+                        },
+                        "created_at_block_number": {
+                          "type": ["number", "null"]
+                        },
+                        "dex_id": {
+                          "type": ["string", "null"]
+                        },
+                        "dex_name": {
+                          "type": ["string", "null"]
+                        },
+                        "fee": {
+                          "description": "Pool fee (units depend on DEX; null for some DEXes).",
+                          "type": ["number", "null"]
+                        },
+                        "id": {
+                          "description": "Pool contract address.",
+                          "type": ["string", "null"]
+                        },
+                        "last_price": {
+                          "type": ["number", "null"]
+                        },
+                        "last_price_usd": {
+                          "type": ["number", "null"]
+                        },
+                        "tokens": {
+                          "anyOf": [
+                            {
+                              "items": {
+                                "anyOf": [
+                                  {
+                                    "additionalProperties": true,
+                                    "properties": {
+                                      "added_at": {
+                                        "description": "ISO 8601 timestamp when DexPaprika first indexed this token.",
+                                        "type": ["string", "null"]
+                                      },
+                                      "chain": {
+                                        "type": ["string", "null"]
+                                      },
+                                      "decimals": {
+                                        "type": ["number", "null"]
+                                      },
+                                      "fdv": {
+                                        "description": "Fully-diluted valuation in USD.",
+                                        "type": ["number", "null"]
+                                      },
+                                      "id": {
+                                        "description": "Token contract address (chain-canonical form).",
+                                        "type": ["string", "null"]
+                                      },
+                                      "name": {
+                                        "type": ["string", "null"]
+                                      },
+                                      "symbol": {
+                                        "type": ["string", "null"]
+                                      }
+                                    },
+                                    "type": "object"
+                                  },
+                                  {
+                                    "type": "null"
+                                  }
+                                ]
+                              },
+                              "type": "array"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      },
+                      "type": "object"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "type": "array"
+              },
+              "tokens": {
+                "items": {
+                  "anyOf": [
+                    {
+                      "additionalProperties": true,
+                      "properties": {
+                        "added_at": {
+                          "description": "ISO 8601 timestamp when DexPaprika first indexed this token.",
+                          "type": ["string", "null"]
+                        },
+                        "chain": {
+                          "type": ["string", "null"]
+                        },
+                        "decimals": {
+                          "type": ["number", "null"]
+                        },
+                        "fdv": {
+                          "description": "Fully-diluted valuation in USD.",
+                          "type": ["number", "null"]
+                        },
+                        "id": {
+                          "description": "Token contract address (chain-canonical form).",
+                          "type": ["string", "null"]
+                        },
+                        "name": {
+                          "type": ["string", "null"]
+                        },
+                        "symbol": {
+                          "type": ["string", "null"]
+                        }
+                      },
+                      "type": "object"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "type": "array"
+              }
+            },
+            "required": ["dexes", "pools", "tokens"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:ba0de8f6cf041cdf58395085f7c4357bc88c4d349b21dbe77ba4227d894f8cf5"
+        },
+        {
+          "name": "submitFeedback",
+          "description": "Report a problem back to the DexPaprika team when a tool got you stuck, returned something unexpected, lacked data you needed, or behaved differently than documented. Use whenever you hit a dead end, a response shape surprised you, or coverage was missing; even partial feedback helps and every submission is read. Low friction: provide goal, expected, and observed instead of a rationale field.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "attempted_tools": {
+                "description": "OPTIONAL: List of tool names you called, in order, before submitting this feedback.",
+                "items": {
+                  "maxLength": 100,
+                  "type": "string"
+                },
+                "maxItems": 50,
+                "type": "array"
+              },
+              "blocked_at": {
+                "description": "OPTIONAL: Tool name or step where you got stuck.",
+                "maxLength": 200,
+                "type": "string"
+              },
+              "expected": {
+                "description": "OPTIONAL: What you expected to happen. Capped at 500 characters; trim or summarize longer narratives.",
+                "maxLength": 500,
+                "type": "string"
+              },
+              "goal": {
+                "description": "REQUIRED: What you (or the user behind you) were trying to accomplish. 10-500 characters; longer goals are validation-rejected at the MCP layer.",
+                "maxLength": 500,
+                "minLength": 10,
+                "type": "string"
+              },
+              "observed": {
+                "description": "OPTIONAL: What actually happened. Capped at 500 characters; trim or summarize longer narratives. Longer text triggers an MCP -32602 input validation error.",
+                "maxLength": 500,
+                "type": "string"
+              },
+              "severity": {
+                "default": "minor",
+                "description": "OPTIONAL: How badly this affected your task. Default 'minor'.",
+                "enum": ["blocker", "major", "minor", "nit"],
+                "type": "string"
+              }
+            },
+            "required": ["goal"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": true,
+            "properties": {
+              "message": {
+                "type": ["string", "null"]
+              },
+              "ok": {
+                "description": "True if the feedback row was persisted.",
+                "type": ["boolean", "null"]
+              },
+              "severity": {
+                "anyOf": [
+                  {
+                    "enum": ["blocker", "major", "minor", "nit"],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "tracking_id": {
+                "description": "Stable id agents can reference in follow-up submissions; null if persistence failed.",
+                "type": ["string", "null"]
+              }
+            },
+            "required": ["message", "ok"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": false,
+            "openWorldHint": false,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": false,
+            "openWorld": false,
+            "readOnly": false
+          },
+          "digest": "sha256:9928108e647d38f828bbdcf0a70ff5d1063992255d5d4b7c544e57d86b730373"
+        }
+      ],
+      "digest": "sha256:ee322f2f97188b410ed308453e068c62d1ae05007e2f7be1e2b27c446c4658e4"
+    }
+  }
+}

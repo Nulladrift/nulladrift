@@ -1,0 +1,2297 @@
+{
+  "lockfileVersion": 2,
+  "subjects": {
+    "com.doseedo/film-score": {
+      "kind": "mcp-server",
+      "source": {
+        "client": "manual",
+        "file": "registry.modelcontextprotocol.io"
+      },
+      "transport": {
+        "type": "http",
+        "url": "https://api.doseedo.com/mcp/film"
+      },
+      "protocol": {
+        "era": "modern",
+        "version": "2026-07-28",
+        "supportedVersions": ["2026-07-28", "2025-06-18", "2025-03-26", "2024-11-05"]
+      },
+      "serverInfo": {
+        "name": "doseedo-film-score",
+        "title": "Doseedo Film Score: spot a video, play your score on AI instruments, mix it to picture",
+        "version": "0.22.0",
+        "description": "Score video as an agent: cue sheet from the cut, 100+ AI instruments play your MIDI, mix to picture",
+        "websiteUrl": "https://doseedo.com/guides/score-a-film-with-an-ai-agent"
+      },
+      "capabilities": {
+        "tools": {}
+      },
+      "instructions": "doseedo film-score = SCORE A VIDEO AS AN AGENT: doseedo watches the film, YOU write the music, doseedo plays it on 100+ real instruments and lays it on the picture. THE LOOP: 1) doseedo_get_upload_url {filename:\"film.mp4\"} → curl PUT the file → video_key. 2) doseedo_spot_video {video_key} → job_id → doseedo_wait_task → the cue sheet: every cut frame-exact, SCENES (where the picture moves to a new place, cut or no cut: start, pace, a 640-px frame — LOOK at each: where, when, what culture; change the music ON its start), a storyboard (the whole film on one JPEG) and each shot with a keyframe JPEG (it sees light, motion and editing, not story), the dialogue spans, and cues 1M1, 1M2 … with SMPTE start/end, emotion, energy, hit points and a suggested bpm. 3) Per cue: doseedo_tempo_map {…cue.tempo_map_input} → tempo_map + the beat each hit lands on (beat 0 = the cue's first frame). 4) WRITE every part as notes on that grid [{pitch, start_beats, duration_beats, velocity}] — accents on the hit beats, thinner under dialogue; instruments from doseedo_instruments (copy an entry's call; ranges in concert pitch; a section is ONE part with players: N). 5) doseedo_render_score {parts, tempo_map} → a stem per part with a fit receipt. 6) doseedo_mix {from_job} → the cue mixed (seated, a hall, the written dynamics as the balance) + its mixgraph. 7) doseedo_score_to_picture {video_key, tracks:[{audio_url: <mix_url>, start_timecode: <the cue's>, name:\"1M1\"}…]} → the scored film (picture untouched), printmaster and M&E, with what it MEASURED: where each cue landed, the music under the lines in dB, the final LUFS and true peak. 8) Optional: doseedo_session_from_stems {from_job, mix_job} → a Logic / Ableton project per cue. A FILM WITH MUSIC ALREADY ON IT: doseedo_split_soundtrack {video_key} → its dialogue / music / effects stems + where the music plays. Keeping the production audio would mix the old music under yours. REPLACE: lay stems.dialogue + stems.effects (start_s 0, role \"dialogue\" / \"effects\") with your cues and production_audio:\"drop\". REMIX / RE-ORCHESTRATE: stems.music → doseedo_analyze_song (key, tempo, chords) / doseedo_separate_stems / doseedo_transcribe (its notes) → write it for your players. KEEP and score around it: write cues only where soundtrack.stems.music.spans shows none, or lay stems.music back with duck:false. RULES: (1) There is no prompt-to-score — you write the notes, doseedo performs them. (2) An AI render may miss a note: read each part's fit receipt and re-render a failed part (doseedo_render_midi revise_take_url redoes one region). (3) Async tools return job_id → doseedo_wait_task {job_id} (≤ 50 s a call; call again while still_running). (4) Result URLs are pre-signed for 24 h: plain curl, and pass one as another tool's audio_url as is. A job's name (\"main-title-cue\") names its files: <name>_<part>.<ext>. (5) Errors carry code / retryable / next — act on next; service_unavailable = wait 30 s, retry ONCE, then tell the user. (6) doseedo_quote prices a call before you make it: spotting and delivery spend no credits (a daily fair-use cap), rendering spends credits. SOUND DESIGN: doseedo_generate_sound {prompt, kind:\"hit\"} — impacts, whooshes, risers — laid with role:\"sfx\". YOUR OWN SOUND: doseedo_train_instrument (30 s–3 min of one instrument → lora_id). The steps with cost, time and how to verify: doseedo_recipes {name:\"score-a-film\"}.",
+      "tools": [
+        {
+          "name": "doseedo_account",
+          "title": "Account and credits",
+          "description": "Check the connected doseedo account: plan tier, the monthly credit pool (generation AND DAW conversions draw it), purchased extra-usage credits, and storage. Read-only — consumes nothing. Use it before starting expensive work to confirm there is budget.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {},
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:51aa546c6d06a7e1baab02bd4267a55d7866cc9acc0f3246f362a90496bacf38"
+        },
+        {
+          "name": "doseedo_analyze_midi",
+          "title": "Analyze MIDI harmony",
+          "description": "Check the HARMONY of notes before rendering or placing them: factor a MIDI progression into its sonorities (mode \"midi\", default — chord-detection-free: each segment of simultaneously sounding pitches reduced to an anchor pitch class + register-exact shape, covered with recurring shape cells) or into chord symbols (mode \"chord\": one estimated chord per ~2 beats + a corpus-grammar cell cover with a schedule). Input: notes[] (the rows you would give doseedo_render_midi / set_midi_notes) with bpm, or midi_url (a .mid ≤2 MiB: a doseedo result link such as a stem's MIDI, or a public URL). Synchronous (~2–10 s), CPU, no credits. Returns sonorities[] or chords[], cover, cells, compression — read chords[].chord / sonorities[].anchor to confirm the key and progression you intended. Cancel: not applicable — the result is returned in the submit response; the job is already finished.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "beats_per_segment": {
+                "description": "mode chord: segment length in beats (0.25–8, default 2).",
+                "type": "number"
+              },
+              "bpm": {
+                "description": "Tempo of the notes (needed with notes; default 120).",
+                "type": "number"
+              },
+              "idempotency_key": {
+                "description": "Optional. Any unique string for THIS request (e.g. a UUID). Re-sending the same call with the same key after a timeout returns the same job instead of starting a second one.",
+                "type": "string"
+              },
+              "midi_url": {
+                "description": "Alternative to notes: https URL of a Standard MIDI File (≤2 MiB).",
+                "type": "string"
+              },
+              "min_seg_beats": {
+                "description": "mode midi: shortest sonority segment in beats (default 0.25).",
+                "type": "number"
+              },
+              "mode": {
+                "description": "\"midi\" (default): sonority / shape factoring. \"chord\": chord symbols per segment + cell cover.",
+                "enum": ["midi", "chord"],
+                "type": "string"
+              },
+              "notes": {
+                "description": "The notes to analyze, in beats from bar 1 (same rows as doseedo_render_midi). Needs bpm.",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "duration_beats": {
+                      "type": "number"
+                    },
+                    "pitch": {
+                      "type": "number"
+                    },
+                    "start_beats": {
+                      "type": "number"
+                    },
+                    "velocity": {
+                      "type": "number"
+                    }
+                  },
+                  "required": ["duration_beats", "pitch", "start_beats"],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "time_signature": {
+                "description": "Meter of the notes, e.g. \"4/4\" (default).",
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": false,
+            "openWorldHint": true,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:be51c235ca1ecaade05baea16bbb48cafcf68d1878dd89b40687eb914923c2b0"
+        },
+        {
+          "name": "doseedo_analyze_song",
+          "title": "Analyze a song",
+          "description": "Key detection, BPM/tempo detection, song structure and chords — musical analysis of a recording in one call: key (e.g. \"D minor\"), bpm + per-beat tempo_map, meter / beats_per_bar, downbeats (seconds), sections (intro/verse/chorus… with times), chords (a progression on the beat grid), dynamics, and cues: the pieces a recording holds (a film's temp: each piece's start, end, tempo, key and level). USE THIS to learn the key and tempo of a reference before writing a part — never guess or ask the user for what the audio already says. Pass audio_key (an upload) or audio_url (a result URL from another job as returned, or any public https URL). Up to 10 minutes of audio is analyzed. Synchronous (~5–20 s): the result is in this response. No separation, so a dense mix's chords are a draft — for a chord chart from stems use doseedo_detect_chords on the separated stems. Cancel: not applicable — the result is returned in the submit response; the job is already finished.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "audio_key": {
+                "description": "R2 ingest key of an uploaded audio file (from doseedo_get_upload_url / POST /api/upload/r2/ingest-url; starts with \"ingest/\"). Provide this or audio_url.",
+                "type": "string"
+              },
+              "audio_url": {
+                "description": "https URL of the audio (a doseedo result URL as returned, or any public URL). Alternative to audio_key.",
+                "type": "string"
+              },
+              "idempotency_key": {
+                "description": "Optional. Any unique string for THIS request (e.g. a UUID). Re-sending the same call with the same key after a timeout returns the same job instead of starting a second one.",
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": false,
+            "openWorldHint": true,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:946a8eb3ed07a460934dcbfcf5bd99eaf363347993260fe4ec4a956013939ee3"
+        },
+        {
+          "name": "doseedo_cancel_job",
+          "title": "Cancel a job",
+          "description": "Cancel a queued or running job. What that stops and refunds depends on the kind — generate_music / render_midi / cover_song: a render not yet on the GPU is stopped and its credits refunded; one already rendering finishes (credits spent), the job ends as canceled, output discarded. audio_to_session: cooperative — stops at the next stage boundary and refunds the build's sound-tool unit (a separation already run stays charged). bounce_session: a bounce still queued never renders (budget refunded); one mid-render has its result dropped. spot_video / score_to_picture / reframe_video: one still queued never starts and one running stops within seconds, refunded either way. separate_stems / transcribe / convert_project: no plane-side stop — the work completes (credits spent), the job ends as canceled and its output is discarded. The synchronous analyses are already finished (409 already_terminal).",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "job_id": {
+                "description": "The job_id from a submit tool or doseedo_list_jobs.",
+                "type": "string"
+              }
+            },
+            "required": ["job_id"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": true,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:f4b4bdc914af9a3e7be8045656bc7338c6ede9bee117d2ad4cdc917fca9942b0"
+        },
+        {
+          "name": "doseedo_check_take",
+          "title": "Check a take against its notes",
+          "description": "MEASURE a take instead of guessing: give the audio (a render_midi take URL, any recording) and the notes it should play — notes[] + bpm (and tempo_map) or a midi_url — and get back how many written notes were heard at the right pitch and time (recall / precision / f1, octave errors, the first missed notes with their beats), the timing error in ms, loudness (integrated LUFS, peak dBFS, clipped share), any stretch where a note was written but nothing sounds, and a verdict (good / check / bad) with reasons in plain words. doseedo_render_midi results already carry this per take (takes[].check) when the part was given as notes. Method: an independent note transcriber (basic-pitch) — dense chords and very fast runs read less reliably; use it as a screen, and listen to anything marked check. Synchronous (~3–15 s), CPU, no credits. Cancel: not applicable — the result is returned in the submit response; the job is already finished.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "audio_key": {
+                "description": "R2 ingest key of an uploaded audio file (from doseedo_get_upload_url / POST /api/upload/r2/ingest-url; starts with \"ingest/\"). Alternative to audio_url.",
+                "type": "string"
+              },
+              "audio_url": {
+                "description": "The take: a doseedo result URL as returned, or any public https URL.",
+                "type": "string"
+              },
+              "bpm": {
+                "description": "Tempo of the notes (or tempo_map).",
+                "type": "number"
+              },
+              "idempotency_key": {
+                "description": "Optional. Any unique string for THIS request (e.g. a UUID). Re-sending the same call with the same key after a timeout returns the same job instead of starting a second one.",
+                "type": "string"
+              },
+              "instrument": {
+                "description": "The instrument (a drum/percussion name switches to onset-only matching).",
+                "type": "string"
+              },
+              "midi_url": {
+                "description": "Alternative to notes: the part as a Standard MIDI File (≤ 2 MiB).",
+                "type": "string"
+              },
+              "notes": {
+                "description": "The notes the take should play, in beats from bar 1 (the rows you sent doseedo_render_midi).",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "duration_beats": {
+                      "type": "number"
+                    },
+                    "pitch": {
+                      "type": "number"
+                    },
+                    "start_beats": {
+                      "type": "number"
+                    },
+                    "velocity": {
+                      "type": "number"
+                    }
+                  },
+                  "required": ["duration_beats", "pitch", "start_beats"],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "onset_tolerance_ms": {
+                "description": "How far a heard onset may be from the written one and still count (default 50).",
+                "type": "number"
+              },
+              "tempo_map": {
+                "description": "Tempo changes [{beat, bpm}].",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "beat": {
+                      "type": "number"
+                    },
+                    "bpm": {
+                      "type": "number"
+                    }
+                  },
+                  "required": ["beat", "bpm"],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "time_signature": {
+                "description": "Meter (default 4/4).",
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": false,
+            "openWorldHint": true,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:f2dd57e8c1850455334a0d38653381ffcda0b8b946bf4cdcc05c37d3114ee561"
+        },
+        {
+          "name": "doseedo_check_task",
+          "title": "Check a job",
+          "description": "Check an async doseedo task once. Returns current status, and the result (file URLs / notes) when finished. A big result comes back as a brief (each row cut to its deciding fields): parts: [\"<name>\" or index, …] returns those rows of the job record IN FULL — a render_score part's every receipt, a mix part's strip, rides (every point) and loudness, a supervised cue's full card (parts: [\"1M7\"]).",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "job_id": {
+                "description": "Alternatively the job_id (job_…) from a submit tool or the jobs API — replaces task_id + kind.",
+                "type": "string"
+              },
+              "kind": {
+                "description": "Which job kind created the task — the registry name the submit reply carried (generate_music, generate_sound, cover_stem, fill_gap, render_midi, train_instrument, render_score, mix, session_from_stems, spot_video, score_to_picture, reframe_video, cover_song, separate_stems, split_soundtrack, transcribe, audio_to_session, convert_project, bounce_session, analyze_song, detect_chords, beat_grid, identify_sound, check_take, analyze_midi, supervise_cues); the short codes (generate, sound, coverstem, fillgap, render, train, score, stemsess, spot, picture, reframe, cover, separate, soundtrack, session, convert, bounce, analyze, chords, beats, identify, check, harmony, supervise) are accepted aliases.",
+                "enum": ["generate_music", "generate_sound", "cover_stem", "fill_gap", "render_midi", "train_instrument", "render_score", "mix", "session_from_stems", "spot_video", "score_to_picture", "reframe_video", "cover_song", "separate_stems", "split_soundtrack", "transcribe", "audio_to_session", "convert_project", "bounce_session", "analyze_song", "detect_chords", "beat_grid", "identify_sound", "check_take", "analyze_midi", "supervise_cues", "generate", "sound", "coverstem", "fillgap", "render", "train", "score", "stemsess", "spot", "picture", "reframe", "cover", "separate", "soundtrack", "session", "convert", "bounce", "analyze", "chords", "beats", "identify", "check", "harmony", "supervise"],
+                "type": "string"
+              },
+              "parts": {
+                "description": "Optional, on a finished job: the parts to return in full, by name (as the result names them) or index — e.g. [\"Oboes\", \"Timpani\"].",
+                "items": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "number"
+                    }
+                  ]
+                },
+                "type": "array"
+              },
+              "task_id": {
+                "description": "The task_id returned by a submit tool.",
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:0b5e3de7e8491759aaaa6570b6d90491add49d65a0ffe9f5d9fb9672771d1cb8"
+        },
+        {
+          "name": "doseedo_generate_sound",
+          "title": "Generate sound effects (SFX & foley)",
+          "description": "SOUND EFFECTS (SFX) from words with Stable Audio Open — SOUND DESIGN and FOLEY for game audio, apps and video: impacts, whooshes, door slams, footsteps, UI blips, creature and sci-fi sounds, ambiences (\"rain on a tin roof\", \"busy café\"), risers, drum one-shots. A one-shot hit (\"punchy house kick\", \"snare with a short room\", \"a riser into the drop\"), a loop on the tempo grid (\"glitchy percussion\"), or a texture (\"vinyl crackle\", \"rain\"). kind picks which (hit | loop | texture); omitted, the server reads it off the words. Don't put a tempo in a hit's prompt — tempo words make it write a loop. Wrong tool for a part with notes (doseedo_render_midi) or a piece of music (you write it; doseedo_render_score plays it). Async: job_id → doseedo_wait_task (typically 15–40 s) → audio URLs (pre-signed: curl -OJ <url>, no auth header, valid 24 h). Cancel: a render that has not reached the GPU yet is stopped and its credits refunded; one already rendering finishes on the GPU (its credits are spent), the job ends as canceled and the output is discarded.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "bpm": {
+                "description": "Tempo a loop is cut to (default 120).",
+                "type": "number"
+              },
+              "duration_seconds": {
+                "description": "Length in seconds. Default: 2 s for a hit, 4 bars at bpm for a loop, 8 s for a texture.",
+                "type": "number"
+              },
+              "idempotency_key": {
+                "description": "Optional. Any unique string for THIS request (e.g. a UUID). Re-sending the same call with the same key after a timeout returns the same job instead of starting a second one.",
+                "type": "string"
+              },
+              "kind": {
+                "description": "hit = one sound (0.5–10 s), loop = 1–4 bars tiled at bpm, texture = a bed. Default: read off the prompt.",
+                "enum": ["hit", "loop", "texture"],
+                "type": "string"
+              },
+              "name": {
+                "description": "Optional: a name for this job's files, e.g. \"rainy-loop-3\". Every file it returns downloads as <name>_<part>.<ext> (rainy-loop-3_Celesta.wav, rainy-loop-3_rough-mix.wav; one take: rainy-loop-3.wav), so the user can find them. Give each job its own name (a second take: \"rainy-loop-3b\"). Default: doseedo-<last 6 characters of the job id>.",
+                "maxLength": 80,
+                "type": "string"
+              },
+              "prompt": {
+                "description": "What it sounds like, e.g. \"punchy house kick drum, single hit\" or \"dusty vinyl crackle\". ≤ 300 characters (a longer one is cut at a word boundary, with a warning).",
+                "maxLength": 300,
+                "type": "string"
+              },
+              "seed": {
+                "description": "Optional random seed for reproducibility.",
+                "type": "number"
+              },
+              "time_signature": {
+                "description": "Meter a loop is cut to, e.g. \"4/4\" (default).",
+                "type": "string"
+              }
+            },
+            "required": ["prompt"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": false,
+            "openWorldHint": true,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:86f6401b4b1b2ed9a5ba5bfb60e8b4ef609f025ccbc32217d9e7be4e3801f7b9"
+        },
+        {
+          "name": "doseedo_get_upload_url",
+          "title": "Get an audio upload URL",
+          "description": "Get a presigned upload for your own audio file — or a SCORE (.mid / .midi / .musicxml / .xml / .mxl / .mscz / .mscx → a score_key for doseedo_render_score: send a big score as a file, not as notes in the call). Returns an upload_url (PUT the raw file bytes there, e.g. `curl -X PUT -H \"Content-Type: <content_type>\" --data-binary @song.wav \"<upload_url>\"`) and an audio_key to pass to doseedo_separate_stems / doseedo_transcribe / doseedo_cover_song / doseedo_audio_to_session, or to doseedo_add_audio_to_session. A FILM (mp4, mov, m4v, webm, mkv; ≤ 2 GB) uploads the same way: pass the key as video_key to doseedo_spot_video / doseedo_score_to_picture. Formats: WAV, AIFF, FLAC, MP3, M4A/AAC, Ogg/Opus, WebM — all accepted for processing on every plan. Storing audio IN A SESSION (doseedo_add_audio_to_session) keeps WAV/AIFF/FLAC lossless only on Pro+; below Pro+ lossless is not kept there, so send Opus (audio/ogg). Samples/regions for a session that are on this machine need NO upload: use load_quick_sampler_sample sample_path / attach_audio local_path / set_track_clips audio_ref.local_path and run place_local_files after the download. A FILE ALREADY ONLINE (a film an editor exported — Canva, Adobe Express — or any public https URL): pass source_url and doseedo copies it in itself — nothing to PUT; the key comes back ready (≤ 256 MB).",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "content_type": {
+                "description": "MIME type; inferred from the extension when omitted (wav, aif/aiff, flac, mp3, m4a/aac, ogg/opus, webm; a film: mp4, mov, m4v, mkv). Required for any other extension.",
+                "type": "string"
+              },
+              "filename": {
+                "description": "File name including extension, e.g. \"song.wav\", \"film.mp4\", or \"cue.mid\" / \"cue.musicxml\" / \"cue.mscz\" for a score. With source_url: the name for the copy when the URL names none (its extension decides the type).",
+                "type": "string"
+              },
+              "source_url": {
+                "description": "A public https URL of an audio file or a film to copy in instead of uploading it (e.g. an editor's export link). Returns the key directly — no upload_url, nothing to PUT. ≤ 256 MB.",
+                "type": "string"
+              }
+            },
+            "required": ["filename"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:37649fde8cb99370704a5aa02895928d922e2fb25a464a5427a49bfa60db4758"
+        },
+        {
+          "name": "doseedo_identify_sound",
+          "title": "Identify a sound",
+          "description": "Instrument recognition + genre classification of audio (a stem, a loop, a whole mix): instrument (e.g. \"sub_bass\", \"drum_machine\", \"synth_lead\", \"string_section\"), family, render (the doseedo_render_midi fields that play it), write (how its part is written), candidates[], resembles[] (what it sounds like without being it: a synth lead that resembles a brass section), confidence, notes {low, high, most} (its register), genre[] (top 3), character {tone bright|dark, drive clean|driven, length short|sustained, weight}, reads (playful | neutral | sleek: does it sound like a toy advert or a cartoon?) + playful 0–1, tags[] (AudioSet) and measured {rms_dbfs, centroid_hz, low_share, onsets_per_s}. USE THIS on a reference track and on each of its stems (doseedo_separate_stems returns stem_identity already) before writing: you cannot hear, and tempo and key say nothing about the SOUND. Run it on your own mix too and compare genre and character with the reference. A whole mix: read genre and character (instrument names only its loudest element). A silent stem answers silent:true — nothing to copy there. Pass audio_key (an upload) or audio_url (a result URL from another job as returned, or any public https URL). Up to 10 minutes of audio is analyzed. Synchronous (~1–5 s), no credits. Cancel: not applicable — the result is returned in the submit response; the job is already finished.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "audio_key": {
+                "description": "R2 ingest key of an uploaded audio file (from doseedo_get_upload_url / POST /api/upload/r2/ingest-url; starts with \"ingest/\"). Provide this or audio_url.",
+                "type": "string"
+              },
+              "audio_url": {
+                "description": "https URL of the audio (a doseedo result URL as returned — a stem, a take — or any public URL). Alternative to audio_key.",
+                "type": "string"
+              },
+              "idempotency_key": {
+                "description": "Optional. Any unique string for THIS request (e.g. a UUID). Re-sending the same call with the same key after a timeout returns the same job instead of starting a second one.",
+                "type": "string"
+              },
+              "want": {
+                "description": "Which answers to compute (default all three).",
+                "items": {
+                  "enum": ["instrument", "genre", "character"],
+                  "type": "string"
+                },
+                "type": "array"
+              }
+            },
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": false,
+            "openWorldHint": true,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:66322d22ae68002a8b292bf754c3b7869f59d26b654789febdd9bb8438f31f9c"
+        },
+        {
+          "name": "doseedo_instruments",
+          "title": "Instrument catalog (the sound palette)",
+          "description": "The instrument list — the sound palette: every instrument doseedo can PLAY YOUR NOTES on (doseedo_render_midi) — orchestral strings, brass and winds, guitars, basses, keys, drums and percussion, and World instruments (koto, sitar, banjo, pedal steel, tabla, congas…). Each entry gives the EXACT render call (`call`: instrument, plus timbre_preset where one is needed — a koto is the acoustic_guitar model with the koto timbre), its playable range in concert MIDI pitch, whether it plays chords, its presets (pizz, muted, sax registers…) and a demo render. No args → the whole catalog; query:\"warm low brass\" / family / pitches:[…] (instruments whose range holds them) / chords:true narrow it; id:\"cello\" → one instrument in full. Read-only, free, no key needed — read it before writing a part.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "chords": {
+                "description": "true = only instruments one player can play chords on.",
+                "type": "boolean"
+              },
+              "family": {
+                "description": "Only this family.",
+                "enum": ["strings", "brass", "winds", "piano", "guitar", "bass", "drums", "world", "pitched_percussion", "unpitched_percussion", "synth"],
+                "type": "string"
+              },
+              "id": {
+                "description": "One instrument (id, alias or label, e.g. \"cello\", \"upright bass\", \"koto\") → its full entry: every preset with its own call and range, transposition, aliases, demo, page.",
+                "type": "string"
+              },
+              "pitches": {
+                "description": "MIDI pitches the part uses (concert, 60 = C4) — only instruments whose range holds every one.",
+                "items": {
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              "query": {
+                "description": "What the part needs, in words: an instrument (\"trumpet\"), a family (\"woodwinds\"), a technique (\"pizzicato\", \"muted\") or a register (\"low\", \"bright\"). Ranked best-first.",
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:e60e6aa49406728a332c129f26368926dafbd0c0d8a0510267e6db579141ccae"
+        },
+        {
+          "name": "doseedo_list_jobs",
+          "title": "List jobs",
+          "description": "List the jobs this account submitted (generate / render_midi / cover / stems / transcribe / session / convert / bounce / the analyses), newest first — to find an earlier result, check what is still running, or resume after a lost connection. Each row names its artifacts (e.g. [\"vocals\", \"drums\", \"midi_piano\"]); doseedo_check_task {job_id} returns the full result with fresh links. Read-only.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "before": {
+                "description": "Page cursor: the next_cursor of a previous call.",
+                "type": "string"
+              },
+              "kind": {
+                "description": "Only this job kind (registry name): generate_music, generate_sound, cover_stem, fill_gap, render_midi, train_instrument, render_score, mix, session_from_stems, spot_video, score_to_picture, reframe_video, cover_song, separate_stems, split_soundtrack, transcribe, audio_to_session, convert_project, bounce_session, analyze_song, detect_chords, beat_grid, identify_sound, check_take, analyze_midi, supervise_cues. Short codes (generate, sound, coverstem, fillgap, render, train, score, stemsess, spot, picture, reframe, cover, separate, soundtrack, session, convert, bounce, analyze, chords, beats, identify, check, harmony, supervise) are accepted aliases.",
+                "type": "string"
+              },
+              "limit": {
+                "description": "How many (1–100, default 20).",
+                "type": "number"
+              },
+              "session_id": {
+                "description": "Only jobs whose input names this session — a bounce, stems registered into it, a render of one of its tracks (filtered within the fetched page).",
+                "type": "string"
+              },
+              "status": {
+                "enum": ["queued", "running", "succeeded", "failed", "canceled"],
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:9c7ea7c706f4344d646c38782c8b972bf476cd968a01b0322721a24c461b0d59"
+        },
+        {
+          "name": "doseedo_mix",
+          "title": "Mix and master stems",
+          "description": "MIXING and MASTERING: each part levelled, panned, high-passed, given its depth on a shared reverb, and mastered to a loudness target — a WAV AND `mixgraph`, the mix as a document you edit. After doseedo_render_score pass from_job (its parts and the instruments they play are the stems); or stems: [{name, audio_url, instrument?}] (result links work as-is). An orchestra (strings / winds / brass / timpani / harp…) is SEATED by default (film-orchestral: violins left, low strings right, brass behind, each seat at its depth in a 2.3 s hall, written dynamics riding the faders); other stems get the blind default. style: film-orchestral, film-scoring-stage, concert-hall, film-epic-hybrid, cathedral-choral, classical-chamber, cartoon-studio, golden-age-cartoon, jazz-combo, ambient, country-pop, metal-modern, 1950s-mono, 1960s-lcr-pop, 1970s-analog-rock, 1970s-dub, 1980s-pop-gated, 1990s-rock-dry, 1990s-hiphop, lofi-hiphop, 2000s-loudness-rock, 2010s-edm, 2010s-trap, 2020s-pop, 2020s-hyperpop — an id or words (\"dry 90s rock\"). balance {part: dB} moves parts on top of the levelling (+3 brings a melody forward). Change the mix: edit the returned mixgraph — strips[] {stem, gain_db, pan, seat, chain, sends}, buses[] (verb = the hall), master.chain, automation [{target: \"strips.<stem>.gain_db\", points: [[seconds, dB]…]}] for rides (dB off the strip's gain_db: 0 = as set, -60 mutes) — and call again with mix_job (this job_id) + only your edits (or the whole mixgraph + the same stems): rendered as written, rails reported, no credits. Then doseedo_session_from_stems {from_job, mix_job: <this job_id>} → the DAW project at this mix's levels and pans. TO PICTURE: dialogue (the VO; the music ducks under each line), music_offset_s (bar 1 on the picture), length_s (cut + end fade). Async: job_id → doseedo_wait_task (~15–90 s). Cancel: the plane has no stop for a running mix — it runs to completion (credits spent), the job ends as canceled and its output is discarded. Only a job still queued at the plane is refunded by the plane's own failure refund.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "balance": {
+                "additionalProperties": {
+                  "type": "number"
+                },
+                "description": "{part name: dB in -12..12} — your balance on top of the levelling (and of the written dynamics a from_job reads).",
+                "type": "object"
+              },
+              "dialogue": {
+                "description": "The VO / dialogue on the picture's timeline (≤ 4): [{name?, audio_url}]. The music ducks under each line until the voice sits duck.vo_over_db over it, with a 1–4 kHz carve while it talks; the voice joins after the music's master chain. Report: output.dialogue.lines [{start_s, end_s, duck_db, vo_over_music_db}] as mixed.",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "audio_url": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["audio_url"],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "duck": {
+                "additionalProperties": false,
+                "description": "How the music sits under the dialogue: {vo_over_db (default 7 dB — a broadcast mix's 6–10), carve_db (default 3, at 1–4 kHz), max_db (default 12), include (default true; false = the music bed alone, ducked as if the voice played)}.",
+                "properties": {
+                  "carve_db": {
+                    "type": "number"
+                  },
+                  "include": {
+                    "type": "boolean"
+                  },
+                  "max_db": {
+                    "type": "number"
+                  },
+                  "vo_over_db": {
+                    "type": "number"
+                  }
+                },
+                "type": "object"
+              },
+              "dynamics": {
+                "additionalProperties": {
+                  "type": "array"
+                },
+                "description": "Fader rides from written dynamics: {part name: [[onset_seconds, velocity 0-127], …]}. from_job fills it from the score (pp to ff ≈ 17 dB); pass {} for no rides.",
+                "type": "object"
+              },
+              "dynamics_carried": {
+                "additionalProperties": {
+                  "type": "number"
+                },
+                "description": "{part name: top velocity} — parts whose stems already play their written level (a render part's dynamics_level receipt, up to its top_vel). Their rides count it: no doubled swing. from_job fills it.",
+                "type": "object"
+              },
+              "dynamics_ride": {
+                "description": "How hard the written dynamics move the faders: 1 = default (pp to ff ≈ 17 dB), 0 = no rides, up to 1.5.",
+                "type": "number"
+              },
+              "end_fade_s": {
+                "description": "With length_s: the fade at the program's end (0–10 s, default 0.5).",
+                "type": "number"
+              },
+              "from_job": {
+                "description": "MCP: a doseedo_render_score job_id — its parts are the stems, each with the instrument it plays, and each part's written dynamics (its mean velocity) set its balance.",
+                "type": "string"
+              },
+              "from_jobs": {
+                "description": "MCP: ONE cue rendered as several doseedo_render_score jobs (its parts split across renders): every job's parts are the stems, balanced and ridden by their written dynamics as one score.",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "idempotency_key": {
+                "description": "Optional. Any unique string for THIS request (e.g. a UUID). Re-sending the same call with the same key after a timeout returns the same job instead of starting a second one.",
+                "type": "string"
+              },
+              "length_s": {
+                "description": "The program's length (a :30 = 30; ≤ 600 s): the mix is cut there with end_fade_s (default 0.5 s); the room's tail never runs past it.",
+                "maximum": 600,
+                "minimum": 0.5,
+                "type": "number"
+              },
+              "mix_job": {
+                "description": "MCP: a doseedo_mix job_id to edit — its whole stored mix (every ride) is the base, mixgraph is applied on top, and its stems are reused when you pass no from_job / stems.",
+                "type": "string"
+              },
+              "mixgraph": {
+                "description": "An edited mix — the mixgraph a doseedo_mix returned, changed — rendered against the same stems (from_job or stems). With mix_job: ONLY what you change (strips[] by stem, automation[] rides by target — points: [] removes one, buses[] by id, master) — the rest is that mix as stored. A mixgraph marked `partial` (its rides summarized) is refused without mix_job. Omit for a fresh mix.",
+                "type": "object"
+              },
+              "music_offset_s": {
+                "description": "Where bar 1 of the music sits on the picture (seconds, ≤ 600; the program ≤ 600 s): every music stem — and its rides — starts this late; the dialogue does not move.",
+                "maximum": 600,
+                "minimum": 0,
+                "type": "number"
+              },
+              "name": {
+                "description": "Optional: a name for this job's files, e.g. \"rainy-loop-3\". Every file it returns downloads as <name>_<part>.<ext> (rainy-loop-3_Celesta.wav, rainy-loop-3_rough-mix.wav; one take: rainy-loop-3.wav), so the user can find them. Give each job its own name (a second take: \"rainy-loop-3b\"). Default: doseedo-<last 6 characters of the job id>.",
+                "maxLength": 80,
+                "type": "string"
+              },
+              "room": {
+                "anyOf": [
+                  {
+                    "enum": ["studio", "stage", "hall", "cathedral"],
+                    "type": "string"
+                  },
+                  {
+                    "maximum": 1,
+                    "minimum": 0,
+                    "type": "number"
+                  }
+                ],
+                "description": "An orchestra's room: \"studio\" (intimate scoring stage, ~1.2 s, close), \"stage\" (~1.8 s), \"hall\" (the default scoring hall, ~2.3 s), \"cathedral\" (~4 s, wet) — or 0..1 between them. Sets the decay, size and how wet every seat sits."
+              },
+              "stems": {
+                "description": "[{name, audio_url, instrument?}] — the stems (≤ 32). instrument = the sound it plays (a doseedo_instruments id: \"violin\", \"timpani\", \"harp\"), which decides how it is mixed; without it the name decides.",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "audio_url": {
+                      "type": "string"
+                    },
+                    "instrument": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["audio_url", "name"],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "style": {
+                "description": "A mix style: an id or words (\"dry 90s rock\"). Pick it for the picture — the default (film-orchestral, a 2.3 s scoring hall) suits film drama, not every orchestra: cartoon-studio = a cartoon / animation orchestra (a close, dry, wide scoring stage, punchy rides); golden-age-cartoon = a 1940s–50s cartoon (mono, small studio, tape); film-scoring-stage = intimate TV / documentary; concert-hall; film-epic-hybrid = trailer / action; cathedral-choral; classical-chamber; or jazz-combo, ambient, 1970s-analog-rock, 2020s-pop …",
+                "type": "string"
+              },
+              "target_lufs": {
+                "description": "Master loudness, -24..-6 LUFS (default: the style's — -18 for film-orchestral, -14 for the blind default). Met within ~0.3 LU (a loud target clips the shortest transients first); output.loudness says what landed, and why when short. With mix_job it re-masters the stored mix.",
+                "type": "number"
+              },
+              "tonal_match": {
+                "description": "Nudge the master toward professionally mixed orchestral references (default on for the orchestral styles). Its presence and air are judged only where the score is written loud (written_level), so a pp passage keeps its darkness.",
+                "type": "boolean"
+              },
+              "vintage": {
+                "description": "A period medium over any style, after the mix: \"tape\" = 7.5 ips tape (saturation, wow and flutter, a low hiss); \"shellac\" = a 78 played back (mono, ~90 Hz–5.5 kHz with the reproducer's presence, a 1.3 Hz wow, surface noise that swishes once a turn, crackle). \"none\" takes a style's own medium off (golden-age-cartoon carries tape). Its node (master.chain type vintage: noise_db, crackle, hi_hz …) is editable in the returned mixgraph.",
+                "enum": ["tape", "shellac", "none"],
+                "type": "string"
+              },
+              "written_level": {
+                "description": "[[seconds, velocity], …] — the whole score's written level, the loudest part sounding, held until the next row (0 = nothing plays). The tonal match reads only the passages it writes loud (f and louder), so a pp passage keeps its darkness. from_job fills it.",
+                "items": {
+                  "items": {
+                    "type": "number"
+                  },
+                  "maxItems": 2,
+                  "minItems": 2,
+                  "type": "array"
+                },
+                "maxItems": 4096,
+                "type": "array"
+              }
+            },
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": false,
+            "openWorldHint": true,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:d2e34fd6a26137cb2b492aa6733c409ba6e88e6814ee4fbf96ef7ec70f8db9c1"
+        },
+        {
+          "name": "doseedo_quote",
+          "title": "Price a job",
+          "description": "Estimate what a job will cost in credits BEFORE submitting it, and whether the connected account can afford it right now. Spends nothing. Pass the job (generate_music, generate_sound, cover_stem, fill_gap, render_midi, train_instrument, cover_song, separate_stems, split_soundtrack, transcribe, audio_to_session, convert_project, bounce_session, spot_video, score_to_picture, reframe_video, analyze_song, detect_chords, beat_grid, identify_sound, supervise_cues, analyze_midi, render_score, mix, session_from_stems, check_take) and the same args you would give the job tool (duration_seconds, models, instruments; for render_midi: notes + bpm / tempo_map or duration_seconds, voice_split / voices, takes — takes are free, voices cost one batch per ~6; for render_score: parts + bpm / tempo_map — planned exactly as the job plans it (lines, player rows, length), and `refused` says when the job would refuse it). The estimate follows the planes' own price table; the gate is authoritative and a refusal names the exact price.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "args": {
+                "additionalProperties": true,
+                "description": "The arguments you intend to pass to the job tool; only the price-relevant ones matter.",
+                "type": "object"
+              },
+              "job": {
+                "description": "Which job to price (a doseedo_ tool name or recipe verb is accepted too).",
+                "enum": ["generate_music", "generate_sound", "cover_stem", "fill_gap", "render_midi", "train_instrument", "cover_song", "separate_stems", "split_soundtrack", "transcribe", "audio_to_session", "convert_project", "bounce_session", "spot_video", "score_to_picture", "reframe_video", "analyze_song", "detect_chords", "beat_grid", "identify_sound", "supervise_cues", "analyze_midi", "render_score", "mix", "session_from_stems", "check_take"],
+                "type": "string"
+              }
+            },
+            "required": ["job"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:2573497f6960101b2aca799d561578821dca87f4df9e6adf740965d7e552ad62"
+        },
+        {
+          "name": "doseedo_recipes",
+          "title": "Recipes (named pipelines)",
+          "description": "The named pipelines people actually ask for — stems, session (mix → DAW project), cover, transcribe, generate, render-midi (your notes played by an instrument model), custom-instrument (train your own from a recording), timbre-transfer (your notes, a recording's tone), sound-design (SFX / foley / one-shots), analyze-song (key/tempo/sections/chords), convert, bounce, and the compose-part guide (a part in the session's key at its tempo: analyze → you write the MIDI → place or render it) — each with its inputs, the tool calls in order, outputs, a credit/time estimate and how to VERIFY success from the response. Call with no name for the index (pick by use_when), or with a name for the full recipe. Read-only.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "name": {
+                "description": "A recipe name or alias, e.g. \"session\" / \"stems-to-session\". Omit to list all.",
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:6a399c61831c0fb3383d995a6608f07e74e104bb6de8c1caa10498b306678ac4"
+        },
+        {
+          "name": "doseedo_render_midi",
+          "title": "Render MIDI on AI instruments (MIDI to audio)",
+          "description": "MIDI to audio, a virtual instrument: plays a part you wrote. An AI instrument model (orchestral strings, brass, woodwinds, piano, guitar, bass, drums, World) performs your exact notes, in your key, at your bpm, and returns audio takes. Input ONE of: notes[] ({pitch, start_beats, duration_beats, velocity} — beats from bar 1), midi_url (a .mid ≤2 MiB: a doseedo result link or a public https URL), or session_id + track_id (that track's notes, read from the session). Required: instrument (an entry's `call` from doseedo_instruments, no key — stay inside its range) and bpm. The notes are sent AS GIVEN — no pitch snapping, no quantizing. One voice per part: a chord part is rendered one voice per output with voice_split:true (result.voices maps each voice to its files and notes). Takes come back best-first (takes[0] = the scorer's winner). Async: job_id → doseedo_wait_task (~1–3 min). Result: takes[{url, rank, score}] (pre-signed: curl -OJ, no auth header, 24 h), seed, duration, voices?, refine?, chain. A take may miss or change a note — read takes[].check (measured against your notes) or listen; offer the takes, never promise note-perfection. Free harmony check first: doseedo_analyze_midi. DRUMS (GM notes): the drum model (default) PLAYS a kit — the sound of acoustic drums; it can drop a hit (takes[].fit.missing). drum_engine:\"oneshot\" = a programmed sampler kit for drum_genre (default for \"electronic\"/\"808\"), every hit as written — drum machines only; real drums (a kit, boom bap) stay on the model (drop a hit: take again). \"synth\" = a one-shot patch (synth_role, synth_genre; \"performed\" = played, less 1-shot); result.oneshots = the samples. SOUND: a preset (timbre_preset), a recording's tone (timbre_audio_url = timbre transfer; a drum kit too: a ride / snare recording), or YOUR OWN instrument (lora_id from doseedo_train_instrument; result.lora.applied). Cancel: a render that has not reached the GPU yet is stopped and its credits refunded; one already rendering finishes on the GPU (its credits are spent), the job ends as canceled and the output is discarded.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "bpm": {
+                "description": "REQUIRED (or tempo_map). Tempo of the notes (10–400). Written into the MIDI's tempo meta, so start_beats/duration_beats land at exactly this tempo.",
+                "type": "number"
+              },
+              "drum_engine": {
+                "description": "Who plays a drum part: \"model\" = the drum model (the default for every kit but electronic / 808): a drummer playing the kit in a room — cymbals ring, hits vary, ghost notes speak; the sound for acoustic drums. It can drop or smear a hit: read takes[].fit and take it again. \"oneshot\" = a sampler kit made for drum_genre (the default for electronic / 808; congas and bongos are recordings of the skins): every note lands exactly as written, but it sounds programmed (one sample per drum, the same on every hit) — for drum-machine genres only. An acoustic kit (drum_kit: rock, punk, jazz, soul, a band seen playing) stays on the model, never oneshot — and so does a real-drums drum_genre on whatever kit, which plays on drum_kit (funk, boom bap, lo-fi, breakbeat: a sampled break is a drummer; its dust comes from the mix, doseedo_mix style \"1990s-hiphop\" / \"lofi-hiphop\"; the submit reply says so, prepared.drums). A take that drops a hit is taken again (takes: 3, keep the best). Its pads (GM): kick 35/36, snare 38/40, rim 37, clap 39, hats 42/44/46, toms 41–50, crash 49/57, ride 51/59, tambourine 54, cowbell 56, bongos 60/61, congas 62–64, shaker 69/70/82, guiro 73/74, claves 75, woodblock 76/77, triangle 80/81.",
+                "enum": ["oneshot", "model"],
+                "type": "string"
+              },
+              "drum_genre": {
+                "description": "The drum style. A drum machine (instrument \"electronic\" or \"808\"): the genre whose one-shot kit plays the part — \"house\", \"techno\", \"trap\", \"drill\", \"dnb\", \"amapiano\", \"synthwave\"… or free words. A real-drums style (\"boom bap\", \"lo-fi\", \"breakbeat\", \"funk\", \"rock\", \"jazz\"…) plays on the drum model's drum_kit instead, never a one-shot kit. Default: the instrument.",
+                "type": "string"
+              },
+              "duration_seconds": {
+                "description": "Length of the render in seconds (0.01–600). Default: the last note's end + 2 s of release. Each 30 s window costs 10 credits.",
+                "type": "number"
+              },
+              "dynamics": {
+                "description": "One target dynamic for the whole part's tone: \"pp\", \"p\", \"mp\", \"mf\", \"f\", \"ff\", \"fff\", a 0–1 number, or a MIDI velocity as text. Omit it to let the notes' velocities shape the tone (dynamics_curve).",
+                "type": "string"
+              },
+              "dynamics_curve": {
+                "description": "What colours the TONE over time: omitted/\"auto\" = the note velocities when they vary (soft notes darker, loud brighter — every instrument but drums, LoRAs included); \"off\" = one colour; \"cc11\"/\"cc1\" = that CC lane of a midi_url; or \"pos:level,…\" (pos and level 0–1, e.g. \"0:0.1,1:0.9\" = a crescendo). Receipt: result.dynamics.",
+                "type": "string"
+              },
+              "idempotency_key": {
+                "description": "Optional. Any unique string for THIS request (e.g. a UUID). Re-sending the same call with the same key after a timeout returns the same job instead of starting a second one.",
+                "type": "string"
+              },
+              "instrument": {
+                "description": "REQUIRED. The instrument from doseedo_instruments — its `call.instrument` (e.g. \"violin\", \"tenor_sax\", \"electric_guitar\", \"piano\"; a World name such as \"koto\" is resolved to its call). Keep the notes inside its range. An unknown name close to a catalog one is refused with did_you_mean before anything is spent.",
+                "type": "string"
+              },
+              "lora_id": {
+                "description": "A CUSTOM INSTRUMENT: the lora_id doseedo_train_instrument returned (16 hex). The render is played by that trained instrument; pass the same instrument it was trained as. Owner-only.",
+                "type": "string"
+              },
+              "lora_strength": {
+                "description": "With lora_id (or synth_engine \"performed\"): how strongly the custom instrument applies, 0–2 (default 1.0, or a tuned per-adapter default; ~0.6 when a small training set overshoots; performed synth 0.5 — up to ~0.75 plays it looser, past that it starts leaving the notes).",
+                "type": "number"
+              },
+              "lyrics": {
+                "description": "A SUNG part (instrument \"voice\" — a solo singer — or \"choir\"): the words, one syllable per note in time order (\"Hold the light a lit-tle lon-ger\": hyphens split a word where you want, \"_\" holds a syllable over the next note; one word such as \"Ah\" is sung on every note). ≤ 2000 characters. Without it a sung part sings \"Ooh\". Any other instrument: an error.",
+                "maxLength": 2000,
+                "type": "string"
+              },
+              "midi_url": {
+                "description": "Alternative to notes: https URL of a Standard MIDI File (≤2 MiB) — a doseedo result link (a stem's MIDI) or a public URL. Its own tempo map is used by the model; bpm still tags the caption and sizes the default duration.",
+                "type": "string"
+              },
+              "name": {
+                "description": "Optional: a name for this job's files, e.g. \"rainy-loop-3\". Every file it returns downloads as <name>_<part>.<ext> (rainy-loop-3_Celesta.wav, rainy-loop-3_rough-mix.wav; one take: rainy-loop-3.wav), so the user can find them. Give each job its own name (a second take: \"rainy-loop-3b\"). Default: doseedo-<last 6 characters of the job id>.",
+                "maxLength": 80,
+                "type": "string"
+              },
+              "notes": {
+                "description": "The part, as note rows in beats from bar 1 (beat 0 = bar 1 beat 1, quarter-note beats at `bpm`). Monophonic for one voice; chords need voice_split:true. Up to 4096 notes.",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "duration_beats": {
+                      "description": "Length in beats (> 0).",
+                      "type": "number"
+                    },
+                    "pitch": {
+                      "description": "MIDI note number 0–127 (60 = middle C).",
+                      "type": "number"
+                    },
+                    "start_beats": {
+                      "description": "Onset in beats from bar 1.",
+                      "type": "number"
+                    },
+                    "velocity": {
+                      "description": "1–127 (default 96).",
+                      "type": "number"
+                    }
+                  },
+                  "required": ["duration_beats", "pitch", "start_beats"],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "prompt": {
+                "description": "Optional caption override (default: the instrument id), ≤ 16000 characters. Style words help a little; the notes are the control.",
+                "maxLength": 16000,
+                "type": "string"
+              },
+              "refine": {
+                "description": "Opt-in post-render correction. \"light\": attacks re-timed onto the score, exposed wrong pitch classes re-pitched inside the played octave, misfires muted (winds/brass/strings). \"shred\": play exactly the written line, octave included, mute anything the score never wrote (any pitched mono part). The raw render stays downloadable (result.refine.raw_url).",
+                "enum": ["light", "shred"],
+                "type": "string"
+              },
+              "revise_end_beats": {
+                "description": "With revise_take_url: end of the region to redo (exclusive), beats from bar 1.",
+                "type": "number"
+              },
+              "revise_start_beats": {
+                "description": "With revise_take_url: start of the region to redo, beats from bar 1.",
+                "type": "number"
+              },
+              "revise_take_url": {
+                "description": "REVISE an earlier take instead of rendering a new one: the take's URL (as a render returned it). Only [revise_start_beats, revise_end_beats) is regenerated — steered by `notes` (send the whole part, with your corrections) — and spliced back with short crossfades; the rest of the take is kept as it was.",
+                "type": "string"
+              },
+              "seed": {
+                "description": "Random seed (−1 or 0–4294967295). Reuse a result's seed to re-render close to the same take.",
+                "type": "number"
+              },
+              "session_id": {
+                "description": "Alternative to notes: with track_id, render THAT session track's notes (read from doseedo_get_session's summary).",
+                "type": "string"
+              },
+              "synth_engine": {
+                "description": "Who plays a synth part: \"oneshot\" = a patch of one-shots made for it (the default for \"synth\"; every note the same sample), \"performed\" = that same patch (synth_role / synth_genre / synth_words pick it) played by the synth model trained on real synth loops — each note its own, the tone moving, the written notes kept (lora_strength 0.5 default; seed = another performance), and with timbre_audio_url (a reference track's bass / lead / pad stem) the patch is CUT FROM THAT RECORDING's own notes and the synth model performs it — the default for a synth part that brings a recording: your notes, its sound (result.synth_engine.patch_engine \"reference-patch\"; lora.error = no single note could be cut, the model played it with the recording as its timbre), \"model\" = the instrument model alone.",
+                "enum": ["oneshot", "performed", "model"],
+                "type": "string"
+              },
+              "synth_genre": {
+                "description": "instrument \"synth\": the genre the patch is made for — \"house\", \"techno\", \"trap\", \"synthwave\", \"lo-fi\", \"dnb\"… or free words.",
+                "type": "string"
+              },
+              "synth_role": {
+                "description": "instrument \"synth\": the patch Stable Audio Open makes for the part — bass (an 808 where the genre's bass is one), 808, pad, lead, pluck. Default: from the notes (chords = pad, a low line = bass, else lead).",
+                "enum": ["bass", "808", "pad", "lead", "pluck"],
+                "type": "string"
+              },
+              "synth_words": {
+                "description": "instrument \"synth\": extra sound words for the patch (\"reese\", \"warm analog\", \"acid\"), ≤ 80 characters (a longer one is cut at a word boundary, with a warning).",
+                "maxLength": 80,
+                "type": "string"
+              },
+              "takes": {
+                "description": "How many takes to render, 1–4 (one GPU batch; no extra credits). Omit to let the server choose best-of-N for the part length.",
+                "type": "number"
+              },
+              "tempo_map": {
+                "description": "Tempo CHANGES for the notes: [{beat, bpm}] — each point holds from its beat (beats from bar 1) until the next; the first point is beat 0 (or bpm covers the beats before it). Written into the MIDI, so a ritardando or a tempo that lands a cue on a film hit plays exactly. doseedo_tempo_map builds one from hit times.",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "beat": {
+                      "type": "number"
+                    },
+                    "bpm": {
+                      "type": "number"
+                    }
+                  },
+                  "required": ["beat", "bpm"],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "timbre_audio_url": {
+                "description": "TIMBRE TRANSFER: https URL of a short recording (≤24 MB; its first 30 s are used) whose SOUND the render should take on — a doseedo result link or a public URL. The notes stay yours; the tone comes from the recording.",
+                "type": "string"
+              },
+              "timbre_preset": {
+                "description": "A preset from doseedo_instruments — an entry's call.timbre_preset or presets[].call.timbre_preset (e.g. \"violin:pizz\", \"sax:alto\", \"koto:preset1\"). Omit for the instrument default.",
+                "type": "string"
+              },
+              "time_signature": {
+                "description": "Meter of the part, e.g. \"4/4\", \"3/4\", \"6/8\" (default 4/4). Written into the MIDI and the caption.",
+                "type": "string"
+              },
+              "track_id": {
+                "description": "With session_id: the t_… id of the MIDI/instrument track to render.",
+                "type": "string"
+              },
+              "tune": {
+                "description": "Light intonation (default true): a held, clearly pitched note the model rendered 15–85 cents off its written pitch is moved toward it, to a small natural residual — attack and vibrato as played, fast notes left. Winds, brass and strings. false = the take exactly as rendered.",
+                "type": "boolean"
+              },
+              "vaefix": {
+                "description": "VAE spectral corrector (default true): trims the low-mid fog the decoder adds under the instrument's register and removes mic hiss only when the take carries it. Winds, brass and strings. Receipt: vaefix. false = the decode exactly as rendered.",
+                "type": "boolean"
+              },
+              "voice_split": {
+                "description": "true = the notes hold chords: split them into the voices one player of this instrument can hold and render every voice (result.voices). A SUNG chord (choir, voice) is sung one stem per voice, each in its register, one take each. Default false (a chord in a mono part is an error the model will fudge).",
+                "type": "boolean"
+              }
+            },
+            "required": ["instrument"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": false,
+            "openWorldHint": true,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:cee6522bf0a2b44ea9544fe7d8335010c3363dc0f7cfe959283e87bbfedc6180"
+        },
+        {
+          "name": "doseedo_render_score",
+          "title": "Render a whole score",
+          "description": "Plays a whole arrangement you wrote in one call — film scoring, orchestral arrangement, background music, a song or instrumental (a film cue, a string quartet, a big-band chart): each part played by its doseedo instrument, one stem per part from bar 1 at your tempo, plus a summed mix. Input ONE of: parts[] ({name, instrument, timbre_preset?, lora_id?, players?, notes[]} — doseedo_instruments calls), midi_url (multi-track SMF), or musicxml_url (notation played as marked, at concert pitch). A file's parts are matched by name, then GM program; name any part with instruments {\"<part name or index>\": {instrument, timbre_preset?, players?}}. A chord on a one-line instrument is split into voices (one stem each). ★ SECTIONS: an instrument is ONE player; give a part players: N (2–8) and its line is played by N different players, summed into ONE section stem — an orchestra = violins I / II, violas, cellos, basses as five parts with players 6 / 6 / 4 / 4 / 3, horns 2–4 in unison; a choir = S/A/T/B parts on \"choir\" (Solo, \"choir:trio\", \"choir:m2\" or YOUR singer: parts[].timbre_audio_url), which SINGS parts[].lyrics (\"Ooh\" without), players 4–8 (recipe \"choir\"); a solo: no players. The WHOLE orchestra in one call: ≤ 32 lines and ≤ 96 player rows (players: N = N rows), any instruments together, ≤ 600 s. Drums: the drum model is a real kit, drum_engine \"oneshot\" a drum machine. Synth parts: doseedo_render_midi. Timing: bpm and/or tempo_map ([{beat, bpm}]; doseedo_tempo_map lands film hits on downbeats). Result: parts[{name, instrument, url, fit, timbre, lora, players}] — fit.verdict / coverage = did it PLAY its notes (a failed part is re-rolled once; fit.rolls.missed = a roll not played as one), lora.applied = its adapter played — plus mix_url. Next: doseedo_mix {from_job}, then doseedo_session_from_stems {from_job, mix_job}. Async: job_id → doseedo_wait_task (~1–4 min). Cancel: a render that has not reached the GPU yet is stopped and its credits refunded; one already rendering finishes on the GPU (its credits are spent), the job ends as canceled and the output is discarded.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "bpm": {
+                "description": "Tempo of the parts (10–400). Required with parts[] unless tempo_map is given; on a file it sets the speed and keeps the score's fermatas / rit. / tempo changes.",
+                "type": "number"
+              },
+              "duration_seconds": {
+                "description": "Render length (default: the last note + 2 s; ≤ 600).",
+                "type": "number"
+              },
+              "idempotency_key": {
+                "description": "Optional. Any unique string for THIS request (e.g. a UUID). Re-sending the same call with the same key after a timeout returns the same job instead of starting a second one.",
+                "type": "string"
+              },
+              "instruments": {
+                "description": "Name the instrument for any part: {\"Violin I\": {\"instrument\": \"violin\", \"players\": 6}, \"2\": {\"instrument\": \"acoustic_guitar\", \"timbre_preset\": \"koto:preset1\"}, \"Choir\": {\"instrument\": \"choir\", \"players\": 6, \"lyrics\": \"Glo-ri-a\"}} — key = the part name or its 0-based index; players makes a MIDI / MusicXML part a section, lyrics gives a sung part its words (as parts[].lyrics), timbre_audio_url / timbre_audio_urls its own singer or sound (as parts[]: {\"Soprano\": {\"timbre_audio_url\": \"https://…/singer.wav\"}}), drum_engine \"oneshot\" (+ drum_genre) plays a file's drum part on a one-shot kit ({\"Drums\": {\"drum_engine\": \"oneshot\"}} — no instrument keeps the part's own). Wins over the name/program match.",
+                "type": "object"
+              },
+              "midi_url": {
+                "description": "Alternative to parts: a multi-track Standard MIDI File (≤ 2 MiB) — a doseedo result link or a public https URL. Channel 10 = drums: the kit, or the one percussion instrument a part is named for (Bass Drum, Cymbals, Bass Drum & Cymbals, Triangle…). A track's CC11 lane (CC1 on a wind / brass / string / bass part) is its written dynamics: a held note swells as it says.",
+                "type": "string"
+              },
+              "mix": {
+                "description": "Also bounce a summed mix of the stems (default true).",
+                "type": "boolean"
+              },
+              "musicxml_url": {
+                "description": "Alternative to parts: a MusicXML score (.musicxml / .xml / .mxl, ≤ 8 MiB) exported from Dorico, Sibelius, Finale, MuseScore, or written by you — or a MuseScore file itself (.mscz / .mscx), read with all its markings.",
+                "type": "string"
+              },
+              "name": {
+                "description": "Optional: a name for this job's files, e.g. \"rainy-loop-3\". Every file it returns downloads as <name>_<part>.<ext> (rainy-loop-3_Celesta.wav, rainy-loop-3_rough-mix.wav; one take: rainy-loop-3.wav), so the user can find them. Give each job its own name (a second take: \"rainy-loop-3b\"). Default: doseedo-<last 6 characters of the job id>.",
+                "maxLength": 80,
+                "type": "string"
+              },
+              "parts": {
+                "description": "The parts you wrote: [{name?, instrument, timbre_preset?, lora_id?, players?, lyrics?, notes:[{pitch, start_beats, duration_beats, velocity?, lyric?}], dynamics?}] — beats from bar 1, concert pitch. lyrics / lyric: a choir part's words. instrument/timbre_preset = a doseedo_instruments call. players = how many play the line: 1 (default) a soloist, 2–8 a SECTION (e.g. Violins I players 6).",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "drum_engine": {
+                      "description": "A drum / percussion part: \"model\" (default) = the drum model — a drummer playing the kit in a room (cymbals ring, hits vary, ghost notes speak): the sound for any acoustic kit, rock to jazz to a film cue. A take may drop or add a hit (parts[].fit.voices: missing / extra): render the part again for another take. \"oneshot\" = a one-shot kit generated for drum_genre, one sample per drum: every written hit lands exactly as written (a half-time bar stays half-time, a stop-time hit stays a hit), but it sounds programmed — the kit for electronic / drum-machine genres only (house, trap, 808). An acoustic kit (drum_kit: rock, punk, jazz, soul, a band seen playing) stays on the model, never oneshot — and a kit whose drum_genre is real drums (funk, boom bap, lo-fi, breakbeat: a sampled break is a drummer; its dust comes from the mix, doseedo_mix style \"1990s-hiphop\" / \"lofi-hiphop\") plays on drum_kit whatever is asked (warnings say so). A take that drops a hit is rendered again. Its pads (GM): kick 35/36, snare 38/40, rim 37, clap 39, hats 42/44/46, toms 41–50, crash 49/57, ride 51/59, tambourine 54, cowbell 56, bongos 60/61, congas 62–64, shaker 69/70/82, guiro 73/74, claves 75, woodblock 76/77, triangle 80/81.",
+                      "enum": ["model", "oneshot"],
+                      "type": "string"
+                    },
+                    "drum_genre": {
+                      "description": "With drum_engine \"oneshot\": the kit's genre / words, e.g. \"house\", \"techno\", \"trap\", \"synthwave\": a dry drum-machine kit. A real-drums genre (\"boom bap\", \"lo-fi\", \"breakbeat\", \"funk\") puts the part on the drum model's drum_kit. Default: the instrument.",
+                      "type": "string"
+                    },
+                    "dynamics": {
+                      "description": "The part's written LEVEL over time, as a DAW automation lane: [{beat, velocity 1–127}] in beat order, linear between points, a step = two points on one beat, held after the last (p 52, mf 80, f 96, ff 112). A velocity says how a note STARTS; this says how it goes on — a crescendo on a held note: [{beat: 0, velocity: 52}, {beat: 8, velocity: 96}]. Its tone follows it, through a held note too, and doseedo_mix {from_job} rides the level to it. A MusicXML score's dynamics + hairpins arrive as this lane on their own.",
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "beat": {
+                            "type": "number"
+                          },
+                          "velocity": {
+                            "type": "number"
+                          }
+                        },
+                        "required": ["beat", "velocity"],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "dynamics_curve": {
+                      "description": "What colours this part's TONE over time: auto (default) = its dynamics lane when that moves, else its note velocities when they vary — soft darker, loud brighter, on every instrument but drums; off = one colour throughout; velocity = the velocities even with a lane; cc11/cc1 = that MIDI CC lane (a midi_url part). Receipt: parts[].dynamics.",
+                      "enum": ["auto", "off", "velocity", "cc11", "cc1"],
+                      "type": "string"
+                    },
+                    "instrument": {
+                      "type": "string"
+                    },
+                    "lora_id": {
+                      "type": "string"
+                    },
+                    "lyrics": {
+                      "description": "A SUNG part (instrument \"choir\"): the words it sings, ONE SYLLABLE PER NOTE in time order, a new line per sung phrase — a chord's notes share an onset, so every voice sings that syllable. Hyphens split a word's syllables (\"Glo-ri-a in ex-cel-sis De-o\"), \"_\" alone holds the previous syllable over the next note (a melisma), one word (\"Ah\", \"Mm\") is sung on every note. Omit = \"Ooh\" on every note. notes[].lyric places syllables one by one instead (it wins). Other instruments ignore it.",
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "notes": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "duration_beats": {
+                            "type": "number"
+                          },
+                          "lyric": {
+                            "description": "A sung part: the syllable this note sings (\"glo-\" = more of the word follows, \"a\", \"_\" = hold the previous syllable).",
+                            "type": "string"
+                          },
+                          "pitch": {
+                            "type": "number"
+                          },
+                          "start_beats": {
+                            "type": "number"
+                          },
+                          "velocity": {
+                            "type": "number"
+                          }
+                        },
+                        "required": ["duration_beats", "pitch", "start_beats"],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "players": {
+                      "description": "How many players play this line: 1 (default) = a soloist; 2–8 = a SECTION — the line played by that many different players (each its own recording and performance), summed into ONE section stem. A string section = violins I, violins II, violas, cellos, basses with players 4–8 each; a choir section = singers (Soprano players 6 = six sopranos). Each player renders (and costs) like a part.",
+                      "type": "number"
+                    },
+                    "timbre_audio_url": {
+                      "description": "This part's OWN timbre: a recording of the singer (a choir part) or sound it should take on (a drum part too: a kit, a ride or a snare recording on the drum model — not drum_engine \"oneshot\" or a sampled instrument, which play their own samples) — an https URL, or the audio_key doseedo_get_upload_url returned for a file on your machine. The first 30 s are used; a clean solo take of the voice, 10–30 s, works best. Wins over the preset's voice; a choir part keeps the choir's adapter and sings in THIS voice. receipt: parts[].timbre.",
+                      "type": "string"
+                    },
+                    "timbre_audio_urls": {
+                      "description": "Several recordings (≤ 6): a section's players (players: N) and a split chord's voices take them in turn — a choir section of several singers of your own.",
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "timbre_preset": {
+                      "type": "string"
+                    },
+                    "tune": {
+                      "description": "false = this part exactly as rendered (no light intonation pass; default true).",
+                      "type": "boolean"
+                    },
+                    "vaefix": {
+                      "description": "false = this part's decode exactly as rendered (no VAE spectral corrector; default true).",
+                      "type": "boolean"
+                    }
+                  },
+                  "required": ["notes"],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "score_key": {
+                "description": "Alternative to parts: a score file on YOUR machine — doseedo_get_upload_url {filename: \"cue.mid\" | \"cue.musicxml\" | \"cue.mscz\"} → PUT the file → its score_key (kept 24 h). A big score sent as a file, not as notes in this call.",
+                "type": "string"
+              },
+              "score_url": {
+                "description": "Alternative to parts: a score file URL — MIDI, MusicXML or a MuseScore .mscz / .mscx, told apart by its content.",
+                "type": "string"
+              },
+              "seed": {
+                "description": "Random seed (reuse to re-render close to the same performance).",
+                "type": "number"
+              },
+              "tempo_map": {
+                "description": "Tempo changes [{beat, bpm}] (first point at beat 0). Overrides a file's own tempo.",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "beat": {
+                      "type": "number"
+                    },
+                    "bpm": {
+                      "type": "number"
+                    }
+                  },
+                  "required": ["beat", "bpm"],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "time_signature": {
+                "description": "Meter, e.g. \"4/4\" (default, or the file's).",
+                "type": "string"
+              },
+              "tune": {
+                "description": "Light intonation on every winds / brass / strings part (default true): held, clearly pitched notes the model rendered 15–85 cents off are moved toward their written pitch, to a small natural residual — attacks, vibrato and fast notes as played. Receipt: parts[].tune. false = every part as rendered (or parts[].tune false for one).",
+                "type": "boolean"
+              },
+              "vaefix": {
+                "description": "VAE spectral corrector on every winds / brass / strings part (default true): the decoder's low-mid fog under each instrument's register is trimmed, mic hiss removed only where present. Receipt: parts[].vaefix. false = every decode as rendered (or parts[].vaefix false for one).",
+                "type": "boolean"
+              }
+            },
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": false,
+            "openWorldHint": true,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:801e086f6611de8dfefbdc25815967301f78cc5cd5e8075a8d8440b3a2613247"
+        },
+        {
+          "name": "doseedo_score_to_picture",
+          "title": "Lay the score on the picture",
+          "description": "SCORE TO PICTURE: the last step of scoring a film. Lays each mixed cue (and any sound effect) on the video at its SMPTE timecode, with dialogue ducking (the lines found on the video's own soundtrack by VAD, or the spans you pass; the music dips ahead of each line and comes back after it), normalises the program to a delivery loudness (web −16, streaming −14, broadcast/ebu −23, atsc −24 LUFS, or a number; true peak under the ceiling) and muxes it onto the picture untouched (no re-encode). Returns the scored video, the printmaster WAV and the music-and-effects stem, plus a report of what it MEASURED: where each track landed (and what was cut at the film's edges), how far the music sits under the lines, and the final loudness and true peak. CPU, no credits. tracks: [{audio_url (a doseedo_mix mix_url as returned, or any public https URL) | audio_key, start_timecode (in the film's timecode) | start_s, gain_db?, role?: music|dialogue|effects, duck?, name?}], ≤ 64. Keep the production audio (default) or drop it (production_audio:\"drop\"). A FILM THAT ALREADY HAS MUSIC: keeping its audio mixes the old music under yours — split it first (doseedo_split_soundtrack) and lay its dialogue and effects stems back (start_s 0, role dialogue / effects) with production_audio:\"drop\": the old music is gone, the lines are kept, and the duck reads the lines off the dialogue stem; lay the old music stem back too with duck:false to keep it (or a part of it). With dialogue tracks the delivery also returns the dialogue / music / effects stems. Up to 25 minutes of film per call (a reel). Async: job_id → doseedo_wait_task. Cancel: a delivery still queued never starts and one running stops within seconds; either way its credit is refunded and the job ends as canceled.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "dialogue": {
+                "description": "Dialogue spans [{start_s, end_s}] to duck under, instead of detecting them (use the cue sheet's dialogue, or your own).",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "end_s": {
+                      "type": "number"
+                    },
+                    "start_s": {
+                      "type": "number"
+                    }
+                  },
+                  "required": ["end_s", "start_s"],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "duck": {
+                "additionalProperties": false,
+                "description": "Dialogue ducking (on by default): depth_db (default 10), attack_ms (250: how early before a line the music is down), release_ms (700), sfx (false: duck effects too), enabled.",
+                "properties": {
+                  "attack_ms": {
+                    "maximum": 3000,
+                    "minimum": 0,
+                    "type": "number"
+                  },
+                  "depth_db": {
+                    "maximum": 40,
+                    "minimum": 0,
+                    "type": "number"
+                  },
+                  "enabled": {
+                    "type": "boolean"
+                  },
+                  "release_ms": {
+                    "maximum": 5000,
+                    "minimum": 0,
+                    "type": "number"
+                  },
+                  "sfx": {
+                    "type": "boolean"
+                  }
+                },
+                "type": "object"
+              },
+              "idempotency_key": {
+                "description": "Optional. Any unique string for THIS request (e.g. a UUID). Re-sending the same call with the same key after a timeout returns the same job instead of starting a second one.",
+                "type": "string"
+              },
+              "loudness": {
+                "anyOf": [
+                  {
+                    "enum": ["web", "streaming", "broadcast", "ebu", "atsc"],
+                    "type": "string"
+                  },
+                  {
+                    "type": "number"
+                  }
+                ],
+                "description": "Delivery loudness: \"web\" (−16 LUFS, default), \"streaming\" (−14), \"broadcast\" / \"ebu\" (−23), \"atsc\" (−24), or a LUFS number (−36…−8)."
+              },
+              "name": {
+                "description": "Optional: a name for this job's files, e.g. \"rainy-loop-3\". Every file it returns downloads as <name>_<part>.<ext> (rainy-loop-3_Celesta.wav, rainy-loop-3_rough-mix.wav; one take: rainy-loop-3.wav), so the user can find them. Give each job its own name (a second take: \"rainy-loop-3b\"). Default: doseedo-<last 6 characters of the job id>.",
+                "maxLength": 80,
+                "type": "string"
+              },
+              "production_audio": {
+                "description": "keep (default) mixes the video's own soundtrack — all of it, its music included — under the score; drop replaces it (lay a doseedo_split_soundtrack's dialogue + effects stems to keep the lines).",
+                "enum": ["keep", "drop"],
+                "type": "string"
+              },
+              "production_gain_db": {
+                "description": "Trim on the production audio when kept (default 0).",
+                "maximum": 12,
+                "minimum": -60,
+                "type": "number"
+              },
+              "start_timecode": {
+                "description": "SMPTE timecode of the film's first frame (default: the file's own, else 00:00:00:00) — the clock the tracks' start_timecode is read on.",
+                "type": "string"
+              },
+              "tracks": {
+                "description": "What to lay on the film, in any order.",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "audio_key": {
+                      "description": "An ingest key instead of audio_url.",
+                      "type": "string"
+                    },
+                    "audio_url": {
+                      "description": "The cue's mixed audio (doseedo_mix mix_url as returned) or any public https URL.",
+                      "type": "string"
+                    },
+                    "duck": {
+                      "description": "false = this music track is not ducked: a band seen playing in the scene or a drop (the scene's own sound, forward), or the film's own music laid back from doseedo_split_soundtrack (mixed under its lines already). Default true.",
+                      "type": "boolean"
+                    },
+                    "fade_in_s": {
+                      "description": "A longer fade in from its first heard sample (the first frame when its head is cut).",
+                      "maximum": 30,
+                      "minimum": 0,
+                      "type": "number"
+                    },
+                    "fade_out_s": {
+                      "description": "A longer fade out to its last heard sample — its own end, length_s, or the last frame: let a piece go over the last shot instead of cutting it.",
+                      "maximum": 60,
+                      "minimum": 0,
+                      "type": "number"
+                    },
+                    "gain_db": {
+                      "description": "Level trim (default 0).",
+                      "maximum": 24,
+                      "minimum": -60,
+                      "type": "number"
+                    },
+                    "length_s": {
+                      "description": "How much of the audio plays from source_start_s (default: to its end or the last frame). The cut is faded (declick).",
+                      "maximum": 7200,
+                      "minimum": 0.05,
+                      "type": "number"
+                    },
+                    "name": {
+                      "description": "A label for the report, e.g. 1M3.",
+                      "type": "string"
+                    },
+                    "repeat_every_s": {
+                      "description": "A LOOP: lay this audio again every this many seconds (its period, to the millisecond — a loop of N bars at one fixed tempo: N × beats per bar × 60 / bpm) until repeat_until_s. The file may be longer than its period: its tail rings over the seam. For music that repeats verbatim (a vamp, a bed, a picture that is itself a loop: the cue sheet's video.picture_loop) — render and mix the loop ONCE instead of every stem for the whole length. receipt: tracks[].repeats.",
+                      "maximum": 7200,
+                      "minimum": 1,
+                      "type": "number"
+                    },
+                    "repeat_until_s": {
+                      "description": "With repeat_every_s: no copy starts at or after this film second (default: the last frame).",
+                      "maximum": 7200,
+                      "minimum": 0,
+                      "type": "number"
+                    },
+                    "role": {
+                      "description": "music (default; ducked under the dialogue), dialogue (never ducked — the lines the rest ducks under; a split soundtrack's dialogue stem), effects / sfx (not ducked unless duck.sfx).",
+                      "enum": ["music", "dialogue", "effects", "sfx"],
+                      "type": "string"
+                    },
+                    "source_start_s": {
+                      "description": "Where in the AUDIO it starts playing (default 0): pick the stretch of a longer piece — a public-domain recording cut to a :30 starts at the phrase you chose. The cut is faded (declick).",
+                      "maximum": 7200,
+                      "minimum": 0,
+                      "type": "number"
+                    },
+                    "start_s": {
+                      "description": "Or where it starts in seconds from the first frame (negative = its head is before the first frame and cut there).",
+                      "type": "number"
+                    },
+                    "start_timecode": {
+                      "description": "Where it starts, in the film's timecode (HH:MM:SS:FF) — the cue sheet's start_timecode.",
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
+                },
+                "maxItems": 64,
+                "minItems": 1,
+                "type": "array"
+              },
+              "video_key": {
+                "description": "R2 ingest key of the video (the same upload doseedo_spot_video used).",
+                "type": "string"
+              },
+              "video_url": {
+                "description": "https URL of the video, as an alternative to video_key.",
+                "type": "string"
+              }
+            },
+            "required": ["tracks"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": false,
+            "openWorldHint": true,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:11adb85fe87d12073b9137296c2503d8e563cffca553deecd8337a1a0332f665"
+        },
+        {
+          "name": "doseedo_separate_stems",
+          "title": "Separate stems (vocal remover)",
+          "description": "STEM SEPARATION and VOCAL REMOVER: split an uploaded mix into stems (vocals, drums, bass, guitar, piano, other — or orchestral/auto-detected instruments) to isolate vocals (the vocals stem is the acapella; the other stems are the karaoke backing), with optional per-stem MIDI transcription and DAW-session export. Async: returns a job_id — poll with doseedo_wait_task (~2 minutes). Result: stems{name: url}, midi{name: url}, drum_substems{kick, snare, …} (drum_split), vocals_lyrics / vocals_notes, session_tracks + session_tempo_bpm when session_id was given, models_effective (what the auto family gate actually ran), other_classification (what the \"other\" stem was heard as), guitar_split (outcome). Cancel: the plane has no stop for a running separation — it runs to completion (credits spent), the job ends as canceled and its output is discarded. Only a job still queued at the plane is refunded by the plane's own failure refund.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "audio_key": {
+                "description": "R2 ingest key of an uploaded audio file (from doseedo_get_upload_url / POST /api/upload/r2/ingest-url; starts with \"ingest/\"). Provide this or audio_url.",
+                "type": "string"
+              },
+              "audio_url": {
+                "description": "https URL of the audio, as an alternative to audio_key: a doseedo result URL exactly as a job returned it (a stem, a take, a bounce), or any public URL. The gateway fetches it (≤256 MB) into your account's ingest storage before the job starts. Pass audio_key OR audio_url.",
+                "type": "string"
+              },
+              "drum_split": {
+                "description": "true = also split the drum stem into isolated kick / snare / hi-hat / toms / ride / crash (+ perc) sub-stems (result.drum_substems).",
+                "type": "boolean"
+              },
+              "export": {
+                "description": "Optionally also build a DAW session from the stems.",
+                "enum": ["logic", "ableton"],
+                "type": "string"
+              },
+              "guitar_split": {
+                "description": "Deal the guitar stem into N players (same-instrument separation): \"2\"–\"4\", or \"auto\" (a one-vs-two probe decides; no split when it hears one). Outcome in result.guitar_split.",
+                "type": "string"
+              },
+              "idempotency_key": {
+                "description": "Optional. Any unique string for THIS request (e.g. a UUID). Re-sending the same call with the same key after a timeout returns the same job instead of starting a second one.",
+                "type": "string"
+              },
+              "include_midi": {
+                "description": "Also transcribe each stem to MIDI (default true).",
+                "type": "boolean"
+              },
+              "instruments": {
+                "description": "models=orchestra only: comma-separated extractor targets, e.g. \"saxophone,trumpet,trombone\". Available: drums, percussion, bass, double_bass, guitar, electric_guitar, acoustic_guitar, piano, organ, harp, brass, trumpet, trombone, french_horn, tuba, saxophone, clarinet, oboe, bassoon, flute, woodwind, strings, violin, viola, cello. Omit for the curated default set.",
+                "type": "string"
+              },
+              "models": {
+                "description": "Separation model set. Default 6stem (vocals/drums/bass/guitar/piano/other); auto/orchestra/detect for wider instrument sets.",
+                "enum": ["6stem", "auto", "orchestra", "detect"],
+                "type": "string"
+              },
+              "name": {
+                "description": "Optional: a name for this job's files, e.g. \"rainy-loop-3\". Every file it returns downloads as <name>_<part>.<ext> (rainy-loop-3_Celesta.wav, rainy-loop-3_rough-mix.wav; one take: rainy-loop-3.wav), so the user can find them. Give each job its own name (a second take: \"rainy-loop-3b\"). Default: doseedo-<last 6 characters of the job id>.",
+                "maxLength": 80,
+                "type": "string"
+              },
+              "parent_track_id": {
+                "description": "With session_id: the t_… track the mix sits on; the stems are added as its children.",
+                "type": "string"
+              },
+              "session_id": {
+                "description": "Register the stems INTO this doseedo session (from doseedo_list_sessions) as audio tracks — result.session_tracks lists them. Needs parent_track_id.",
+                "type": "string"
+              },
+              "stems_only": {
+                "description": "true = the stems and NOTHING derived from them (no MIDI, no lyrics, no latents) — the fastest, cheapest separation. Implies include_midi:false.",
+                "type": "boolean"
+              }
+            },
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": false,
+            "openWorldHint": true,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:59bbe6850999bba179409abc4fb111efb14a44602fb7b96a830a63fadabf84ad"
+        },
+        {
+          "name": "doseedo_session_from_stems",
+          "title": "Stems → a DAW session",
+          "description": "Build a native DAW PROJECT from stems: each stem on its own audio track from bar 1, optional MIDI tracks (the written parts) beside them, on your tempo (bpm or tempo_map) — Logic Pro (.logicx) or Ableton Live (.als), zipped. The deliverable after doseedo_render_score (pass from_job: its job_id and the stems, MIDI and tempo come from that job) or after any renders / separations you made (stems: [{name, audio_url}] — result links work as-is). After doseedo_mix add mix_job: each track at that mix's level and pan, the mix as a muted reference track. Async: job_id → doseedo_wait_task (~30–90 s) → file (pre-signed zip, curl -o session.zip <url>, 24 h). Cancel: the plane has no stop for a running session build — it runs to completion (credits spent), the job ends as canceled and its output is discarded. Only a job still queued at the plane is refunded by the plane's own failure refund.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "bpm": {
+                "description": "Project tempo (default 120).",
+                "type": "number"
+              },
+              "cues": {
+                "description": "MCP: ONE session for a whole scored film — [{cue: \"1M1\", start_s, from_job: <its doseedo_render_score job>, mix_job?: <its doseedo_mix job>, emotion?}] (≤ 12 cues, from the cue sheet's start_s). Every cue's stems and MIDI land on one timeline at its start, on ONE tempo map (each cue's own tempo_map joined, each cue's bar 1 on a bar line), a marker per cue, each track at its cue's mix level and pan, each cue's mix as a muted reference. Replaces from_job / mix_job / stems.",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "cue": {
+                      "type": "string"
+                    },
+                    "emotion": {
+                      "type": "string"
+                    },
+                    "from_job": {
+                      "type": "string"
+                    },
+                    "mix_job": {
+                      "type": "string"
+                    },
+                    "start_s": {
+                      "type": "number"
+                    }
+                  },
+                  "required": ["cue", "from_job", "start_s"],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "from_job": {
+                "description": "MCP: a doseedo_render_score job_id — its stems, parts' MIDI and tempo are used (no other input needed).",
+                "type": "string"
+              },
+              "idempotency_key": {
+                "description": "Optional. Any unique string for THIS request (e.g. a UUID). Re-sending the same call with the same key after a timeout returns the same job instead of starting a second one.",
+                "type": "string"
+              },
+              "markers": {
+                "description": "Arrangement markers [{name, beat}] — beat 0 = bar 1 on the project's tempo map. A scored film's cues are written as markers by `cues`.",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "beat": {
+                      "type": "number"
+                    },
+                    "name": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["beat", "name"],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "midi_tracks": {
+                "description": "Optional MIDI tracks: [{name, notes:[{pitch, start_beats, duration_beats, velocity?}]}].",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "name": {
+                      "type": "string"
+                    },
+                    "notes": {
+                      "items": {
+                        "type": "object"
+                      },
+                      "type": "array"
+                    }
+                  },
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "mix_job": {
+                "description": "MCP: a doseedo_mix job_id — every track takes that mix's level and pan, and the mix itself rides along as a muted reference track \"Mix (doseedo)\".",
+                "type": "string"
+              },
+              "mixgraph": {
+                "description": "A mix document (doseedo_mix → mixgraph): each stem named in it takes its strip's gain_db and pan. The EQ, compression, reverb and rides are not written into the project.",
+                "type": "object"
+              },
+              "name": {
+                "description": "Project name — the project inside the zip, and the zip itself downloads as <name>_session.zip.",
+                "type": "string"
+              },
+              "session_beats": {
+                "description": "Length of the session in beats (the tempo map is written this far; default: the last note). `cues` sets it.",
+                "type": "number"
+              },
+              "stems": {
+                "description": "[{name, audio_url | audio_key, gain_db?, pan?, mute?, position_beats?}] — the audio tracks, in order.",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "audio_key": {
+                      "type": "string"
+                    },
+                    "audio_url": {
+                      "type": "string"
+                    },
+                    "gain_db": {
+                      "type": "number"
+                    },
+                    "mute": {
+                      "type": "boolean"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "pan": {
+                      "type": "number"
+                    },
+                    "position_beats": {
+                      "type": "number"
+                    }
+                  },
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "target": {
+                "description": "Which DAW (default logic): Logic Pro (.logicx), Ableton Live (.als) or REAPER (.rpp + media, with the film as a video track).",
+                "enum": ["logic", "ableton", "reaper"],
+                "type": "string"
+              },
+              "tempo_map": {
+                "description": "Tempo changes [{beat, bpm}] for the project.",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "beat": {
+                      "type": "number"
+                    },
+                    "bpm": {
+                      "type": "number"
+                    }
+                  },
+                  "required": ["beat", "bpm"],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "time_signature": {
+                "description": "Meter (default 4/4).",
+                "type": "string"
+              },
+              "video": {
+                "additionalProperties": false,
+                "description": "The film the music is written to: {video_key: the ingest/ key of your upload (doseedo_get_upload_url), name?, start_s?}. It is re-encoded lean (720p) and travels inside the project: REAPER gets a muted video track, Logic Pro gets its Movie (inside the package; Logic finds it by name). Ableton projects are built without it (the answer says so).",
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "start_s": {
+                    "type": "number"
+                  },
+                  "video_key": {
+                    "type": "string"
+                  }
+                },
+                "required": ["video_key"],
+                "type": "object"
+              }
+            },
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": false,
+            "openWorldHint": true,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:b1cc9639d55d79f0de72842af7020cd6c33f4730107e2580067f57d722ea4e28"
+        },
+        {
+          "name": "doseedo_split_soundtrack",
+          "title": "Split a film's soundtrack (dialogue / music / effects)",
+          "description": "SPLIT A FILM'S SOUNDTRACK (dialogue / music / effects — \"DME\" — separation): the film's own audio into three stems that sum back to it, plus a report of what it holds: whether there is music already, where it plays (spans in seconds) and how much of the film it covers, where the dialogue is (cleaner than VAD on the full mix: a song's singer stays in the music stem), each part's level, and how far the music sits under the lines. Use it before scoring a film that already has music (soundtrack.stems.music.present): to REPLACE that music, lay the dialogue and effects stems under your score with doseedo_score_to_picture (production_audio:\"drop\", tracks role \"dialogue\" / \"effects\"); to REMIX or RE-ORCHESTRATE it, the music stem goes to doseedo_separate_stems / doseedo_transcribe / doseedo_analyze_song; to KEEP it, score where the report shows no music. Input: video_key (the upload doseedo_spot_video read) or video_url; audio_key / audio_url for a soundtrack already on its own. One reel per call (≤ 30 min). The split is good, not perfect: the dialogue comes out clean, while some of the old music (its percussion most) reads as effects — about −10 dB of it stays in the dialogue + effects bed, which the new score masks. Async: job_id → doseedo_wait_task (about a third of the soundtrack's length: a 3-min scene ≈ 1 min, a 20-min reel ≈ 6 min). Cancel: the plane has no stop for a running split — it runs to completion (credits spent), the job ends as canceled and its output is discarded. Only a job still queued at the plane is refunded by the plane's own failure refund.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "audio_key": {
+                "description": "An ingest key of the soundtrack on its own (WAV/FLAC/MP3/M4A), instead of the film.",
+                "type": "string"
+              },
+              "audio_url": {
+                "description": "https URL of the soundtrack on its own, instead of the film.",
+                "type": "string"
+              },
+              "idempotency_key": {
+                "description": "Optional. Any unique string for THIS request (e.g. a UUID). Re-sending the same call with the same key after a timeout returns the same job instead of starting a second one.",
+                "type": "string"
+              },
+              "name": {
+                "description": "Optional: a name for this job's files, e.g. \"rainy-loop-3\". Every file it returns downloads as <name>_<part>.<ext> (rainy-loop-3_Celesta.wav, rainy-loop-3_rough-mix.wav; one take: rainy-loop-3.wav), so the user can find them. Give each job its own name (a second take: \"rainy-loop-3b\"). Default: doseedo-<last 6 characters of the job id>.",
+                "maxLength": 80,
+                "type": "string"
+              },
+              "video_key": {
+                "description": "R2 ingest key of the film (the same upload doseedo_spot_video read; starts with \"ingest/\").",
+                "type": "string"
+              },
+              "video_url": {
+                "description": "https URL of the film, as an alternative to video_key (fetched through the URL up to 256 MB; upload a bigger film).",
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": false,
+            "openWorldHint": true,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:52c8e0918505909c3048deef2c98f64f9348818be1fa66cb93806580240859ff"
+        },
+        {
+          "name": "doseedo_spot_video",
+          "title": "Spot a video → cue sheet",
+          "description": "SPOT A FILM: a video in, the music editor's cue sheet out — the first step of scoring to picture. Scene detection on EVERY frame, and it listens to the soundtrack (CPU, no credits): hard cuts frame-exact (dark, low-contrast footage included), fades, flashes and visual impacts; each shot's brightness, colour, warmth, contrast, motion and mood, with a keyframe JPEG per shot so you can SEE what it shows; SCENES — where the picture moves to a new place, at a cut or with none (a camera move, a dissolve) — each with its start, how it arrives, how fast the camera travels (pace) and a 640-px frame; and a storyboard: the whole film on one JPEG, a frame every few seconds; where dialogue is (Silero VAD) and loud audio hits; INTENSITY — the picture's energy (motion, cutting, camera, the sound) as sections [{start_s, end_s, level, rel: low | medium | high | peak}], and each scene's own: where the music steps up, settles and peaks; then cues placed where the picture wants music and the dialogue lets it (1M1, 1M2 …: start/end SMPTE timecode, emotion, energy, tension arc, hit points ranked by strength, a suggested bpm that lands them, and tempo_map_input — pass it to doseedo_tempo_map as is). It sees light, movement and editing, not meaning: read the scene frames and the storyboard for what each scene is about. Input: video_key (doseedo_get_upload_url accepts mp4/mov/m4v/webm/mkv) or video_url (public https), ≤ 2 GB and ≤ 3 h. Optional start_timecode (the first frame's, e.g. 01:00:00:00; default the file's own), coverage (0.05–0.98, default 0.55: how much of the film gets music), reel (cue ids <reel>M<n>), keyframes (0–60), spotter. Async: job_id → doseedo_wait_task (~1 min for a 10-min 1080p reel). Next: doseedo_tempo_map per cue → write the notes → doseedo_render_score → doseedo_mix → doseedo_score_to_picture. Cancel: a spotting pass still queued never starts and one running stops within seconds; either way its credit is refunded and the job ends as canceled.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "coverage": {
+                "description": "How much of the film gets music (default 0.55). Raise it for wall-to-wall scoring (a trailer, an animation), lower it for a dialogue drama.",
+                "maximum": 0.98,
+                "minimum": 0.05,
+                "type": "number"
+              },
+              "cut_threshold": {
+                "description": "Scene-change threshold at full contrast (default 0.3). Lower finds softer cuts, higher only the hardest.",
+                "maximum": 0.9,
+                "minimum": 0.05,
+                "type": "number"
+              },
+              "idempotency_key": {
+                "description": "Optional. Any unique string for THIS request (e.g. a UUID). Re-sending the same call with the same key after a timeout returns the same job instead of starting a second one.",
+                "type": "string"
+              },
+              "keyframes": {
+                "description": "How many shots get a keyframe JPEG (default 24; the longest shots first). 0 = no images at all (no scene frames, no storyboard).",
+                "maximum": 60,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "name": {
+                "description": "Optional: a name for this job's files, e.g. \"rainy-loop-3\". Every file it returns downloads as <name>_<part>.<ext> (rainy-loop-3_Celesta.wav, rainy-loop-3_rough-mix.wav; one take: rainy-loop-3.wav), so the user can find them. Give each job its own name (a second take: \"rainy-loop-3b\"). Default: doseedo-<last 6 characters of the job id>.",
+                "maxLength": 80,
+                "type": "string"
+              },
+              "reel": {
+                "description": "Reel number for the cue ids (default 1 → 1M1, 1M2 …).",
+                "maximum": 99,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "spotter": {
+                "description": "Who places the cues. \"rules\" (default): light, motion and editing, weighted by hand, at coverage. \"model\": a cue model trained on 200 human-scored films. It places the cues where a composer would, and gives each cue its tempo (suggested_bpm), dynamics marks (dynamics: pp–ff every 8 s), turns (where it comes in full or steps up or down) and hits. Its tempo_map_input lands the hits on a beat and the turns on a bar line. Without coverage it decides how much of the film gets music; cue_sheet.cue_model says what it decided.",
+                "enum": ["rules", "model"],
+                "type": "string"
+              },
+              "start_timecode": {
+                "description": "SMPTE timecode of the first frame, HH:MM:SS:FF (\";\" before the frames = drop-frame at 29.97/59.94). Default: the file's embedded timecode, else 00:00:00:00.",
+                "type": "string"
+              },
+              "video_key": {
+                "description": "R2 ingest key of the uploaded video (doseedo_get_upload_url with the file name, e.g. reel1.mp4; starts with \"ingest/\").",
+                "type": "string"
+              },
+              "video_url": {
+                "description": "https URL of the video, as an alternative to video_key (a public file URL, fetched directly; ≤ 2 GB).",
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": false,
+            "openWorldHint": true,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:0196048a1a833a11b790e1cf4e6ce060c784b1fe1957604a71199c69c48d21e2"
+        },
+        {
+          "name": "doseedo_supervise_cues",
+          "title": "Cut cues from public-domain scores",
+          "description": "MUSIC SUPERVISION, for a film whose direction is classical or orchestral: instead of writing every note, each cue is CUT FROM A REAL PUBLIC-DOMAIN SCORE (~1,000 orchestral pieces, Baroque to late Romantic, free to use in a film — no rights holds, no ShareAlike). The search fits each cue: its length to the frame (a passage bent ≤ ~17 % in tempo, cut on a bar line where it must), the cue sheet's turns on the score's own section changes, its hits on real accents, its mode and meter, its level over time (a quiet cue thins a tutti's doublings; the loudest moment lands on the source's own rise), and cues of one piece play fresh bars. SAY WHO PLAYS AND HOW BUSY IT IS, or a quiet piano-and-strings cue is cut from a tutti: instruments = the cue's players (the source plays only its parts for those); density = sparse | moderate | busy | driving, or notes a second; per film, or per_cue. Input: spot_job (the doseedo_spot_video job id — spotter \"model\" gives each second its level) or cue_sheet; cues (ids, default every score cue); direction {era: [\"Baroque\"|\"Classical\"|\"Romantic\"…], genre, composer: [\"Antonín Dvořák\"…], mode: major|minor}; prefer {cue: file} = take that cue from an alternative an earlier answer listed. Async: job_id → doseedo_wait_task (~5–60 s; a bad direction, cue or prefer fails at once), CPU, no credits. Result per cue: source {composer, title, licence, credit — the line a CC BY edition asks for}, edit (bars, stretch, cuts), render {score_url, instruments, name} = the doseedo_render_score call that plays it (pass it as is; change an instrument by editing instruments), mix_lufs_offset_db (master the cue at the delivery loudness plus this: doseedo_mix target_lufs), alternatives [{composer, title, file, cost}]. Cancel: the plane has no stop for a running catalogue search — it runs to completion (credits spent), the job ends as canceled and its output is discarded. Only a job still queued at the plane is refunded by the plane's own failure refund.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "cue_sheet": {
+                "description": "Alternative to spot_job: a cue sheet {video: {duration}, cues: [{id, kind?: \"score\", start_s, end_s, suggested_bpm?, turns?: [{time_s}], hits?: [{time_s}], dynamics?: [{at_s, mark}], instruments?: [names], density?}], cue_model?: {level_db_per_s}} — doseedo_spot_video's, or your own cue plan in its shape.",
+                "type": "object"
+              },
+              "cues": {
+                "description": "Only these cue ids (default: every score cue, ≤ 40).",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "density": {
+                "anyOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "enum": ["sparse", "moderate", "busy", "driving"],
+                    "type": "string"
+                  }
+                ],
+                "description": "How busy every cue is, on the parts that play: notes a second, or sparse (~2) / moderate (~4.5) / busy (~8) / driving (~13). Music under speech is sparse."
+              },
+              "direction": {
+                "additionalProperties": false,
+                "description": "Steer the choice: era / genre / composer as a name or a list of names (the catalogue's own, e.g. era \"Romantic\", composer \"Pyotr Ilyich Tchaikovsky\"), mode \"major\" | \"minor\" for every cue.",
+                "properties": {
+                  "composer": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "items": {
+                          "type": "string"
+                        },
+                        "type": "array"
+                      }
+                    ]
+                  },
+                  "era": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "items": {
+                          "type": "string"
+                        },
+                        "type": "array"
+                      }
+                    ]
+                  },
+                  "genre": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "items": {
+                          "type": "string"
+                        },
+                        "type": "array"
+                      }
+                    ]
+                  },
+                  "mode": {
+                    "enum": ["major", "minor"],
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              },
+              "idempotency_key": {
+                "description": "Optional. Any unique string for THIS request (e.g. a UUID). Re-sending the same call with the same key after a timeout returns the same job instead of starting a second one.",
+                "type": "string"
+              },
+              "instruments": {
+                "description": "The players every cue is cut for (a cue's own instruments win): \"violin\", \"cello\", \"piano\", \"harp\", \"horn\", \"strings\"… The source plays only its parts for these; an asked instrument it lacks is named on the card (ensemble.missing).",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "name": {
+                "description": "Optional: a name for this job's files, e.g. \"rainy-loop-3\". Every file it returns downloads as <name>_<part>.<ext> (rainy-loop-3_Celesta.wav, rainy-loop-3_rough-mix.wav; one take: rainy-loop-3.wav), so the user can find them. Give each job its own name (a second take: \"rainy-loop-3b\"). Default: doseedo-<last 6 characters of the job id>.",
+                "maxLength": 80,
+                "type": "string"
+              },
+              "per_cue": {
+                "additionalProperties": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "density": {
+                      "anyOf": [
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "string"
+                        }
+                      ]
+                    },
+                    "instruments": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    }
+                  },
+                  "type": "object"
+                },
+                "description": "{cue id: {instruments?, density?}} — one cue's own players and density.",
+                "type": "object"
+              },
+              "prefer": {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "description": "{cue id: catalogue file}: cut that cue from this piece (a file an earlier answer listed under alternatives).",
+                "type": "object"
+              },
+              "spot_job": {
+                "description": "The doseedo_spot_video job id (job_…): its cue sheet is read for you (MCP tool only; the jobs API takes cue_sheet).",
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": false,
+            "openWorldHint": true,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:892c517d91c0c84cf1e7ed30adcdc1e6161b6154b2bcf4db473e6e515fb013d3"
+        },
+        {
+          "name": "doseedo_tempo_map",
+          "title": "Tempo map from hit points",
+          "description": "Scoring to picture: turn HIT POINTS (a cut, an impact, the title card — as seconds from the cue start or SMPTE timecodes) into a TEMPO MAP that lands each hit exactly on a downbeat (or a beat / an eighth — per hit with hits[].land), staying near your tempo and inside bpm_range. A cue whose pace changes (she runs faster, then stops): give the hit where it changes a bpm, and the map moves to that tempo from there, every hit still landed. An AD or any cue that must hold ONE tempo: fixed_bpm: true (+ max_deviation_bpm, tolerance_ms) finds the tempo and the bar-1 offset (music_offset_s) landing the most hits, and says which ones it could not. Returns tempo_map [{beat, bpm}] to pass unchanged to doseedo_render_midi / doseedo_render_score / doseedo_session_from_stems, and hits[] with the beat, bar and beat-in-bar each hit lands on — write the accent, stinger or change there. Handles 23.976 / 24 / 25 / 29.97 (\";\" = drop-frame) / 30 / 50 / 59.94 / 60 fps timecode. Pure math: free, instant, no key needed.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "bpm": {
+                "description": "The cue's tempo (20–300) — the map stays as close to it as the hits allow.",
+                "type": "number"
+              },
+              "bpm_range": {
+                "description": "Allowed tempo range [min, max] (default ±12 % of bpm).",
+                "items": {
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              "fixed_bpm": {
+                "description": "ONE tempo for the whole cue (an ad, a song-form cue): the solver picks the tempo (within max_deviation_bpm of bpm; default exactly bpm) and where bar 1 sits (music_offset_s, default within the first bar; offset_range_s) so the most hits land within tolerance_ms (default 40). Hits it cannot land come back landed:false with nearest_beat — never an error.",
+                "type": "boolean"
+              },
+              "fps": {
+                "description": "Frame rate of the timecodes: 23.976, 24, 25, 29.97, 30, 50, 59.94, 60.",
+                "type": "number"
+              },
+              "hits": {
+                "description": "The moments the music must land on: [{time_s} (seconds from the cue start) or {timecode: \"01:00:12:08\"} (film timecode, with fps and start_timecode), label?, land?, bpm?}] — land = THIS hit's landing (\"downbeat\", \"beat\" or \"eighth\"; default: the request's land), e.g. the big cuts on bar lines and a quick accent on an eighth. bpm = the tempo FROM this hit on, a new section (the chase at 160 from the cut where she starts running, back to 112 when she stops), until a later hit names another; the range around it scales with it. A bare number = {time_s}.",
+                "items": {
+                  "anyOf": [
+                    {
+                      "type": "number"
+                    },
+                    {
+                      "additionalProperties": false,
+                      "properties": {
+                        "bpm": {
+                          "type": "number"
+                        },
+                        "label": {
+                          "type": "string"
+                        },
+                        "land": {
+                          "enum": ["downbeat", "beat", "eighth"],
+                          "type": "string"
+                        },
+                        "priority": {
+                          "description": "What this hit is worth when not every hit can land (tolerance_ms): \"must\" for the moment the cue is written to (the reveal, the title, the drop) — the map lands it first and the rest around it; \"low\" gives way first. Default \"normal\"; a downbeat hit already outweighs a beat.",
+                          "enum": ["must", "high", "normal", "low"],
+                          "type": "string"
+                        },
+                        "time_s": {
+                          "type": "number"
+                        },
+                        "timecode": {
+                          "type": "string"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                },
+                "type": "array"
+              },
+              "land": {
+                "description": "Land hits on bar lines (default), on any beat, or on any eighth — the default for every hit without its own land.",
+                "enum": ["downbeat", "beat", "eighth"],
+                "type": "string"
+              },
+              "max_deviation_bpm": {
+                "description": "How far the tempo may move from bpm (both modes; in place of bpm_range). A variable map at 124 ±12 % can swing 11+ bpm between hits — 3 keeps it a steady groove.",
+                "type": "number"
+              },
+              "offset_range_s": {
+                "description": "fixed_bpm: where bar 1 may sit on the cue, [min, max] seconds (default [0, one bar]).",
+                "items": {
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              "start_s": {
+                "description": "Alternative: the cue start in seconds of film time (informational when hits are time_s).",
+                "type": "number"
+              },
+              "start_timecode": {
+                "description": "Film timecode of the cue's first downbeat (bar 1); hit timecodes are measured from it.",
+                "type": "string"
+              },
+              "time_signature": {
+                "description": "Meter (default 4/4).",
+                "type": "string"
+              },
+              "tolerance_ms": {
+                "description": "SOFT hits (0–250 ms): a hit within this of the grid counts as landed, and one the grid can't reach is reported (landed:false, with nearest_beat and off_ms), never refused. The map is fitted over the whole cue, so it lands the most hits — downbeats and priority \"must\" first. Every hit then carries error_ms; hit_rate = landed / all. A hit with landed:false gets no accent of its own (an accent between the beats sounds like a mistake).",
+                "type": "number"
+              }
+            },
+            "required": ["bpm", "hits"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:fb365f691303dbe4f4146324c46351df4b6d96f496137be8ff2d0073a024a9c2"
+        },
+        {
+          "name": "doseedo_train_instrument",
+          "title": "Train a custom instrument",
+          "description": "Make a CUSTOM INSTRUMENT in your own sound: upload 30 s–3 min of ONE instrument playing (your own player, a rare or folk instrument, a prepared/invented instrument, a vintage synth) and doseedo trains a private adapter (LoRA) on its serving instrument model in about 1–2 minutes. After that, doseedo_render_midi {instrument: <the same instrument>, lora_id} plays ANY notes you write in that sound. Several takes help (up to 8 files; the first 3 min are used, ≥8 s required); a clean, solo, dry recording works best. instrument = the closest catalog instrument — it picks the model voice the adapter trains on (a shamisen trains as acoustic_guitar, a whistle as flute: doseedo_instruments lists each one's call.instrument). The notes are transcribed for you (pass notes to skip that). 20 credits. Result: lora_id, name, the windows it trained on, loss first→last, and `use` (the render args). Earlier ones: doseedo_list_jobs {kind:\"train_instrument\"}. Owner-only: no one else can render with it. Async: job_id → doseedo_wait_task (~1–2 min). Cancel: the plane has no stop for a running training — it runs to completion (credits spent), the job ends as canceled and its output is discarded. Only a job still queued at the plane is refunded by the plane's own failure refund.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "audio_key": {
+                "description": "R2 ingest key of an uploaded audio file (from doseedo_get_upload_url / POST /api/upload/r2/ingest-url; starts with \"ingest/\"). One recording; or audio_keys for several.",
+                "type": "string"
+              },
+              "audio_keys": {
+                "description": "Several uploaded takes of the SAME instrument (≤8).",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "audio_url": {
+                "description": "https URL of a recording (a doseedo result link — a separated stem works — or any public URL). Alternative to audio_key.",
+                "type": "string"
+              },
+              "audio_urls": {
+                "description": "Several recording URLs of the same instrument (≤8).",
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "bpm": {
+                "description": "Optional tempo of the recording (30–300).",
+                "type": "number"
+              },
+              "drum_mode": {
+                "description": "true for an unpitched percussion recording.",
+                "type": "boolean"
+              },
+              "idempotency_key": {
+                "description": "Optional. Any unique string for THIS request (e.g. a UUID). Re-sending the same call with the same key after a timeout returns the same job instead of starting a second one.",
+                "type": "string"
+              },
+              "instrument": {
+                "description": "REQUIRED. The catalog instrument it is closest to (call.instrument from doseedo_instruments, e.g. \"violin\", \"acoustic_guitar\", \"flute\", \"percussion\").",
+                "type": "string"
+              },
+              "name": {
+                "description": "A name for it, e.g. \"Grandpa's banjo\" (≤80 chars).",
+                "type": "string"
+              },
+              "notes": {
+                "description": "Optional: the notes played, one list per file — [[{pitch, start, end, velocity?}…]] in SECONDS. Omitted, they are transcribed.",
+                "type": "array"
+              },
+              "seed": {
+                "description": "Random seed.",
+                "type": "number"
+              },
+              "steps": {
+                "description": "Training steps 50–800. Default 300 for ≤60 s of audio, 400 above.",
+                "type": "number"
+              }
+            },
+            "required": ["instrument"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": false,
+            "openWorldHint": true,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:b50a3ad19f6718df64be5deb75f4e388c55b159e588820962e0e57a2dbf5e854"
+        },
+        {
+          "name": "doseedo_transcribe",
+          "title": "Audio to MIDI (transcribe notes)",
+          "description": "AUDIO TO MIDI transcription: a melody, a bass line or a part as notes (pitch, onset/offset seconds, velocity, confidence as JSON — not a MIDI file; for .mid files per stem use doseedo_separate_stems with transcription or doseedo_audio_to_session). Works from an uploaded audio_key or an audio_url — any public https URL, including a result URL from another doseedo job (a generate take, a stem) as it was returned. Async: returns a job_id — poll with doseedo_wait_task (usually ~15–60s). For the KEY / tempo / chords of a whole mix use doseedo_analyze_song instead. Cancel: the plane has no stop for a running transcription — it runs to completion (credits spent), the job ends as canceled and its output is discarded. Only a job still queued at the plane is refunded by the plane's own failure refund.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "audio_key": {
+                "description": "R2 ingest key of an uploaded audio file (from doseedo_get_upload_url / POST /api/upload/r2/ingest-url; starts with \"ingest/\"). Provide this or audio_url.",
+                "type": "string"
+              },
+              "audio_url": {
+                "description": "https URL of the audio to transcribe (alternative to audio_key): any public URL, or a doseedo result URL exactly as a job returned it — no key needed.",
+                "type": "string"
+              },
+              "backend": {
+                "description": "Advanced: force a transcription backend. Omit — the server routes by instrument.",
+                "type": "string"
+              },
+              "beats_per_bar": {
+                "description": "With tempo_bpm: beats per bar for the beat-domain times (default 4).",
+                "type": "number"
+              },
+              "chairs": {
+                "description": "polyphony=\"section\": register codes per chair, as an alternative to roster.",
+                "type": "string"
+              },
+              "family": {
+                "description": "Optional instrument family (e.g. \"brass\", \"reeds\", \"strings\") when the exact instrument is unknown.",
+                "type": "string"
+              },
+              "idempotency_key": {
+                "description": "Optional. Any unique string for THIS request (e.g. a UUID). Re-sending the same call with the same key after a timeout returns the same job instead of starting a second one.",
+                "type": "string"
+              },
+              "instrument": {
+                "description": "Optional instrument hint, e.g. \"piano\", \"sax\", \"vocals\", \"bass\".",
+                "type": "string"
+              },
+              "polyphony": {
+                "description": "Optional: \"solo\" (monophonic line), \"poly\", or \"section\" (a horn section — see roster/chairs).",
+                "type": "string"
+              },
+              "register": {
+                "description": "Optional register hint for the instrument (e.g. \"soprano\", \"tenor\", \"bass\").",
+                "type": "string"
+              },
+              "roster": {
+                "description": "polyphony=\"section\": the chairs on the stem, e.g. \"trumpet,trumpet,trombone,tenor_sax\". Omit for the family default.",
+                "type": "string"
+              },
+              "strikes": {
+                "description": "With tempo_bpm: also return the harmony_strikes attack grid.",
+                "type": "boolean"
+              },
+              "tempo_bpm": {
+                "description": "Optional known tempo — enables beat-aligned note times.",
+                "type": "number"
+              },
+              "want": {
+                "description": "What to return: \"notes\" (default), \"f0\" (the continuous pitch contour — frame-rate Hz values, for glides/vibrato/intonation), or both.",
+                "enum": ["notes", "f0", "notes,f0"],
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": false,
+            "openWorldHint": true,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:153dafb6cd275d95e748d00559b0ddda3358a3f6915aa5f7161b46aef75efb1f"
+        },
+        {
+          "name": "doseedo_wait_task",
+          "title": "Wait for a job",
+          "description": "Wait for an async doseedo job to finish: polls server-side for up to timeout_seconds (5–50; one call can never hold longer than 50 s), then returns the result or the latest status. If it returns still_running:true, call it again — a submit reply's eta_seconds says how long the whole job usually takes (transcribe ~15 s, a render 1–3 min, audio_to_session ~4 min), so a 3-minute job is three or four calls, not one. A finished job answers with its output, artifacts (pre-signed links) and note.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "job_id": {
+                "description": "Alternatively the job_id (job_…) from a submit tool or the jobs API — replaces task_id + kind.",
+                "type": "string"
+              },
+              "kind": {
+                "description": "Which job kind created the task — the registry name the submit reply carried (generate_music, generate_sound, cover_stem, fill_gap, render_midi, train_instrument, render_score, mix, session_from_stems, spot_video, score_to_picture, reframe_video, cover_song, separate_stems, split_soundtrack, transcribe, audio_to_session, convert_project, bounce_session, analyze_song, detect_chords, beat_grid, identify_sound, check_take, analyze_midi, supervise_cues); the short codes (generate, sound, coverstem, fillgap, render, train, score, stemsess, spot, picture, reframe, cover, separate, soundtrack, session, convert, bounce, analyze, chords, beats, identify, check, harmony, supervise) are accepted aliases.",
+                "enum": ["generate_music", "generate_sound", "cover_stem", "fill_gap", "render_midi", "train_instrument", "render_score", "mix", "session_from_stems", "spot_video", "score_to_picture", "reframe_video", "cover_song", "separate_stems", "split_soundtrack", "transcribe", "audio_to_session", "convert_project", "bounce_session", "analyze_song", "detect_chords", "beat_grid", "identify_sound", "check_take", "analyze_midi", "supervise_cues", "generate", "sound", "coverstem", "fillgap", "render", "train", "score", "stemsess", "spot", "picture", "reframe", "cover", "separate", "soundtrack", "session", "convert", "bounce", "analyze", "chords", "beats", "identify", "check", "harmony", "supervise"],
+                "type": "string"
+              },
+              "task_id": {
+                "description": "The task_id returned by a submit tool.",
+                "type": "string"
+              },
+              "timeout_seconds": {
+                "description": "Max seconds to wait in this call (5–50, default 45). Start with the submit reply's suggested_next_wait.",
+                "type": "number"
+              }
+            },
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:0598bb56ea8eefd437ad4aab994f2e1b9e777e59c09e7c28983a868784e51330"
+        }
+      ],
+      "digest": "sha256:343cc8f0254c31f32cfdb7341773d32a67739340bec991e1c324cf3d1adae91f"
+    }
+  }
+}

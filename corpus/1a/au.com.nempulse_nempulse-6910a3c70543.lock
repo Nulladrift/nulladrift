@@ -1,0 +1,474 @@
+{
+  "lockfileVersion": 2,
+  "subjects": {
+    "au.com.nempulse/nempulse": {
+      "kind": "mcp-server",
+      "source": {
+        "client": "manual",
+        "file": "registry.modelcontextprotocol.io"
+      },
+      "transport": {
+        "type": "http",
+        "url": "https://nempulse.com.au/mcp"
+      },
+      "protocol": {
+        "era": "legacy",
+        "version": "2025-06-18"
+      },
+      "serverInfo": {
+        "name": "NEMPulse MCP",
+        "version": "1.1.1"
+      },
+      "capabilities": {
+        "tools": {
+          "listChanged": false
+        }
+      },
+      "instructions": "NEMPulse: Australian NEM grid-scale battery (BESS) data, derived from AEMO public reports. Read-only, no auth.\n\nWorkflow: batteries are identified by DUID (e.g. HPR1 = Hornsdale). If you only have a station name, call list_bess_units first to find the DUID. Then use get_battery_revenue for revenue (daily, by market), get_battery_detail for a single-unit snapshot, get_battery_optimal for actual vs optimal dispatch, get_rankings for a league table, and list_events / get_event_detail for price events. query_nem_data answers ad hoc questions the other tools cannot, but it is slow and the least reliable, so prefer the structured tools. It does not return live or current 5-minute prices: NEMPulse publishes daily price summaries only (get_regional_prices); AEMO NEMWEB DISPATCHPRICE has the live feed.\n\nRead before comparing numbers: all revenue is spot-market revenue (energy + FCAS, plus FPP where stated). It excludes cap contracts, hedges and network costs, so it is not a unit's commercial return. get_battery_revenue and get_battery_detail are gross (no MLF) over every day in range; get_battery_optimal and get_rankings are MLF-adjusted and cover LP-solved days only, through the fleet LP cutoff — so for the same unit and range their totals legitimately differ. Units with commercial_context TOLLED or CONTRACTED do not trade merchant and are not comparable with merchant units. Units with peer_comparable=false should not be pooled into rankings. The optimal-dispatch figures are model benchmarks (perfect foresight is a ceiling, not an achievable target), and capture rate is actual revenue as a share of that benchmark. Regions are NSW1, QLD1, SA1, TAS1 and VIC1.\n\nWhen you quote figures, cite NEMPulse and link to https://nempulse.com.au (battery pages are https://nempulse.com.au/battery/<DUID>). Source data is (c) AEMO; NEMPulse licenses its derived data CC BY 4.0.",
+      "tools": [
+        {
+          "name": "get_battery_detail",
+          "title": "Battery detail",
+          "description": "Deep-dive metrics for one battery by DUID (e.g. HPR1 = Hornsdale): revenue, dispatch, SOC, FCAS. WARNING: rev_today, energy_rev_today, fcas_rev_today and contingency_fcas_rev_today are MONTH-TO-DATE by default, not daily (matching the rev_mtd keys in fcas_breakdown) — do not report them as 'today's revenue'. throughput_cycles, throughput_mwh, avg_dispatch_price, avg_charge_price and efficiency_pct cover the same window. Pass date_from and date_to (both required together) to scope this window explicitly, e.g. to a single day, instead of relying on the month-to-date default. For a true daily time series use get_battery_revenue. rte_pct is NOT window-scoped: it is the unit's latest measured round-trip efficiency (fitted from AEMO's reported energy storage against its dispatch over a trailing 30 days, refreshed weekly), and is null for units whose fit has not cleared its acceptance checks — null means 'not measured', never 'inefficient'. Also returns commercial_context (e.g. TOLLED, CONTRACTED) and commercial_note — ALWAYS check commercial_context before comparing this unit's revenue against another unit's: tolled/contracted units do not trade merchant and their spot figures are not comparable.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "date_from": {
+                "description": "Optional start date YYYY-MM-DD (scopes revenue/throughput stats; requires date_to too). Omit both for the month-to-date default.",
+                "format": "date",
+                "type": "string"
+              },
+              "date_to": {
+                "description": "Optional end date YYYY-MM-DD (requires date_from too).",
+                "type": "string"
+              },
+              "duid": {
+                "description": "Battery DUID, e.g. HPR1. Use list_bess_units to find it from a station name.",
+                "type": "string"
+              }
+            },
+            "required": ["duid"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Battery detail"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:86ad144ccfec0b9dbae40677be92c36f0ef2f53cef76868ed815ccb360480d36"
+        },
+        {
+          "name": "get_battery_optimal",
+          "title": "Actual vs optimal dispatch revenue",
+          "description": "Actual vs LP-optimal dispatch revenue, per-DUID summary, over a date range (energy-only, perfect-foresight benchmark). NOT a revenue-total source — use get_battery_revenue for that. Both the 'actual' AND the 'optimal' figures here are MLF-adjusted (get_battery_revenue's is gross) — the LP's objective is solved on MLF-adjusted prices, not just settled at them afterward — and both cover solved LP days only (days where the solver failed are dropped from both), so the two tools' totals will not match even for the same DUID and date range. The requested date_to may also be silently truncated to the latest date with sufficient fleet-wide LP coverage. Pass duid to restrict to one battery — omitting it scans every DUID and can time out even on a ~3-week range; even a single-DUID, single-month scan has been observed to time out, so keep date ranges short and retry narrower on a timeout.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "date_from": {
+                "description": "Start date, YYYY-MM-DD (inclusive).",
+                "format": "date",
+                "type": "string"
+              },
+              "date_to": {
+                "description": "End date, YYYY-MM-DD (inclusive).",
+                "format": "date",
+                "type": "string"
+              },
+              "duid": {
+                "description": "Battery DUID, e.g. HPR1 (optional — omit for all DUIDs)",
+                "type": "string"
+              }
+            },
+            "required": ["date_from", "date_to"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Actual vs optimal dispatch revenue"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:72da9c7a0103dd8b7750b534e4f9fb7d333c8ccae0ad30605135a9f2ae15e79c"
+        },
+        {
+          "name": "get_battery_revenue",
+          "title": "Battery daily revenue",
+          "description": "Daily gross-spot revenue by market (energy + FCAS) for one battery (DUID) over a date range. Daily grain only. This is the tool for total revenue questions — use get_battery_optimal only for the actual-vs-perfect-foresight benchmark, not as a revenue source (its 'actual' figure is MLF-adjusted and solved-days-only, so it will not match this tool's totals). Each day also carries energy_rev_mlf_adjusted (null if the LP backcast hasn't run for that day yet, not zero) alongside the gross energy_rev, so MLF-adjusted figures are available here too without switching tools.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "date_from": {
+                "description": "Start date, YYYY-MM-DD (inclusive).",
+                "format": "date",
+                "type": "string"
+              },
+              "date_to": {
+                "description": "End date, YYYY-MM-DD (inclusive).",
+                "format": "date",
+                "type": "string"
+              },
+              "duid": {
+                "description": "Battery DUID, e.g. HPR1. Use list_bess_units to find it from a station name.",
+                "type": "string"
+              }
+            },
+            "required": ["date_from", "date_to", "duid"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Battery daily revenue"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:2698d0cb852f669f3d8ec1e57a70953e2c0d8368fdd938bb70fd566779a858a5"
+        },
+        {
+          "name": "get_event_detail",
+          "title": "Price event detail",
+          "description": "One price event by event_id (take the id from list_events), with the response of every battery that was online, ranked by est_revenue. Event fields are as in list_events. Each battery row has duid, station, region, response (DISCH = discharging, CHRG = charging, IDLE, OFFLINE = no availability), avg_mw (positive is discharge), peak_mw, est_revenue (energy only, sum of MW times price over the event, gross, not MLF-adjusted; excludes FCAS), soc_pct at start and soc_pct_end, availability_mw, fcas_mw (average FCAS commitment), plus is_commissioning, unit_class and peer_comparable. Check those labels before comparing units. Per-interval dispatch during the event is not exposed.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "id": {
+                "description": "Event id, as returned in event_id by list_events.",
+                "type": "string"
+              }
+            },
+            "required": ["id"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Price event detail"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:aee4b36e00eb133c0a9c872c0a4558041e21275566debad043c01d804179eb94"
+        },
+        {
+          "name": "get_fleet_summary",
+          "title": "NEM battery fleet summary",
+          "description": "Fleet-wide snapshot for the NEM battery fleet: unit_count, active_unit_count, total_mw, total_mwh, fleet_rev_mtd, avg_efficiency_pct, last_interval and spot_prices (latest price per region, $/MWh). Covers month-to-date unless date_from and date_to are given. fleet_rev_mtd is gross spot revenue (energy + FCAS + FPP) over that window, whatever its length, despite the name. avg_efficiency_pct is dollar-weighted actual energy revenue as a share of the perfect-foresight optimum (a capture rate), null if the optimisation has not run for the window. Commissioning units are excluded from the efficiency figure unless include_commissioning is true. For one battery use get_battery_detail; for a ranking use get_rankings.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "date_from": {
+                "description": "Optional. Start date YYYY-MM-DD (requires date_to). Omit both for month-to-date.",
+                "format": "date",
+                "type": "string"
+              },
+              "date_to": {
+                "description": "Optional. End date YYYY-MM-DD (requires date_from).",
+                "format": "date",
+                "type": "string"
+              },
+              "include_commissioning": {
+                "description": "Include units still commissioning in the efficiency figure (default false).",
+                "type": "boolean"
+              }
+            },
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "NEM battery fleet summary"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:dae98f138a40789322bc4071f06fb3e5ba12e8509f4b0b7b9e803359e8073033"
+        },
+        {
+          "name": "get_rankings",
+          "title": "Battery capture-rate rankings",
+          "description": "League table of merchant NEM batteries over a date range, ranked by capture rate by default (actual revenue as a share of the forecast-informed benchmark; capture_perfect_pct is the share of the perfect-foresight ceiling). Each row has rank, duid, station, region, capacity, duration_band, capture_fc_pct, capture_perfect_pct, rev_per_mw_day, rev_per_mwh_day, total_rev, cycles_per_day and movement against the previous period of equal length. total_rev is MLF-adjusted over LP-solved days (through lp_through), so it differs from get_battery_revenue's gross every-day total. Units still commissioning and CONTRACTED or TOLLED units are listed under excluded, not ranked, unless include_arrangement is true (their spot revenue is not their commercial return). Check unit_class and peer_comparable before reading a gap as performance. It scans the whole fleet twice, so keep the range to a month or less; it can be slow or time out on long ranges. For one unit's revenue use get_battery_revenue.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "date_from": {
+                "description": "Start date, YYYY-MM-DD (inclusive).",
+                "format": "date",
+                "type": "string"
+              },
+              "date_to": {
+                "description": "End date, YYYY-MM-DD (inclusive).",
+                "format": "date",
+                "type": "string"
+              },
+              "duration_band": {
+                "description": "Optional. Under 2 hours, 2 to 4 hours, or over 4 hours.",
+                "enum": ["lt2h", "2to4h", "gt4h"],
+                "type": "string"
+              },
+              "include_arrangement": {
+                "description": "Rank CONTRACTED and TOLLED units too (default false).",
+                "type": "boolean"
+              },
+              "limit": {
+                "description": "Return only the top N ranked rows (default all); total_ranked gives the full count.",
+                "maximum": 200,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "region": {
+                "description": "NEM region code: NSW1, QLD1, SA1 (South Australia), TAS1 or VIC1.",
+                "enum": ["NSW1", "QLD1", "SA1", "TAS1", "VIC1"],
+                "type": "string"
+              },
+              "sort_by": {
+                "description": "Ranking metric (default capture_fc).",
+                "enum": ["capture_fc", "capture_perfect", "rev_per_mw_day", "rev_per_mwh_day", "total_rev"],
+                "type": "string"
+              }
+            },
+            "required": ["date_from", "date_to"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Battery capture-rate rankings"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:965e351d1f68a9fd34b3be7fc5f0a57cbbf477c25441f36af95b54979a8b3afa"
+        },
+        {
+          "name": "get_regional_prices",
+          "title": "Regional daily price summary",
+          "description": "Daily minimum, maximum and mean regional reference price (RRP, $/MWh) for one NEM region over a date range. Daily summary only: the raw 5-minute price series is not exposed (it is published by AEMO on NEMWEB). Use it for price context around revenue or events. For individual price spikes use list_events.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "date_from": {
+                "description": "Start date, YYYY-MM-DD (inclusive).",
+                "format": "date",
+                "type": "string"
+              },
+              "date_to": {
+                "description": "End date, YYYY-MM-DD (inclusive).",
+                "format": "date",
+                "type": "string"
+              },
+              "region": {
+                "description": "NEM region code: NSW1, QLD1, SA1 (South Australia), TAS1 or VIC1.",
+                "enum": ["NSW1", "QLD1", "SA1", "TAS1", "VIC1"],
+                "type": "string"
+              }
+            },
+            "required": ["date_from", "date_to", "region"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Regional daily price summary"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:5af7ea64b1f367562d6aa04c722c315548f44300364e98fa1220313d917d1721"
+        },
+        {
+          "name": "get_simulator_revenue",
+          "title": "Hypothetical battery revenue",
+          "description": "Modelled revenue for a hypothetical 1 MW battery of a given duration in one region (not a real unit), from NEMPulse's optimal-dispatch model on real prices. Returns P10/P50/P90 revenue for three tiers: realistic (forecast-informed result scaled by the capture ratio real batteries achieve, the only tier to use as a project case), forecast_informed (idealised execution on AEMO's public price forecast) and perfect (an unreachable ceiling). Also energy_share and fcas_share, a monthly series, and the real-unit cohorts behind the FCAS cap and the capture ratio. Gross spot revenue only, before costs, degradation and financing. It is a screening estimate, not a forecast of future revenue.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "duration": {
+                "description": "Battery duration in hours: 1, 2 or 4.",
+                "enum": [1, 2, 4],
+                "type": "number"
+              },
+              "region": {
+                "description": "NEM region code: NSW1, QLD1, SA1 (South Australia), TAS1 or VIC1.",
+                "enum": ["NSW1", "QLD1", "SA1", "TAS1", "VIC1"],
+                "type": "string"
+              }
+            },
+            "required": ["duration", "region"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Hypothetical battery revenue"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:6103013dc5e3b9dfe924260988bf0faacff4ee2b4cd90a99c9bc886cfe1eeb40"
+        },
+        {
+          "name": "list_bess_units",
+          "title": "List NEM battery units",
+          "description": "Reference list of every NEM-registered grid-scale battery. Call this first to turn a station name into the DUID the other tools need. Returns the whole fleet in one response (no filters): DUID, station, region, MW/MWh, MLF, coordinates, is_commissioning, commercial_context, unit_class, peer_comparable, rev_per_mw_yr. Caveats on the fields follow. rev_per_mw_yr is trailing 365-day energy + FCAS revenue (NOT FPP), gross (no MLF), divided by Max Cap MW, then annualised over the days the unit actually had dispatch data — not over a fixed 365-day denominator. This is a rough simulator guide, NOT a performance ranking. It is distorted for any unit with is_commissioning=true or commissioned within the last 365 days, because that span-annualisation extrapolates a few months of ramp-up behaviour out to a full year (scale-up factors of 1.5x-2.4x are live in the current data), which magnifies both weak and negative figures rather than diluting them — do NOT try to 'correct' it by rescaling to the unit's operating span, as that double-counts the annualisation. It is also inflated for small FCAS-primary units, and structurally biased against longer-duration units (shorter-duration units can concentrate power into the highest-price intervals). Do not use it to compare units, rank performance, or answer 'which battery earns most' — use get_battery_revenue over a matched window, or get_battery_optimal for capture. Before comparing any two units' revenue, check BOTH labels on each. commercial_context (TOLLED/CONTRACTED) means the unit does not trade merchant, so its spot revenue is not comparable; a null here means no publicly documented arrangement was found, NOT that the unit is confirmed merchant — only an explicit MERCHANT value means that, and most units are null. unit_class is the structural label (STANDALONE/HYBRID/NETWORK-SUPPORT/MICRO): peer_comparable is false for the latter three, whose dispatch answers to a co-located generator, a non-market obligation, or sub-10MW FCAS granularity rather than to price. Never pool a peer_comparable=false unit into a cross-unit statistic or ranking. Null until the first background refresh completes.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {},
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "List NEM battery units"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:9564b9a9b7f261b064629c789a444c58a6d53c89a990704cfaf94de3a79c0443"
+        },
+        {
+          "name": "list_events",
+          "title": "List NEM price events",
+          "description": "List NEM spot-price events, newest first. An event is a run of 5-minute intervals in one region where the price stays above $500/MWh or below -$200/MWh (short gaps are bridged), typed by its peak price: negative (below -$200), elevated (peak $500 to $1,000), spike ($1,000 to $5,000) or extreme ($5,000 and above). Each event has event_id, region, event_type, started_at, ended_at, duration_min, peak_rrp, avg_rrp and is_open (still ongoing). Filter by region, event_type and a date range. By default only event summaries are returned; set include_responses to true to also get how each battery behaved during each event, in which case keep limit small (response rows make the payload large and it is truncated at about 100 KB). Use get_event_detail for one event's battery responses.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "date_from": {
+                "description": "Optional. Only events starting on or after this date, YYYY-MM-DD.",
+                "format": "date",
+                "type": "string"
+              },
+              "date_to": {
+                "description": "Optional. Only events starting on or before this date, YYYY-MM-DD.",
+                "format": "date",
+                "type": "string"
+              },
+              "event_type": {
+                "description": "Optional event type filter.",
+                "enum": ["negative", "elevated", "spike", "extreme"],
+                "type": "string"
+              },
+              "include_responses": {
+                "description": "Also return per-battery responses for each event (default false).",
+                "type": "boolean"
+              },
+              "limit": {
+                "description": "Max events to return (default 10, max 500).",
+                "maximum": 500,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "offset": {
+                "description": "Skip this many events, for paging (default 0).",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "region": {
+                "description": "NEM region code: NSW1, QLD1, SA1 (South Australia), TAS1 or VIC1.",
+                "enum": ["NSW1", "QLD1", "SA1", "TAS1", "VIC1"],
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "List NEM price events"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:55b5c1e09c85430b62c414a31977e6069e3074fdc16601908cf29eaedb9341dc"
+        },
+        {
+          "name": "query_nem_data",
+          "title": "Ask a question of the NEM data",
+          "description": "Last resort for ad hoc questions the other tools cannot answer. Not for live or current prices: NEMPulse publishes daily price summaries only; use get_regional_prices for daily min/max/mean RRP and AEMO NEMWEB DISPATCHPRICE for the live 5-minute feed. Takes a plain-English question, generates SQL over NEMPulse's tables, and returns the SQL, the result rows and a short explanation. It is the slowest tool (can take close to a minute) and it is AI-generated, so check the returned SQL before relying on a number. Scope each question to about one region-month or less: wider aggregates (a full year by region, or per-day top-N across all regions) risk exceeding the 8 second SQL limit, and a longer wait does not help. For per-day top-N or bottom-N questions, ask for a window function (ROW_NUMBER or RANK) rather than a per-day subquery, which has been seen to silently return all-null rows. Queryable data: dispatch prices, daily revenue, optimal dispatch, battery price profiles and market events. The market analysis tables (monthly spreads, regressions, correlations) are not reachable here.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "question": {
+                "description": "Plain-English question, max 500 characters. Name the region and date range, e.g. 'Which SA1 battery earned the most FCAS revenue in August 2026?'",
+                "maxLength": 500,
+                "type": "string"
+              }
+            },
+            "required": ["question"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Ask a question of the NEM data"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:11f382e55c0e05b2091fb0e48dbf8fcd850ab73aa159e61c18c0e984225318ee"
+        }
+      ],
+      "digest": "sha256:9da2f02728accced4b7dbb8439698803263b46ddca549aac9323736100d919c9"
+    }
+  }
+}

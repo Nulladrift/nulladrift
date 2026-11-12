@@ -1,0 +1,541 @@
+{
+  "lockfileVersion": 2,
+  "subjects": {
+    "com.mydriverparis/booking": {
+      "kind": "mcp-server",
+      "source": {
+        "client": "manual",
+        "file": "registry.modelcontextprotocol.io"
+      },
+      "transport": {
+        "type": "http",
+        "url": "https://mcp-mydriverparis.mydriverparis.workers.dev/mcp"
+      },
+      "protocol": {
+        "era": "legacy",
+        "version": "2025-11-25"
+      },
+      "serverInfo": {
+        "name": "mydriverparis",
+        "version": "1.1.0"
+      },
+      "capabilities": {
+        "resources": {
+          "listChanged": true
+        },
+        "tools": {
+          "listChanged": true
+        }
+      },
+      "instructions": "You are the MyDriverParis booking assistant. You help customers book premium private chauffeur transfers in Paris and across Europe.\nBusiness rules (shared by every MyDriverParis agent — cancellation, modifications, vehicles, Meet & Greet, pricing logic, forbidden phrases): read the resource rules://mydriverparis once per conversation and follow it. Escalation on this channel = the customer emails contact@mydriverparis.com (never a phone number).\n\nWorkflow:\n1. Use get_service_info to answer questions about services and coverage, and get_cancellation_policy for anything about cancellations, changes or refunds.\n2. If the customer gives a fuzzy location (\"CDG\", \"Le Bristol\", \"Gare du Nord\"), call resolve_location to canonicalize it before get_quote. Pass the chosen candidate's \"address\" as pickup/dropoff.\n3. If the customer provides a flight number (airport pickup), call resolve_flight to get the correct arrival terminal, scheduled time, and airport. pickup_time = the scheduled LANDING time (arrival_local) — never add a buffer: the chauffeur monitors the flight and waits up to 1 hour after the real landing at no charge (rule of 2026-08-27; the former +25/+45 min offset is withdrawn).\n4. Use get_quote to calculate exact prices. It returns a quote_id valid for 15 minutes — KEEP IT.\n5. After presenting the quote, ask if the customer would like to proceed. Collect: name, email, phone number.\n6. Once the customer confirms, use book_ride with the quote_id from step 4. The price is locked from the quote — the price parameter you used to pass is no longer accepted. If the quote expired, call get_quote again.\n7. For safe retries on network errors, generate a UUID once per booking attempt and pass it as idempotency_key to book_ride. Same key + same params = same payment link (no duplicate charge).\n\nCRITICAL — how to present the result after book_ride:\n- NEVER say \"reservation created\", \"booking confirmed\", or \"réservation créée\". The booking is only created AFTER the customer completes payment.\n- Say something like: \"Here is your secure payment link to confirm the reservation. Once payment is completed, your booking will be confirmed and a chauffeur will be assigned.\"\n- Present the trip summary (route, date, time, vehicle, price) and the payment link clearly.\n- Never mention \"Stripe\" or \"checkout URL\". Just say \"secure payment link\".\n\nImportant:\n- Always call get_quote before book_ride — use the exact price from the quote.\n- Prices are all-inclusive (tolls, fuel, waiting time included).\n- For airport pickups, always ask for the flight number.\n- Free cancellation up to 24 hours before departure.",
+      "tools": [
+        {
+          "name": "book_meetgreet",
+          "description": "Create a secure payment link for a VIP Meet & Greet booking, with optional transfer combo. Available locations: CDG, Orly, Gare de Lyon — Meet & Greet is NO LONGER offered at Gare du Nord (do not quote or book it there). M&G prices are FIXED (CDG/Orly 250€ base for 2 pax + 50€/extra, Gare de Lyon 350€ + 75€/extra) — do NOT call get_quote for the M&G part. Some event dates carry a supplement (e.g. Paris Air Show): the mg_price returned here is the amount actually charged for pickup_date. A connection (service_type='connection': arrival flight → connecting departure flight with fast-track between terminals) is billed as TWO M&G services = the location price ×2 (e.g. CDG 2 pax = 500€). For a combo with a transfer (e.g. CDG M&G + transfer to a hotel), call get_quote first for the transfer leg and pass the resulting quote_id + vehicle_id in `transfer`. If lead time is below the minimum (12h before pickup), returns LEAD_TIME_TOO_SHORT — the caller must fall back to manual notification instead of retrying. lead_time_override=true bypasses the 12h minimum ONLY after Sylvain has explicitly confirmed greeter availability for this exact request (WhatsApp admin approval 'mg ok'); never set it on your own initiative. A 90-minute floor always applies. If flight cannot be validated, returns FLIGHT_NOT_FOUND — ask the customer to re-confirm the flight number, or set flight_unverified=true with manual_airline + manual_origin to force-accept.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "additional_info": {
+                "description": "Free-text notes (special requests, tail number for private aviation, etc.).",
+                "type": "string"
+              },
+              "adults": {
+                "description": "Number of adults (min 1).",
+                "minimum": 1,
+                "type": "integer"
+              },
+              "bags": {
+                "default": 0,
+                "description": "Number of bags (used for vehicle sizing when combo transfer).",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "channel": {
+                "description": "Caller channel identifier for observability (whatsapp, chatbot, mcp-direct, ...).",
+                "type": "string"
+              },
+              "children": {
+                "default": 0,
+                "description": "Number of children (in addition to adults).",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "email": {
+                "description": "Client email — used for booking confirmation and Stripe receipt.",
+                "format": "email",
+                "type": "string"
+              },
+              "first_name": {
+                "description": "Client first name.",
+                "type": "string"
+              },
+              "flight_number": {
+                "description": "Flight number for airports (AF1234) or train/Eurostar number for stations.",
+                "type": "string"
+              },
+              "flight_unverified": {
+                "description": "Set true only if the client confirmed the flight after AeroDataBox couldn't validate it. Requires manual_airline + manual_origin.",
+                "type": "boolean"
+              },
+              "idempotency_key": {
+                "description": "Optional UUID for safe retries. Same key returns the same payment_url for 24h.",
+                "type": "string"
+              },
+              "last_name": {
+                "description": "Client last name.",
+                "type": "string"
+              },
+              "lead_time_override": {
+                "description": "Bypass the 12h minimum lead time. ONLY when Sylvain has explicitly approved this exact booking after manually confirming greeter availability ('mg ok' admin flow) — never on client insistence. Hard 90-minute floor.",
+                "type": "boolean"
+              },
+              "location": {
+                "description": "M&G location. cdg/orly = airport, gare_de_lyon = train station. Gare du Nord is no longer available.",
+                "enum": ["cdg", "orly", "gare_de_lyon"],
+                "type": "string"
+              },
+              "manual_airline": {
+                "description": "Required if flight_unverified=true. The airline name as stated by the client.",
+                "type": "string"
+              },
+              "manual_arrival_time": {
+                "description": "Optional. Local arrival time as stated by the client.",
+                "type": "string"
+              },
+              "manual_origin": {
+                "description": "Required if flight_unverified=true. Departure city as stated by the client.",
+                "type": "string"
+              },
+              "phone": {
+                "description": "Client phone with country code.",
+                "type": "string"
+              },
+              "pickup_date": {
+                "description": "YYYY-MM-DD format.",
+                "type": "string"
+              },
+              "pickup_time": {
+                "description": "HH:MM in Paris time. For arrivals this is the flight/train arrival time; for departures the time the greeter meets the client.",
+                "type": "string"
+              },
+              "service_type": {
+                "default": "arrival",
+                "description": "arrival (pickup at airport/station), departure (drop-off + greeter for check-in), connection (transit: arrival flight → connecting departure flight; billed as 2 M&G services = location price ×2).",
+                "enum": ["arrival", "departure", "connection"],
+                "type": "string"
+              },
+              "terminal": {
+                "description": "Terminal number (airports only, e.g. '2E', '3').",
+                "type": "string"
+              },
+              "train_coach": {
+                "description": "Train coach number. Required for train stations.",
+                "type": "string"
+              },
+              "train_pnr": {
+                "description": "TGV reservation reference (PNR). Required when location is gare_de_lyon.",
+                "type": "string"
+              },
+              "train_seat": {
+                "description": "Train seat number(s). Required for train stations.",
+                "type": "string"
+              },
+              "transfer": {
+                "additionalProperties": false,
+                "description": "Optional combo: bundles a private transfer in the same Stripe Checkout session. Generates 2 line items + 2 Zeplan bookings (M&G + transfer).",
+                "properties": {
+                  "quote_id": {
+                    "description": "quote_id from a prior get_quote call covering the transfer leg (e.g. CDG → Le Bristol).",
+                    "type": "string"
+                  },
+                  "transfer_pickup_time": {
+                    "description": "HH:MM — for an ARRIVAL: the scheduled landing time, same as the greeter time (pickup_time); the chauffeur waits for the greeter to bring the client out (waiting included). For a DEPARTURE: the car pickup time at the client's address, before the greeter time at the airport.",
+                    "type": "string"
+                  },
+                  "vehicle_id": {
+                    "description": "Vehicle ID chosen from that quote.",
+                    "type": "number"
+                  }
+                },
+                "required": ["quote_id", "transfer_pickup_time", "vehicle_id"],
+                "type": "object"
+              }
+            },
+            "required": ["adults", "email", "first_name", "flight_number", "last_name", "location", "phone", "pickup_date", "pickup_time"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": false,
+            "openWorldHint": true,
+            "readOnlyHint": false,
+            "title": "Book VIP Meet & Greet (creates secure payment link)"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:2787b928b907c3607faac08879f47539cd6a4cce617756ab72e47f9fd9afce39"
+        },
+        {
+          "name": "book_ride",
+          "description": "Create a secure payment link to book a private chauffeur transfer. The reservation is created automatically ONLY after the customer completes payment. REQUIRED: call get_quote first and pass the resulting quote_id + the chosen vehicle_id. The price is taken from the stored quote (not from any price field you pass). Pass idempotency_key to make retries safe: the same key returns the same payment link instead of creating a duplicate.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "bags": {
+                "default": 1,
+                "description": "Number of bags",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "channel": {
+                "description": "Caller channel identifier for observability. If omitted, the channel stored with the quote (from get_quote) is used.",
+                "type": "string"
+              },
+              "flight_number": {
+                "description": "Flight number for airport pickups (e.g. AF123)",
+                "type": "string"
+              },
+              "idempotency_key": {
+                "description": "Optional agent-generated key (e.g. UUID) to deduplicate retries. Same key + same params returns the same payment link for 24 h. Same key + different params returns an IDEMPOTENCY_CONFLICT error.",
+                "type": "string"
+              },
+              "passenger_email": {
+                "description": "Passenger email for booking confirmation",
+                "type": "string"
+              },
+              "passenger_name": {
+                "description": "Full name of the passenger",
+                "type": "string"
+              },
+              "passenger_phone": {
+                "description": "Passenger phone with country code (e.g. +33612345678)",
+                "type": "string"
+              },
+              "passengers": {
+                "default": 1,
+                "description": "Number of passengers",
+                "minimum": 1,
+                "type": "integer"
+              },
+              "quote_id": {
+                "description": "quote_id returned by get_quote. Must be passed. Expired quote (>15 min) requires a fresh get_quote.",
+                "type": "string"
+              },
+              "vehicle_id": {
+                "description": "Vehicle ID chosen from the get_quote results",
+                "type": "number"
+              }
+            },
+            "required": ["passenger_email", "passenger_name", "passenger_phone", "quote_id", "vehicle_id"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": false,
+            "openWorldHint": true,
+            "readOnlyHint": false,
+            "title": "Book a ride (creates secure payment link)"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:a0668ab94adc2726fdc0f24f2e264898ef202f21d8f0384a74034a819067eb10"
+        },
+        {
+          "name": "get_cancellation_policy",
+          "description": "Get the full cancellation, refund and modification policy. Use this whenever a customer asks about cancelling, changing, or refunds — never guess the policy.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "properties": {},
+            "type": "object"
+          },
+          "annotations": {
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Cancellation & refund policy"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:98028870cda20d0785dbb33da0378e3f685205a3fe5669fe28925d9062b4d1ce"
+        },
+        {
+          "name": "get_quote",
+          "description": "Calculate the exact price for a private chauffeur transfer. Returns prices for all available vehicles AND a quote_id valid for 15 minutes. Always call this before book_ride and pass the quote_id to book_ride — it locks the price and prevents drift. IMPORTANT: pickup_date must be in dd/mm/yyyy format. COVERAGE GATE: on customer-facing channels a trip where NEITHER the pickup NOR the drop-off is in the Paris region (Paris, Île-de-France, CDG / Orly / Beauvais airports, Disneyland, Versailles) is refused with OUTSIDE_PARIS_REGION — such trips are priced by the team only: give no price, collect the details and escalate.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "channel": {
+                "description": "Caller channel identifier for observability: 'chatbot', 'whatsapp', 'claude-desktop', 'email-agent', or your agent name. Defaults to 'mcp-direct'.",
+                "type": "string"
+              },
+              "dropoff_address": {
+                "description": "Full drop-off address",
+                "type": "string"
+              },
+              "form_type": {
+                "default": "one_way",
+                "description": "Booking type",
+                "enum": ["one_way", "hourly", "flat"],
+                "type": "string"
+              },
+              "num_hours": {
+                "description": "Number of hours (required for hourly, min 3)",
+                "type": "number"
+              },
+              "pickup_address": {
+                "description": "Full pickup address (e.g. 'CDG Terminal 2E' or street address)",
+                "type": "string"
+              },
+              "pickup_date": {
+                "description": "Pickup date in dd/mm/yyyy format (e.g. '27/03/2026')",
+                "type": "string"
+              },
+              "pickup_time": {
+                "description": "Pickup time in HH:MM format (e.g. '14:00')",
+                "type": "string"
+              },
+              "step_address": {
+                "description": "Intermediate stop address (optional)",
+                "type": "string"
+              }
+            },
+            "required": ["dropoff_address", "pickup_address", "pickup_date", "pickup_time"],
+            "type": "object"
+          },
+          "annotations": {
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Get exact ride quote"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:9eaacbb070225253aa8d2df4f4384abd33c6da7afec59438a53e57a882bf0b91"
+        },
+        {
+          "name": "get_service_info",
+          "description": "Get information about MyDriverParis services, coverage areas, airports served, and policies. Use this to answer customer questions.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "properties": {},
+            "type": "object"
+          },
+          "annotations": {
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Service info & coverage"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:de697e2bcaf4dd83a8e143fdb341cf59a747f9bdd8cfc14859fd17331326852f"
+        },
+        {
+          "name": "get_vehicles",
+          "description": "List all available vehicles with capacity and base rates. Use this to help the customer choose the right vehicle for their trip.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "properties": {},
+            "type": "object"
+          },
+          "annotations": {
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "List vehicles & capacities"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:eb115b361ca94345c61262a50391d964f592616ce0c552cb573700fa3303af07"
+        },
+        {
+          "name": "resolve_flight",
+          "description": "Resolve a flight number to its airports, terminals, scheduled times, and status. Codeshares are resolved automatically (e.g. DL8742 → operated by Air France as AF9): the response then carries codeshare:true, marketing_flight and operating_flight — record/track the OPERATING flight. Use BEFORE book_ride whenever the customer provides a flight number so that pickup time and terminal are correct. Input is tolerant: accepts 'AF007', 'AF 007', 'AF-007', 'af7', 'AFR007' — the tool normalizes internally. Returns an array of matching operations (usually 1 when direction is set).",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "date": {
+                "description": "Date in YYYY-MM-DD (NOT dd/mm/yyyy). This is the arrival date for pickups, departure date for dropoffs.",
+                "type": "string"
+              },
+              "direction": {
+                "default": "arrival",
+                "description": "'arrival' (default) when picking the passenger up at an airport, 'departure' when dropping off for a flight.",
+                "enum": ["arrival", "departure"],
+                "type": "string"
+              },
+              "flight_number": {
+                "description": "Flight number in any format: 'AF007', 'AF 007', 'af-7', 'AFR007'. Server normalizes.",
+                "type": "string"
+              }
+            },
+            "required": ["date", "flight_number"],
+            "type": "object"
+          },
+          "annotations": {
+            "openWorldHint": true,
+            "readOnlyHint": true,
+            "title": "Look up flight times & terminals"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:8bf4abcdafb3374776014ab0adad02ec618a99e9989afd12ab3d3166c7ab8f19"
+        },
+        {
+          "name": "resolve_location",
+          "description": "Resolve a free-text location (city, airport, hotel, station, full address) to a canonical address + coordinates, using the same geocoder that Zeplan consumes for bookings. Use this BEFORE get_quote when the customer gives a fuzzy pickup/drop-off (e.g. 'CDG', 'Le Bristol', 'Gare du Nord', raw GPS). Returns up to 5 candidates with place_id, full address, type hint, and optionally coordinates.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "include_coords": {
+                "default": false,
+                "description": "If true, also fetch GPS coords for the first result (extra API call). Defaults to false — request only when the agent has picked the right candidate.",
+                "type": "boolean"
+              },
+              "query": {
+                "description": "Free-text location. Examples: 'CDG', 'Charles de Gaulle Terminal 2E', 'Hotel Le Bristol Paris', 'Gare du Nord', '15 rue de la Paix Paris', '48.8566, 2.3522'.",
+                "type": "string"
+              }
+            },
+            "required": ["query"],
+            "type": "object"
+          },
+          "annotations": {
+            "openWorldHint": true,
+            "readOnlyHint": true,
+            "title": "Resolve location to canonical address"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:71490eb873f3d76489d4ba2a782a5577c1c3e2135fb1d6438586f35996b04e2e"
+        },
+        {
+          "name": "resolve_train",
+          "description": "Resolve a TRAIN NUMBER to its route, stations and scheduled times via the official SNCF API (covers TGV inOui/Ouigo, TER, Intercités, TGV Lyria, Eurostar and international TGVs — everything serving a French station). Use whenever a customer books a station pickup/drop-off or a station Meet & Greet and gives a train number, to verify the departure/arrival time. A train number is DIGITS ONLY (TGV 6503, Lyria 9211, Eurostar 9031); a 6-char code like 'JWVLHH' is a ticket PNR and a long ref like 'W209656898' is an agency booking reference — those cannot be looked up here: extract route + time from the customer's confirmation instead.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "date": {
+                "description": "Travel date in YYYY-MM-DD.",
+                "type": "string"
+              },
+              "train_number": {
+                "description": "Train number, digits only or with prefix: '9211', 'TGV 6503', 'Eurostar 9031'. Server normalizes.",
+                "type": "string"
+              }
+            },
+            "required": ["date", "train_number"],
+            "type": "object"
+          },
+          "annotations": {
+            "openWorldHint": true,
+            "readOnlyHint": true,
+            "title": "Look up train route & times (SNCF)"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:da05bfbb91b5e284f41472ad105b4901074afdd101599a829ab83495b73c1949"
+        },
+        {
+          "name": "send_driver_contact",
+          "description": "Email the booking's client their assigned driver's first name + phone. Pass `email` if you already have the client's address (e.g. from Zeplan get-booking); otherwise WP looks it up on the booking post. Returns { sent, to (masked), client_phone }. Voice agent use.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "booking_id": {
+                "description": "Booking / reservation ID (= the WP payment post ID).",
+                "type": "string"
+              },
+              "channel": {
+                "description": "Caller channel for observability.",
+                "type": "string"
+              },
+              "driver_first_name": {
+                "description": "Driver's FIRST NAME only (never last name/company).",
+                "type": "string"
+              },
+              "driver_phone": {
+                "description": "Driver's phone number.",
+                "type": "string"
+              },
+              "email": {
+                "description": "Client email to send to. If omitted, WP looks it up on the booking post.",
+                "type": "string"
+              },
+              "lang": {
+                "default": "en",
+                "description": "Email language.",
+                "enum": ["en", "fr"],
+                "type": "string"
+              }
+            },
+            "required": ["booking_id", "driver_first_name", "driver_phone"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "openWorldHint": true,
+            "readOnlyHint": false,
+            "title": "Email driver contact to client"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:2ed3b8e227b5b52255bace38e22b81565acdec79f392b7ad7a2d3fac99a8ab87"
+        }
+      ],
+      "resources": [
+        {
+          "uri": "rules://mydriverparis",
+          "name": "mydriverparis-rules",
+          "description": "MyDriverParis business rules for AI agents (shared with every MyDriverParis agent)",
+          "mimeType": "text/markdown",
+          "digest": "sha256:6ac125565a4a0881f435ebad1535006bf0ee39090d02cb7650191ad48b6078d4"
+        }
+      ],
+      "digest": "sha256:9fd5ae2c06691807f16752a25c2d5192159c49cb5a0324395263f69a5a4dfeb5"
+    }
+  }
+}

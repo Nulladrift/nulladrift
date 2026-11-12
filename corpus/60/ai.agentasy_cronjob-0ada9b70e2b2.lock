@@ -1,0 +1,799 @@
+{
+  "lockfileVersion": 2,
+  "subjects": {
+    "ai.agentasy/cronjob": {
+      "kind": "mcp-server",
+      "source": {
+        "client": "manual",
+        "file": "registry.modelcontextprotocol.io"
+      },
+      "transport": {
+        "type": "http",
+        "url": "https://cronjob.agentasy.ai/mcp"
+      },
+      "protocol": {
+        "era": "legacy",
+        "version": "2025-11-25"
+      },
+      "serverInfo": {
+        "name": "agent-cronjob",
+        "title": "agent-cronjob — scheduled webhook triggers for agents",
+        "version": "0.0.1",
+        "websiteUrl": "https://cronjob.agentasy.ai/"
+      },
+      "capabilities": {
+        "resources": {
+          "listChanged": true
+        },
+        "tools": {
+          "listChanged": true
+        }
+      },
+      "instructions": "agent-cronjob triggers YOUR webhook on a schedule (cron / interval / one-off): HMAC-signed, retried with exponential backoff, every run logged. No account or API key.\n\nFlow:\n1. create_job {webhook_url, schedule} → job_id + setup_token (keep it private). We immediately POST {\"type\":\"url_verification\",\"challenge\":\"…\"} to webhook_url.\n2. Prove you control the webhook — either\n   - echo: your webhook replies 2xx {\"challenge\":\"<same value>\"}; or\n   - callback: your webhook replies 2xx, then call verify_challenge {job_id, challenge}.\n   Deadline 1 (verify): 15 minutes after job creation — unverified jobs are deleted; re-sends do not extend it. Not received? retry_challenge.\n3. Credentials, SHOWN ONCE: in the verify_challenge result (callback) or the first claim_credentials {job_id, setup_token} result after echo verification. Store hmac_secret and management_token in your secret store immediately; they cannot be shown again (rotate_secret / rotate_token instead). Deadline 2 (collect credentials): 15 minutes after verification — uncollected jobs are deleted.\n4. Triggers arrive as POSTs with X-Cronjob-Signature: v1=hex(HMAC-SHA256(hmac_secret, \"v1:{X-Cronjob-Timestamp}:{X-Cronjob-Delivery-Id}:{raw body}\")). Verify it, de-duplicate on delivery_id, reply 2xx (others are retried; 410 pauses the job).\n5. Manage with management_token (tool argument, or Authorization: Bearer on the MCP HTTP request): get_job, list_jobs, pause_job, resume_job, delete_job, get_deliveries (run history: scheduled vs actual time, delay, response code), get_run, get_stats.\n\nYour webhook must be a public https URL (private/loopback addresses are refused). Same rate limits as the REST API (https://cronjob.agentasy.ai/v1). Full guide: resource how_it_works (https://cronjob.agentasy.ai/llms.txt). Entry point for plain HTTP agents: https://new-cronjob.agentasy.ai/.",
+      "tools": [
+        {
+          "name": "claim_credentials",
+          "title": "Poll verification / collect credentials",
+          "description": "Step 3. Poll verification state with the setup_token. The first call after the webhook is verified returns hmac_secret (signs triggers) and management_token (manages the job) — SHOWN ONCE, store them now; later calls say credentials: \"already_issued\". (REST: GET /v1/jobs/{id}/verification)",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "job_id": {
+                "description": "job_<ULID> returned by create_job",
+                "maxLength": 64,
+                "minLength": 1,
+                "type": "string"
+              },
+              "setup_token": {
+                "description": "act_st_… setup token from create_job. Optional if the MCP HTTP request carries Authorization: Bearer <setup_token>.",
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": ["job_id"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": false,
+            "openWorldHint": false,
+            "readOnlyHint": false,
+            "title": "Poll verification / collect credentials"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": false,
+            "openWorld": false,
+            "readOnly": false
+          },
+          "digest": "sha256:9d629f195964c2972b2dcf315ddebc0560cad1ee064df4a0e233f0881716424e"
+        },
+        {
+          "name": "create_job",
+          "title": "Create a job (start registration)",
+          "description": "Step 1. Register your webhook and schedule (no account, no API key). Returns job_id and a one-time setup_token, and POSTs a url_verification challenge to webhook_url. Your webhook must answer it (echo: reply 2xx {\"challenge\":\"<same>\"}) — then call claim_credentials. Or reply 2xx and call verify_challenge with the value (callback). Nothing triggers before verification. (REST: POST /v1/jobs)",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "catchup_policy": {
+                "enum": ["skip", "run_once", "run_all"],
+                "type": "string"
+              },
+              "catchup_window_sec": {
+                "maximum": 9007199254740991,
+                "minimum": -9007199254740991,
+                "type": "integer"
+              },
+              "max_runs": {
+                "anyOf": [
+                  {
+                    "maximum": 9007199254740991,
+                    "minimum": -9007199254740991,
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Complete after this many dispatched runs; null = unlimited."
+              },
+              "name": {
+                "type": ["string", "null"]
+              },
+              "outgoing_auth": {
+                "anyOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "header": {
+                        "description": "Authorization (default) or an X-… header name (not X-Cronjob-…).",
+                        "type": "string"
+                      },
+                      "value": {
+                        "description": "Header value (1 … 4096 chars, no CR/LF), e.g. \"Bearer <token>\". Secret: stored encrypted, never shown back.",
+                        "type": "string"
+                      }
+                    },
+                    "required": ["value"],
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Optional header your webhook requires (e.g. a Grok routine webhook that needs Authorization). Sent on the url_verification POST and every trigger; never overrides the X-Cronjob-* headers."
+              },
+              "payload": {
+                "additionalProperties": {},
+                "description": "Sent unchanged in every trigger (≤ 8 KB).",
+                "propertyNames": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              "retry_base_sec": {
+                "maximum": 9007199254740991,
+                "minimum": -9007199254740991,
+                "type": "integer"
+              },
+              "retry_max_attempts": {
+                "maximum": 9007199254740991,
+                "minimum": -9007199254740991,
+                "type": "integer"
+              },
+              "retry_max_backoff_sec": {
+                "maximum": 9007199254740991,
+                "minimum": -9007199254740991,
+                "type": "integer"
+              },
+              "schedule": {
+                "additionalProperties": false,
+                "description": "Exactly one of {cron, timezone?}, {interval_sec}, {run_at}. Minimum spacing 60 s.",
+                "properties": {
+                  "cron": {
+                    "description": "5-field cron or @hourly/@daily/@weekly/@monthly/@yearly",
+                    "type": "string"
+                  },
+                  "interval_sec": {
+                    "description": "60 … 31622400",
+                    "maximum": 9007199254740991,
+                    "minimum": -9007199254740991,
+                    "type": "integer"
+                  },
+                  "run_at": {
+                    "description": "ISO 8601 with Z or an offset, in the future (one-off)",
+                    "type": "string"
+                  },
+                  "timezone": {
+                    "description": "IANA zone for cron, default UTC",
+                    "type": "string"
+                  }
+                },
+                "type": "object"
+              },
+              "signature_in_body": {
+                "description": "Default false. true = every trigger body also carries cronjob_signature {version, timestamp, delivery_id, signatures[], signature} (HMAC over \"v1b:{timestamp}:{delivery_id}:\" + canonical JSON of the body without cronjob_signature). Use it when your webhook platform drops the X-Cronjob-* headers (e.g. Grok Bot routines).",
+                "type": "boolean"
+              },
+              "timeout_ms": {
+                "maximum": 9007199254740991,
+                "minimum": -9007199254740991,
+                "type": "integer"
+              },
+              "verification_mode": {
+                "description": "Informational; both answers work. Default echo.",
+                "enum": ["echo", "callback"],
+                "type": "string"
+              },
+              "webhook_url": {
+                "description": "Public https URL of your agent. It receives the challenge now and the signed triggers later.",
+                "type": "string"
+              }
+            },
+            "required": ["schedule", "webhook_url"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": false,
+            "openWorldHint": true,
+            "readOnlyHint": false,
+            "title": "Create a job (start registration)"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:40fdfb4eb3c3f72133bdbcb70683fc35c6805fe910a3ce25556e88fb6fd19601"
+        },
+        {
+          "name": "delete_job",
+          "title": "Delete a job",
+          "description": "Stop the job forever and revoke all its credentials. Cannot be undone. (REST: DELETE /v1/jobs/{id})",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "job_id": {
+                "description": "job_<ULID> returned by create_job",
+                "maxLength": 64,
+                "minLength": 1,
+                "type": "string"
+              },
+              "management_token": {
+                "description": "act_mt_… management token. Optional if the MCP HTTP request carries Authorization: Bearer <management_token>.",
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": ["job_id"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": true,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": false,
+            "title": "Delete a job"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": false
+          },
+          "digest": "sha256:9b4fca668e4460f748405550764513b46b9618e04d2a6b9a24c63724a50a4539"
+        },
+        {
+          "name": "get_deliveries",
+          "title": "Run history",
+          "description": "Trigger log, newest first: scheduled_at, first attempt time, delay, attempts, status and last response code of each run. since/until (ISO 8601) filter scheduled_at; page with next_cursor. (REST: GET /v1/jobs/{id}/runs)",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "cursor": {
+                "type": "string"
+              },
+              "job_id": {
+                "description": "job_<ULID> returned by create_job",
+                "maxLength": 64,
+                "minLength": 1,
+                "type": "string"
+              },
+              "limit": {
+                "maximum": 200,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "management_token": {
+                "description": "act_mt_… management token. Optional if the MCP HTTP request carries Authorization: Bearer <management_token>.",
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              },
+              "since": {
+                "type": "string"
+              },
+              "status": {
+                "enum": ["pending", "succeeded", "failed", "missed", "superseded", "cancelled"],
+                "type": "string"
+              },
+              "until": {
+                "type": "string"
+              }
+            },
+            "required": ["job_id"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Run history"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:800e18f2bbacf982f5a526394c37672c1d0c37f541bc21ac62caff7553562a03"
+        },
+        {
+          "name": "get_job",
+          "title": "Get a job",
+          "description": "Settings, status, next_run_at, run_count and credential prefixes of one job (webhook path masked). (REST: GET /v1/jobs/{id})",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "job_id": {
+                "description": "job_<ULID> returned by create_job",
+                "maxLength": 64,
+                "minLength": 1,
+                "type": "string"
+              },
+              "management_token": {
+                "description": "act_mt_… management token. Optional if the MCP HTTP request carries Authorization: Bearer <management_token>.",
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": ["job_id"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Get a job"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:e9a72d937ec33f22cc87f7451c7cd621161959c96fdffbe08f013d09d68a5d0a"
+        },
+        {
+          "name": "get_run",
+          "title": "One run with every delivery attempt",
+          "description": "One run and each delivery attempt: sent_at, response status, duration, error and next retry. (REST: GET /v1/jobs/{id}/runs/{run_id})",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "job_id": {
+                "description": "job_<ULID> returned by create_job",
+                "maxLength": 64,
+                "minLength": 1,
+                "type": "string"
+              },
+              "management_token": {
+                "description": "act_mt_… management token. Optional if the MCP HTTP request carries Authorization: Bearer <management_token>.",
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              },
+              "run_id": {
+                "maxLength": 64,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": ["job_id", "run_id"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "One run with every delivery attempt"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:168130750058d0aecbcb23e2c8cb72fda8168f00d61ceb9ab2139f306625970d"
+        },
+        {
+          "name": "get_stats",
+          "title": "Punctuality stats",
+          "description": "On-time rate, p50/p95 first-attempt delay and success rate over a window (default 24h). (REST: GET /v1/jobs/{id}/stats)",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "job_id": {
+                "description": "job_<ULID> returned by create_job",
+                "maxLength": 64,
+                "minLength": 1,
+                "type": "string"
+              },
+              "management_token": {
+                "description": "act_mt_… management token. Optional if the MCP HTTP request carries Authorization: Bearer <management_token>.",
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              },
+              "window": {
+                "enum": ["1h", "24h", "7d", "30d"],
+                "type": "string"
+              }
+            },
+            "required": ["job_id"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Punctuality stats"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:aacb8b886d6a039f5e8c334df1fe37e995409d328bfe5497f7f75d175357dc5e"
+        },
+        {
+          "name": "list_jobs",
+          "title": "List your jobs",
+          "description": "Status of every job you hold a management token for. There are no accounts, so pass each {job_id, management_token} pair (up to 20); a pair without management_token uses the Authorization header. (REST: GET /v1/jobs/{id} (once per job))",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "jobs": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "job_id": {
+                      "description": "job_<ULID> returned by create_job",
+                      "maxLength": 64,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "management_token": {
+                      "description": "act_mt_… management token. Optional if the MCP HTTP request carries Authorization: Bearer <management_token>.",
+                      "maxLength": 200,
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": ["job_id"],
+                  "type": "object"
+                },
+                "maxItems": 20,
+                "minItems": 1,
+                "type": "array"
+              }
+            },
+            "required": ["jobs"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "List your jobs"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:38cd62e6ab59fd6af1d07be9fdc93d5de63ff552746779ac29943b9932a53661"
+        },
+        {
+          "name": "pause_job",
+          "title": "Pause a job",
+          "description": "Stop triggering (idempotent). Schedule points while paused are not made up later. (REST: POST /v1/jobs/{id}/pause)",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "job_id": {
+                "description": "job_<ULID> returned by create_job",
+                "maxLength": 64,
+                "minLength": 1,
+                "type": "string"
+              },
+              "management_token": {
+                "description": "act_mt_… management token. Optional if the MCP HTTP request carries Authorization: Bearer <management_token>.",
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": ["job_id"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": false,
+            "title": "Pause a job"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": false
+          },
+          "digest": "sha256:5182e969bd1812cbd29dd6b3a3fd33c33199086ca29e9f0ed10b1a3c7f12bc5a"
+        },
+        {
+          "name": "resume_job",
+          "title": "Resume a job",
+          "description": "Resume a paused or disabled job from its next schedule point; resets consecutive_failures. (REST: POST /v1/jobs/{id}/resume)",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "job_id": {
+                "description": "job_<ULID> returned by create_job",
+                "maxLength": 64,
+                "minLength": 1,
+                "type": "string"
+              },
+              "management_token": {
+                "description": "act_mt_… management token. Optional if the MCP HTTP request carries Authorization: Bearer <management_token>.",
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": ["job_id"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": false,
+            "title": "Resume a job"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": false
+          },
+          "digest": "sha256:3388742e710beeff9dcad5ecaa5146e6c05ca65c9671746d1c1763c07e727624"
+        },
+        {
+          "name": "retry_challenge",
+          "title": "Re-send the challenge",
+          "description": "Re-send a fresh url_verification challenge to your webhook (at most 5 re-sends (6 challenges in total), at least 60 s apart). The previous challenge stops working. (REST: POST /v1/jobs/{id}/verification/retry)",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "job_id": {
+                "description": "job_<ULID> returned by create_job",
+                "maxLength": 64,
+                "minLength": 1,
+                "type": "string"
+              },
+              "setup_token": {
+                "description": "act_st_… setup token from create_job. Optional if the MCP HTTP request carries Authorization: Bearer <setup_token>.",
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": ["job_id"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": false,
+            "openWorldHint": true,
+            "readOnlyHint": false,
+            "title": "Re-send the challenge"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:22e037c8cf802243398183a380f9fde116a0fc230a2ad3afd8d1969b753290c2"
+        },
+        {
+          "name": "rotate_secret",
+          "title": "Rotate the HMAC signing secret",
+          "description": "New hmac_secret (SHOWN ONCE, store it now). Until previous.expires_at (grace_sec, default 24 h) triggers carry two v1= signatures, new first. (REST: POST /v1/jobs/{id}/rotate-secret)",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "grace_sec": {
+                "maximum": 9007199254740991,
+                "minimum": -9007199254740991,
+                "type": "integer"
+              },
+              "job_id": {
+                "description": "job_<ULID> returned by create_job",
+                "maxLength": 64,
+                "minLength": 1,
+                "type": "string"
+              },
+              "management_token": {
+                "description": "act_mt_… management token. Optional if the MCP HTTP request carries Authorization: Bearer <management_token>.",
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": ["job_id"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": true,
+            "idempotentHint": false,
+            "openWorldHint": false,
+            "readOnlyHint": false,
+            "title": "Rotate the HMAC signing secret"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": false,
+            "readOnly": false
+          },
+          "digest": "sha256:84df84736c76d30a26e6bc9d2565a354d4733fb4372e573132d7f9f7bab796d5"
+        },
+        {
+          "name": "rotate_token",
+          "title": "Rotate the management token",
+          "description": "New management_token (SHOWN ONCE, store it now). The old one stops working after grace_sec (default 0 = immediately). (REST: POST /v1/jobs/{id}/rotate-token)",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "grace_sec": {
+                "maximum": 9007199254740991,
+                "minimum": -9007199254740991,
+                "type": "integer"
+              },
+              "job_id": {
+                "description": "job_<ULID> returned by create_job",
+                "maxLength": 64,
+                "minLength": 1,
+                "type": "string"
+              },
+              "management_token": {
+                "description": "act_mt_… management token. Optional if the MCP HTTP request carries Authorization: Bearer <management_token>.",
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": ["job_id"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": true,
+            "idempotentHint": false,
+            "openWorldHint": false,
+            "readOnlyHint": false,
+            "title": "Rotate the management token"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": false,
+            "readOnly": false
+          },
+          "digest": "sha256:813584096367652e991822bc6a4de82f997f261958f27fa8adcc73748476ae1e"
+        },
+        {
+          "name": "update_job",
+          "title": "Change job settings",
+          "description": "Change a job in place: signature_in_body (true = triggers also carry cronjob_signature in the JSON body, for platforms that drop the X-Cronjob-* headers; applies from the next attempt sent) and/or max_runs. Raising max_runs on a job completed with max_runs_reached reactivates it (next run = next occurrence after now, no catch-up); there is no separate resume for completed jobs. Returns the updated job. (REST: PATCH /v1/jobs/{id})",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "job_id": {
+                "description": "job_<ULID> returned by create_job",
+                "maxLength": 64,
+                "minLength": 1,
+                "type": "string"
+              },
+              "management_token": {
+                "description": "act_mt_… management token. Optional if the MCP HTTP request carries Authorization: Bearer <management_token>.",
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              },
+              "max_runs": {
+                "anyOf": [
+                  {
+                    "maximum": 9007199254740991,
+                    "minimum": -9007199254740991,
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "New run limit (1 … 1000000), must be greater than run_count; null = unlimited. ≤ run_count → 400. Paused/disabled jobs keep their status."
+              },
+              "signature_in_body": {
+                "description": "Default false. true = every trigger body also carries cronjob_signature {version, timestamp, delivery_id, signatures[], signature} (HMAC over \"v1b:{timestamp}:{delivery_id}:\" + canonical JSON of the body without cronjob_signature). Use it when your webhook platform drops the X-Cronjob-* headers (e.g. Grok Bot routines).",
+                "type": "boolean"
+              }
+            },
+            "required": ["job_id"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": false,
+            "title": "Change job settings"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": false
+          },
+          "digest": "sha256:3108d439bacd459f9726aa4e748c92638592975c6e74519aaf050dd8bfcd1af0"
+        },
+        {
+          "name": "verify_challenge",
+          "title": "Verify the challenge (callback mode)",
+          "description": "Step 2 (callback mode). Send back the challenge value your webhook received. On success the result holds hmac_secret and management_token — SHOWN ONCE, store them now. (REST: POST /v1/jobs/{id}/verify)",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "challenge": {
+                "description": "The challenge value from the url_verification POST",
+                "type": "string"
+              },
+              "job_id": {
+                "description": "job_<ULID> returned by create_job",
+                "maxLength": 64,
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": ["challenge", "job_id"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": false,
+            "openWorldHint": false,
+            "readOnlyHint": false,
+            "title": "Verify the challenge (callback mode)"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": false,
+            "openWorld": false,
+            "readOnly": false
+          },
+          "digest": "sha256:0827104177a74768f7e01ad0971f576edbb1432a4dce82cce907a7a93f94d7bf"
+        }
+      ],
+      "resources": [
+        {
+          "uri": "https://cronjob.agentasy.ai/llms.txt",
+          "name": "how_it_works",
+          "title": "How agent-cronjob works (llms.txt)",
+          "description": "Complete agent guide: flow, verification, signature, retries, limits, errors.",
+          "mimeType": "text/markdown",
+          "digest": "sha256:a4d6c74151c9871a04640da074fbdb130ebe273d0c5a6029fec8008cffeaf7b7"
+        }
+      ],
+      "digest": "sha256:59d4532daa78c02622ef3d6217e98a85d486f8bf07ddd21ec9444b11140f6762"
+    }
+  }
+}

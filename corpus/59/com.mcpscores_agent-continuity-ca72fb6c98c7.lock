@@ -1,0 +1,1743 @@
+{
+  "lockfileVersion": 2,
+  "subjects": {
+    "com.mcpscores/agent-continuity": {
+      "kind": "mcp-server",
+      "source": {
+        "client": "manual",
+        "file": "registry.modelcontextprotocol.io"
+      },
+      "transport": {
+        "type": "http",
+        "url": "https://mcpfax-continuity.bowling-anthony.workers.dev/mcp"
+      },
+      "protocol": {
+        "era": "legacy",
+        "version": "2025-06-18"
+      },
+      "serverInfo": {
+        "name": "com.mcpscores/agent-continuity",
+        "title": "MCPFax Agent Continuity",
+        "version": "1.1.1",
+        "websiteUrl": "https://mcpfax-continuity.bowling-anthony.workers.dev/"
+      },
+      "capabilities": {
+        "tools": {}
+      },
+      "instructions": "You stopped, and now you are back and do not know what you already did. That is what this fixes. Checkpoints compose into a resume briefing; leases and pull queues stop two workers taking one item; seen-sets and claims stop a side effect happening twice; barriers join parallel work; budgets say when to stop.\n\nHOW TO PAY, first — nothing below works without it. 13 of the 33 tools cost $0.002; every write, and initialize, ping and tools/list, are free; tools/list carries each tool's schema and exact price. Send the base64 X-PAYMENT header on this POST /mcp request, or `params._meta['x402/payment']`. Call register (free) first for an agent_secret and a public address, then send it as `Authorization: Bearer <agent_secret>`, or as the `agent_key` argument if this host cannot set headers. You are billed only when a call delivers information you did not already have, and never twice for the same fact — remembered per record for its last 32 distinct billed answers.\n\nWhat we REFUSE. We hold work; we do not run it — we cannot restart your agent, and something else (a cron, a user, a queue) must invoke it. We cannot kill a worker: job_cancel sets a flag, and a worker that never checks should_continue runs to completion. We report budgets and NEVER block a call. No webhook, no callback URL: we queue an envelope and you poll for it. Mailbox delivery is at-least-once, not exactly-once — hence ack and the tombstone. A dead-man switch detects SILENCE, not failure. We never read another agent's mailbox, never list your keys, and never parse a checkpoint body.\n\nLimits, all enforced by deletion, not promised: leases 1 hour max, claims 30 days, checkpoints 90 days, retry state 30 days. A queue id holds 2000 items over its LIFETIME, finished ones included, because work_status keeps their results and dead letters — not a concurrency limit. Past it, pushes are REFUSED by item_id, never silently dropped: roll to a new queue_id. A seen-set or a mailbox that fills refuses the add rather than forgetting an entry.",
+      "tools": [
+        {
+          "name": "barrier_create",
+          "title": "Open a join point for fan-out work",
+          "description": "Fan work out to N agents and have the LAST one to finish wake the joiner. FREE. A BARRIER THAT WAITS FOR ALL N IS A HANG WAITING TO HAPPEN, so stragglers are the normal case here, not an edge case: set min_count and/or deadline_seconds and we fire on whichever comes first, ALWAYS naming the participants that did not report. Exactly ONE envelope is queued to notify_address, carrying every participant's payload; that delivery is billed by the existing inbox_poll rule, so there is no new charge. If nothing has fired by the TTL we queue a `barrier_timeout` envelope naming the missing participants — a timeout is information and is delivered, never silently dropped. REUSING A BARRIER_ID IS THE NORMAL PATTERN: while a join is still open this call is idempotent and refuses to reset it (created:false), because a retrying agent must not be able to reset a join others are signalling — but once it has fired or timed out, calling barrier_create with the same id opens a NEW GENERATION with your new roster, and that generation gets its own notification. FREE — this tool never charges. Authenticate with Authorization: Bearer <agent_secret>, or pass agent_key as an argument if your host cannot set headers. Equivalent HTTP route: POST /v1/barrier/create.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "agent_key": {
+                "description": "Your agent_secret, if your MCP host cannot set the Authorization header. Prefer the header.",
+                "examples": ["the agent_secret that register returned"],
+                "type": "string"
+              },
+              "barrier_id": {
+                "description": "Your name for this join point. Namespace-scoped; stored in plain text so a timeout can name it back to you. Example: 'quarterly-rollup-2026q3'.",
+                "examples": ["quarterly-rollup-2026q3"],
+                "type": "string"
+              },
+              "deadline_seconds": {
+                "description": "Fire at this many seconds from now with whoever has signalled, whether or not min_count was reached. Must be <= ttl_seconds. The notification names who did not report. Example: '600'.",
+                "examples": [600],
+                "type": "integer"
+              },
+              "expected_count": {
+                "description": "How many participants you expect. 1..500. Defaults to the length of `participants` when you supply a roster. Example: '3'.",
+                "examples": [3],
+                "type": "integer"
+              },
+              "min_count": {
+                "description": "Fire as soon as THIS many have signalled, instead of waiting for all of them. Default: expected_count. Set it lower and a straggler cannot hang the join. Example: '2'.",
+                "examples": [2],
+                "type": "integer"
+              },
+              "notify_address": {
+                "description": "Where the completion, deadline or timeout envelope goes. Must be registered. WRITE-ONLY: we queue into it and never read it. Example: 'agent:7k2p.../joins'.",
+                "examples": ["agent:7k2p.../joins"],
+                "type": "string"
+              },
+              "objective": {
+                "description": "Optional text carried into every envelope so the joiner knows what it is being woken for. <=2048 chars. Example: 'Roll up the three regional reports'.",
+                "examples": ["Roll up the three regional reports"],
+                "type": "string"
+              },
+              "participants": {
+                "description": "Optional roster of participant ids. Supply it and every notification names exactly who is missing; omit it and we can only report the shortfall. A signal from outside the roster is recorded but does NOT count toward the threshold. Example: '[\"a\",\"b\",\"c\"]'.",
+                "examples": ["[\"a\",\"b\",\"c\"]"],
+                "type": "array"
+              },
+              "ttl_seconds": {
+                "description": "How long the barrier lives before timing out. Default 3600, min 5, max 2592000. Example: '3600'.",
+                "examples": [3600],
+                "type": "integer"
+              }
+            },
+            "required": ["barrier_id", "notify_address"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": false
+          },
+          "digest": "sha256:09d7c6b4cd739c57942326a5ebb1393acc227e6d2f138f650c5096e6145f747d"
+        },
+        {
+          "name": "barrier_signal",
+          "title": "Signal that your part is done",
+          "description": "Report that one participant finished, optionally attaching a payload the joiner will receive. FREE and IDEMPOTENT PER PARTICIPANT — the same participant_id signalling twice counts once and never double-fires the join. The barrier is a single Durable Object, so N simultaneous signals produce exactly one notification. A signal to a join that ALREADY FIRED on min_count is still recorded and reported in barrier_status, but it cannot fire a second notification — the joiner was already told, and was told exactly who was missing. A signal to a join that has TIMED OUT or passed its TTL is REFUSED with signalled:false, reason 'expired': your payload did NOT reach the joiner, so do not assume it did. That barrier_id is not locked — call barrier_create with it to open a new generation of the join. FREE — this tool never charges. Authenticate with Authorization: Bearer <agent_secret>, or pass agent_key as an argument if your host cannot set headers. Equivalent HTTP route: POST /v1/barrier/signal.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "agent_key": {
+                "description": "Your agent_secret, if your MCP host cannot set the Authorization header. Prefer the header.",
+                "examples": ["the agent_secret that register returned"],
+                "type": "string"
+              },
+              "barrier_id": {
+                "description": "The barrier to signal. Example: 'quarterly-rollup-2026q3'.",
+                "examples": ["quarterly-rollup-2026q3"],
+                "type": "string"
+              },
+              "participant_id": {
+                "description": "Who is signalling. <=128 chars, stored in plain text so a timeout can name who is missing. Example: 'region-north'.",
+                "examples": ["region-north"],
+                "type": "string"
+              },
+              "payload": {
+                "description": "Optional opaque result for the joiner, <=8192 bytes. Never parsed, indexed or logged. Example: '{\"rows\":128}'.",
+                "examples": ["{\"rows\":128}"],
+                "type": "object"
+              }
+            },
+            "required": ["barrier_id", "participant_id"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": false
+          },
+          "digest": "sha256:235daf517ebc46f456ce3f52424553625ea5accb8e524f3310d4767d4fad9390"
+        },
+        {
+          "name": "barrier_status",
+          "title": "How far along is the join",
+          "description": "Progress on a join point: how many of the expected participants have signalled, which ones, who is still outstanding, and whether the completion or timeout envelope has been queued. $0.002 ONLY when there is real progress to report (at least one signal) AND the answer has changed since you last paid for it — an untouched barrier, or a repeat of an answer you already bought, costs nothing and says so. Costs $0.002 USDC per call via x402 on Base, and ONLY when signals >= 1, and this exact progress state has not been billed before; otherwise the same call returns the full answer and settles nothing. Authenticate with Authorization: Bearer <agent_secret>, or pass agent_key as an argument if your host cannot set headers. Equivalent HTTP route: POST /v1/barrier/status.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "agent_key": {
+                "description": "Your agent_secret, if your MCP host cannot set the Authorization header. Prefer the header.",
+                "examples": ["the agent_secret that register returned"],
+                "type": "string"
+              },
+              "barrier_id": {
+                "description": "The barrier to inspect. Example: 'quarterly-rollup-2026q3'.",
+                "examples": ["quarterly-rollup-2026q3"],
+                "type": "string"
+              }
+            },
+            "required": ["barrier_id"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": false
+          },
+          "digest": "sha256:169a71ad65ccf5a0444a0eca1252c4264e670d4d72a9ce31905a9093983b0dbf"
+        },
+        {
+          "name": "budget_check",
+          "title": "What has this work cost me",
+          "description": "What this unit of work has actually cost across every session, with a per-label breakdown and a lifetime total. If a limit is set (or you pass one here) we report over_limit — WE REPORT, WE NEVER BLOCK: enforcement is the caller's decision and we will not pretend to an authority we do not have. Amounts come back byte-exact in the units you supplied. $0.002 ONLY when there is recorded history in the window; an empty ledger tells you so and costs nothing, and asking again for an unchanged total is free. Costs $0.002 USDC per call via x402 on Base, and ONLY when count >= 1 in the requested window, and this exact total has not been billed before; otherwise the same call returns the full answer and settles nothing. Authenticate with Authorization: Bearer <agent_secret>, or pass agent_key as an argument if your host cannot set headers. Equivalent HTTP route: POST /v1/budget/check.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "agent_key": {
+                "description": "Your agent_secret, if your MCP host cannot set the Authorization header. Prefer the header.",
+                "examples": ["the agent_secret that register returned"],
+                "type": "string"
+              },
+              "limit": {
+                "description": "Optional. Compare against this limit for this call only, instead of the one stored on the scope. Example: '1.00'.",
+                "examples": ["1.00"],
+                "type": "string"
+              },
+              "scope": {
+                "description": "The unit of work. Example: 'permit-review-2026-08'.",
+                "examples": ["permit-review-2026-08"],
+                "type": "string"
+              },
+              "window_seconds": {
+                "description": "How far back to total. Default 86400 (1 day), max 31536000 (365 days). The lifetime total is always reported alongside it. Example: '86400'.",
+                "examples": [86400],
+                "type": "integer"
+              }
+            },
+            "required": ["scope"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": false
+          },
+          "digest": "sha256:619516bbe91f76f9dee9cd7cfd7cb885766d6b81727779b50fcadffe22ff5cce"
+        },
+        {
+          "name": "budget_record",
+          "title": "Record a spend against a unit of work",
+          "description": "An agent cannot see its own spend across sessions, so runaway cost is invisible until the bill arrives. Append one amount to this scope's ledger. FREE and APPEND-ONLY — nothing is overwritten and nothing is silently dropped; when the ledger is full, adds are REFUSED. The amount is an OPAQUE DECIMAL STRING stored byte-exact as you send it: we never convert a currency, never assume six decimals and never touch a float. Totals are summed as exact integers at the widest scale you actually used. FREE — this tool never charges. Authenticate with Authorization: Bearer <agent_secret>, or pass agent_key as an argument if your host cannot set headers. Equivalent HTTP route: POST /v1/budget/record.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "agent_key": {
+                "description": "Your agent_secret, if your MCP host cannot set the Authorization header. Prefer the header.",
+                "examples": ["the agent_secret that register returned"],
+                "type": "string"
+              },
+              "amount_usdc": {
+                "description": "A decimal string, e.g. '0.002' or '1.25'. Stored EXACTLY as given and returned byte-identical. Optionally negative for a refund. Never converted or rescaled. Example: '0.002'.",
+                "examples": ["0.002"],
+                "type": "string"
+              },
+              "label": {
+                "description": "What the money went on, so budget_check can break the total down. <=64 chars, stored in plain text. Example: 'resume_packet'.",
+                "examples": ["resume_packet"],
+                "type": "string"
+              },
+              "limit": {
+                "description": "Optional. Set or update this scope's limit, as a decimal string. We only ever REPORT against it — we never block a call, because enforcement is your decision and not our authority. Example: '1.00'.",
+                "examples": ["1.00"],
+                "type": "string"
+              },
+              "scope": {
+                "description": "The unit of work this spend belongs to. Namespace-scoped, and the same scope resume_packet reports against. Example: 'permit-review-2026-08'.",
+                "examples": ["permit-review-2026-08"],
+                "type": "string"
+              },
+              "ttl_seconds": {
+                "description": "Ledger retention. Default 2592000 (30d), max 7776000 (90d). Example: '2592000'.",
+                "examples": [2592000],
+                "type": "integer"
+              }
+            },
+            "required": ["amount_usdc", "scope"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": false,
+            "openWorldHint": false,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": false,
+            "openWorld": false,
+            "readOnly": false
+          },
+          "digest": "sha256:2c6980f2850a3a25a244f66b705870a3726ac70bd7fd75658cdb1532e41e8d0e"
+        },
+        {
+          "name": "checkpoint_get",
+          "title": "Read the raw checkpoint",
+          "description": "Fetch the last checkpoint verbatim — what was stored, with no briefing composed around it. Most callers want resume_packet instead, which folds in what arrived while you were gone and what we observed you doing. $0.002 ONLY when a checkpoint exists AND its version has changed since you last paid for it — re-reading an unchanged checkpoint is free. If there is none we say so and charge nothing. Costs $0.002 USDC per call via x402 on Base, and ONLY when found === true, and this exact checkpoint version has not been billed before; otherwise the same call returns the full answer and settles nothing. Authenticate with Authorization: Bearer <agent_secret>, or pass agent_key as an argument if your host cannot set headers. Equivalent HTTP route: POST /v1/checkpoint/get.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "agent_key": {
+                "description": "Your agent_secret, if your MCP host cannot set the Authorization header. Prefer the header.",
+                "examples": ["the agent_secret that register returned"],
+                "type": "string"
+              },
+              "scope": {
+                "description": "The unit of work. Alias: workflow_id. Example: 'permit-review-2026-08'.",
+                "examples": ["permit-review-2026-08"],
+                "type": "string"
+              }
+            },
+            "required": ["scope"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:7bde566906f8955eceb92aea2b3058f57c61dc8a0b84992a6dac2cb0d98543c2"
+        },
+        {
+          "name": "checkpoint_put",
+          "title": "Checkpoint the work",
+          "description": "Save where the work got to, in a STRUCTURED shape so the next invocation can actually act on it. FREE. `objective` and `next_action` are REQUIRED and a checkpoint without them is refused — a vague checkpoint produces a vague briefing, so the schema is the guardrail. Work state is small: aim for a few kilobytes, not a transcript. The ENVELOPE (objective, next_action, status, files, risks and the rest) is cleartext and is what resume_packet synthesizes from. The BODY (`body`, `state`, `provider_extras`) is opaque — never parsed, indexed or logged in any mode. Set privacy_mode:'client_key' and encrypt the body yourself if it is sensitive; we then cannot read it and never hold your key. FREE — this tool never charges. Authenticate with Authorization: Bearer <agent_secret>, or pass agent_key as an argument if your host cannot set headers. Equivalent HTTP route: POST /v1/checkpoint/put.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "agent_key": {
+                "description": "Your agent_secret, if your MCP host cannot set the Authorization header. Prefer the header.",
+                "examples": ["the agent_secret that register returned"],
+                "type": "string"
+              },
+              "artifacts": {
+                "description": "ENVELOPE. Artifact references produced so far (ids, URLs). Example: '[]'.",
+                "examples": ["[]"],
+                "type": "array"
+              },
+              "body": {
+                "description": "BODY, OPAQUE. Full context, reasoning, file contents — anything sensitive. Never parsed, indexed or logged in any mode. Send ciphertext here with privacy_mode:'client_key'. Example: 'Full context for the next step, or ciphertext.'.",
+                "examples": ["Full context for the next step, or ciphertext."],
+                "type": "string"
+              },
+              "budget_remaining": {
+                "description": "ENVELOPE. Whatever budget means for you — calls, tokens, USDC. Example: '{\"usdc\":\"0.05\"}'.",
+                "examples": ["{\"usdc\":\"0.05\"}"],
+                "type": "object"
+              },
+              "dependencies": {
+                "description": "ENVELOPE. What this work depends on. Example: '[]'.",
+                "examples": ["[]"],
+                "type": "array"
+              },
+              "due_by": {
+                "description": "ENVELOPE. ISO-8601 deadline for the work, if it has one. Example: '2026-08-20T00:00:00Z'.",
+                "examples": ["2026-08-20T00:00:00Z"],
+                "type": "string"
+              },
+              "evidence": {
+                "description": "ENVELOPE. References supporting the verified state. Example: '[]'.",
+                "examples": ["[]"],
+                "type": "array"
+              },
+              "files": {
+                "description": "ENVELOPE. File references or paths — references, not contents. Contents go in `body`. Example: '[]'.",
+                "examples": ["[]"],
+                "type": "array"
+              },
+              "next_action": {
+                "description": "ENVELOPE. REQUIRED. The single next step, concretely. Alias: next_step. <=2048 chars. Example: 'Call the pricing API for SKU-88 and compare to quote'.",
+                "examples": ["Call the pricing API for SKU-88 and compare to quote"],
+                "type": "string"
+              },
+              "objective": {
+                "description": "ENVELOPE. REQUIRED. The goal, as currently stated. <=2048 chars. Example: 'Decide whether permit P-1 is a sales opportunity'.",
+                "examples": ["Decide whether permit P-1 is a sales opportunity"],
+                "type": "string"
+              },
+              "open_questions": {
+                "description": "ENVELOPE. Unresolved questions blocking or shaping the work. Example: '[]'.",
+                "examples": ["[]"],
+                "type": "array"
+              },
+              "priority": {
+                "description": "ENVELOPE. 0 (highest) to 9. Example: '5'.",
+                "examples": [5],
+                "type": "integer"
+              },
+              "privacy_mode": {
+                "description": "'none' (default; body stored as given, still never introspected) or 'client_key' (you encrypted it; we cannot read it and never hold your key). 'escrow' is reserved and not enabled. Example: 'none'.",
+                "examples": ["none"],
+                "type": "string"
+              },
+              "provider_extras": {
+                "description": "BODY, OPAQUE. Vendor/framework-specific state. Stored and returned verbatim, never interpreted. Example: '{}'.",
+                "examples": ["{}"],
+                "type": "object"
+              },
+              "remaining": {
+                "description": "ENVELOPE. What still has to be done. Example: '[\"price it\",\"draft the email\"]'.",
+                "examples": ["[\"price it\",\"draft the email\"]"],
+                "type": "array"
+              },
+              "risks": {
+                "description": "ENVELOPE. Known risks. Example: '[]'.",
+                "examples": ["[]"],
+                "type": "array"
+              },
+              "scope": {
+                "description": "The unit of work. Alias: workflow_id. Namespace-scoped. Example: 'permit-review-2026-08'.",
+                "examples": ["permit-review-2026-08"],
+                "type": "string"
+              },
+              "state": {
+                "description": "BODY, OPAQUE. Free-form resume state, never parsed. Example: '{\"cursor\":\"abc\"}'.",
+                "examples": ["{\"cursor\":\"abc\"}"],
+                "type": "object"
+              },
+              "status": {
+                "description": "ENVELOPE. Where the work stands, e.g. in_progress / blocked / waiting / done. Your vocabulary; we do not interpret it. Example: 'in_progress'.",
+                "examples": ["in_progress"],
+                "type": "string"
+              },
+              "step": {
+                "description": "ENVELOPE. Optional short step label. Example: 'step-3'.",
+                "examples": ["step-3"],
+                "type": "string"
+              },
+              "tools_used": {
+                "description": "ENVELOPE. Tools already called, so the next invocation does not redo the work. Example: '[]'.",
+                "examples": ["[]"],
+                "type": "array"
+              },
+              "ttl_seconds": {
+                "description": "Retention. Default 2592000 (30d), max 7776000 (90d). Example: '2592000'.",
+                "examples": [2592000],
+                "type": "integer"
+              },
+              "verified_state": {
+                "description": "ENVELOPE. A SHORT summary of what was actually CONFIRMED (not assumed). Put the detail in `body`. Example: '{\"permit_fetched\":true}'.",
+                "examples": ["{\"permit_fetched\":true}"],
+                "type": "object"
+              }
+            },
+            "required": ["next_action", "objective", "scope"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": false
+          },
+          "digest": "sha256:3b3d0e05bd23742a32439f6b975bf92fcde4f335bdd8ba9c6e5c042cf213cf30"
+        },
+        {
+          "name": "claim",
+          "title": "Idempotency claim",
+          "description": "Exactly-once guard for work that costs money or has side effects. The first call for a key returns granted:true and is FREE. Every later call for that key returns granted:false with first_claimed_at and, if complete() was called, the stored result — so a retrying agent gets the answer instead of paying for the same paid API call twice. $0.002 is charged the FIRST time a key is denied (and again only if complete() has since attached a new result); repeated denials of the same unchanged fact are free. If we cannot determine the state we return granted:null and you must NOT proceed. Costs $0.002 USDC per call via x402 on Base, and ONLY when granted === false, and this exact denial has not been billed before; otherwise the same call returns the full answer and settles nothing. Authenticate with Authorization: Bearer <agent_secret>, or pass agent_key as an argument if your host cannot set headers. Equivalent HTTP route: POST /v1/claim.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "agent_key": {
+                "description": "Your agent_secret, if your MCP host cannot set the Authorization header. Prefer the header.",
+                "examples": ["the agent_secret that register returned"],
+                "type": "string"
+              },
+              "key": {
+                "description": "Your idempotency key. Scoped to your namespace; hashed before storage. <=256 chars. Example: 'charge-order-8814'.",
+                "examples": ["charge-order-8814"],
+                "type": "string"
+              },
+              "scope": {
+                "description": "Optional unit of work this belongs to. Recording it lets resume_packet tell a later invocation you already made this claim. Example: 'permit-review-2026-08'.",
+                "examples": ["permit-review-2026-08"],
+                "type": "string"
+              },
+              "ttl_seconds": {
+                "description": "How long the claim is remembered. Default 86400, max 2592000. Example: '86400'.",
+                "examples": [86400],
+                "type": "integer"
+              }
+            },
+            "required": ["key"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": false
+          },
+          "digest": "sha256:0f1469708bf709d11aed44f64732bc88789c4eb359b0b59b8cad0b144e52d9c4"
+        },
+        {
+          "name": "complete",
+          "title": "Attach a result to a claim",
+          "description": "Attach the outcome to an idempotency CLAIM you hold — NOT for finishing a mailbox task (use inbox_ack) or a queue item (use work_done). A later duplicate attempt then receives your stored result from claim() instead of redoing the work. FREE — this is a write, and we never bill for storing. If the claim has expired or you never held one, we REFUSE with recorded:false, reason 'no_active_claim' rather than storing a result nothing will ever read; re-claim the key first. The result is an opaque blob: we never parse, index or log it. FREE — this tool never charges. Authenticate with Authorization: Bearer <agent_secret>, or pass agent_key as an argument if your host cannot set headers. Equivalent HTTP route: POST /v1/complete.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "agent_key": {
+                "description": "Your agent_secret, if your MCP host cannot set the Authorization header. Prefer the header.",
+                "examples": ["the agent_secret that register returned"],
+                "type": "string"
+              },
+              "key": {
+                "description": "The same key you claimed. Example: 'charge-order-8814'.",
+                "examples": ["charge-order-8814"],
+                "type": "string"
+              },
+              "result": {
+                "description": "Opaque result blob, <=32768 bytes serialized. Example: '{\"tx\":\"0x..\"}'.",
+                "examples": ["{\"tx\":\"0x..\"}"],
+                "type": "object"
+              },
+              "status": {
+                "description": "Optional: 'ok' or 'failed'. Default 'ok'. Recorded verbatim, not interpreted. Example: 'ok'.",
+                "examples": ["ok"],
+                "type": "string"
+              }
+            },
+            "required": ["key", "result"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": false
+          },
+          "digest": "sha256:bbcb5af817c5b010017cfa7cb4cdc8604e41fe634b9767771bc640df9400974b"
+        },
+        {
+          "name": "heartbeat",
+          "title": "Dead-man switch",
+          "description": "AN AGENT CANNOT DETECT ITS OWN DEATH — from the inside, 'I stopped' and 'I am about to do the next step' are the same thing. Only something outside the process can tell them apart. Each call records a beat and arms a durable alarm for expect_within_seconds. Beat again in time and the alarm simply re-arms. Miss it and the expiry actions run EXACTLY ONCE: release_leases (the same release path a live agent uses), queue_alert (one envelope into a mailbox address you nominate), mark_failed (so resume_packet reports the death as an OBSERVED fact, not a self-report). FREE — it is a write. The alert is billed only when it is collected, by the existing inbox_poll first-delivery rule; there is no second charge. FREE — this tool never charges. Authenticate with Authorization: Bearer <agent_secret>, or pass agent_key as an argument if your host cannot set headers. Equivalent HTTP route: POST /v1/heartbeat.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "agent_id": {
+                "description": "Optional label for the beating instance, carried in the alert so a human can tell which worker died. <=64 chars. Example: 'worker-3'.",
+                "examples": ["worker-3"],
+                "type": "string"
+              },
+              "agent_key": {
+                "description": "Your agent_secret, if your MCP host cannot set the Authorization header. Prefer the header.",
+                "examples": ["the agent_secret that register returned"],
+                "type": "string"
+              },
+              "disarm": {
+                "description": "Stop the switch instead of beating. Use this when the work finishes, or a completed job raises a false alarm. Default false. Example: 'false'.",
+                "examples": ["false"],
+                "type": "boolean"
+              },
+              "expect_within_seconds": {
+                "description": "Beat again within this many seconds or the switch fires. Min 2, max 2592000 (30 days). Example: '300'.",
+                "examples": [300],
+                "type": "integer"
+              },
+              "notify_address": {
+                "description": "REQUIRED with 'queue_alert'. A registered address, 'agent:<id>' or 'agent:<id>/<box>'. WRITE-ONLY: we queue an envelope into it and never read it, exactly like send(). Example: 'agent:7k2p.../alerts'.",
+                "examples": ["agent:7k2p.../alerts"],
+                "type": "string"
+              },
+              "on_expiry": {
+                "description": "Which actions run if the next beat is late: any of 'release_leases', 'queue_alert', 'mark_failed'. Default ['mark_failed']. They always run in the order release_leases, mark_failed, queue_alert so the alert can report what was released. NOTE that release_leases can only reach leases taken with a `scope` — it reports its own blind spot rather than returning a silent empty list. Example: '[\"release_leases\",\"queue_alert\"]'.",
+                "examples": ["[\"release_leases\",\"queue_alert\"]"],
+                "type": "array"
+              },
+              "scope": {
+                "description": "The unit of work whose liveness this tracks. Namespace-scoped, and the scope resume_packet will report the death against. Example: 'permit-review-2026-08'.",
+                "examples": ["permit-review-2026-08"],
+                "type": "string"
+              }
+            },
+            "required": ["expect_within_seconds", "scope"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": false
+          },
+          "digest": "sha256:7e586b794be290147be6bdf129bf22333ebb65efd6f4a913f9bab5c6723c9ca0"
+        },
+        {
+          "name": "inbox_ack",
+          "title": "Mark a task done",
+          "description": "Acknowledge a task you finished. FREE and idempotent — acking twice is not an error. If the task was a repeating schedule, the next occurrence is queued now. An optional opaque result is stored on the tombstone so a later duplicate can see what happened. If your visibility timeout already lapsed and the envelope was redelivered, the ack still succeeds and removes it — this queue has no fence token, so ack cannot tell your late ack from the current holder's. Ack promptly, or raise visibility_timeout_seconds on inbox_poll; if you need refuse-on-lost-ownership, that is work_take/work_done, which is fenced. An unknown task_id returns acked:false, reason 'unknown_task' — it may have been dead-lettered, or its tombstone may have expired. FREE — this tool never charges. Authenticate with Authorization: Bearer <agent_secret>, or pass agent_key as an argument if your host cannot set headers. Equivalent HTTP route: POST /v1/inbox/ack.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "agent_key": {
+                "description": "Your agent_secret, if your MCP host cannot set the Authorization header. Prefer the header.",
+                "examples": ["the agent_secret that register returned"],
+                "type": "string"
+              },
+              "result": {
+                "description": "Optional opaque outcome blob. Example: '{\"ok\":true}'.",
+                "examples": ["{\"ok\":true}"],
+                "type": "object"
+              },
+              "status": {
+                "description": "'done' or 'failed'. Default 'done'. Recorded, not interpreted. Example: 'done'.",
+                "examples": ["done"],
+                "type": "string"
+              },
+              "task_id": {
+                "description": "The task_id from inbox_poll. Example: 'tsk_...'.",
+                "examples": ["tsk_..."],
+                "type": "string"
+              }
+            },
+            "required": ["task_id"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": true,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": false
+          },
+          "digest": "sha256:e1f2c3152a5dfad60343c0316ea78098aa6f9931b0388d07cfb1f7c66e3d26a5"
+        },
+        {
+          "name": "inbox_nack",
+          "title": "Give a task back",
+          "description": "Explicitly return a claimed task to the queue instead of waiting for its visibility timeout, optionally deferring it. FREE. Redelivery of the same task_id is always free, so handing work back costs nothing. FREE — this tool never charges. Authenticate with Authorization: Bearer <agent_secret>, or pass agent_key as an argument if your host cannot set headers. Equivalent HTTP route: POST /v1/inbox/nack.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "agent_key": {
+                "description": "Your agent_secret, if your MCP host cannot set the Authorization header. Prefer the header.",
+                "examples": ["the agent_secret that register returned"],
+                "type": "string"
+              },
+              "delay_seconds": {
+                "description": "Defer this many seconds before it is visible again. Default 0. Example: '600'.",
+                "examples": [600],
+                "type": "integer"
+              },
+              "task_id": {
+                "description": "The task_id from inbox_poll. Example: 'tsk_...'.",
+                "examples": ["tsk_..."],
+                "type": "string"
+              }
+            },
+            "required": ["task_id"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": false
+          },
+          "digest": "sha256:9228d1489a564cb98d17e401104bb1147369b99eadef6af4f3da6e1786570f8d"
+        },
+        {
+          "name": "inbox_poll",
+          "title": "What is due for me",
+          "description": "Collect the next due task envelope from your mailbox. One envelope per call. The item is claimed with a visibility timeout: ack it when done, or it returns to the queue for another attempt, so work is never lost if this invocation dies. $0.002 charged the FIRST time a given task_id is delivered; every redelivery of that same task is FREE. Nothing due? We say so and charge nothing. Costs $0.002 USDC per call via x402 on Base, and ONLY when an envelope was delivered for the first time (redelivery is free); otherwise the same call returns the full answer and settles nothing. Authenticate with Authorization: Bearer <agent_secret>, or pass agent_key as an argument if your host cannot set headers. Equivalent HTTP route: POST /v1/inbox/poll.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "agent_key": {
+                "description": "Your agent_secret, if your MCP host cannot set the Authorization header. Prefer the header.",
+                "examples": ["the agent_secret that register returned"],
+                "type": "string"
+              },
+              "box": {
+                "description": "Sub-mailbox to read, default 'inbox'. Example: 'inbox'.",
+                "examples": ["inbox"],
+                "type": "string"
+              },
+              "visibility_timeout_seconds": {
+                "description": "How long the item stays claimed. Default 300, min 5, max 86400. Example: '300'.",
+                "examples": [300],
+                "type": "integer"
+              }
+            },
+            "required": [],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": false,
+            "openWorldHint": false,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": false,
+            "openWorld": false,
+            "readOnly": false
+          },
+          "digest": "sha256:be4a9df72a517d68ff34c2c663ce4f2c97a006efac93b26fbefe4ddb2142aa88"
+        },
+        {
+          "name": "inbox_schedule",
+          "title": "Leave a note for your future self",
+          "description": "Leave work for your own next invocation — the same as send() addressed to yourself. FREE. No callback URL is required or accepted: agents are not web services and mostly have no endpoint, so the model is a future inbox, not a webhook. Whenever your next invocation starts, inbox_poll finds this waiting. FREE — this tool never charges. Authenticate with Authorization: Bearer <agent_secret>, or pass agent_key as an argument if your host cannot set headers. Equivalent HTTP route: POST /v1/inbox/schedule.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "agent_key": {
+                "description": "Your agent_secret, if your MCP host cannot set the Authorization header. Prefer the header.",
+                "examples": ["the agent_secret that register returned"],
+                "type": "string"
+              },
+              "attachments": {
+                "description": "Opaque refs or blobs. Example: '[]'.",
+                "examples": ["[]"],
+                "type": "array"
+              },
+              "box": {
+                "description": "Sub-mailbox name, default 'inbox'. Example: 'inbox'.",
+                "examples": ["inbox"],
+                "type": "string"
+              },
+              "context": {
+                "description": "Opaque payload. Never parsed or logged. Example: '{\"permit_id\":\"P-1\"}'.",
+                "examples": ["{\"permit_id\":\"P-1\"}"],
+                "type": "object"
+              },
+              "dedupe_key": {
+                "description": "Optional duplicate suppression key. Example: 'permit-P-1'.",
+                "examples": ["permit-P-1"],
+                "type": "string"
+              },
+              "due_at": {
+                "description": "ISO-8601 due time. Example: '2026-08-13T09:00:00Z'.",
+                "examples": ["2026-08-13T09:00:00Z"],
+                "type": "string"
+              },
+              "every_seconds": {
+                "description": "Optional repeat interval (>=60). Example: '86400'.",
+                "examples": [86400],
+                "type": "integer"
+              },
+              "history": {
+                "description": "Prior reasoning or tool output. Example: '[]'.",
+                "examples": ["[]"],
+                "type": "array"
+              },
+              "in_seconds": {
+                "description": "Alternative to due_at: seconds from now. Example: '3600'.",
+                "examples": [3600],
+                "type": "integer"
+              },
+              "max_deliveries": {
+                "description": "Attempts before dead-lettering. Default 5, max 50. Example: '5'.",
+                "examples": [5],
+                "type": "integer"
+              },
+              "objective": {
+                "description": "What future-you should achieve, <=2048 chars. Example: 'Re-check the permit status'.",
+                "examples": ["Re-check the permit status"],
+                "type": "string"
+              },
+              "priority": {
+                "description": "0 (highest) to 9. Default 5. Among DUE items, delivery order is priority first, then oldest due time. Example: '5'.",
+                "examples": [5],
+                "type": "integer"
+              },
+              "provider_extras": {
+                "description": "Vendor/framework-specific state. Carried verbatim, never interpreted. Example: '{}'.",
+                "examples": ["{}"],
+                "type": "object"
+              },
+              "repeat_count": {
+                "description": "Further occurrences to queue. Default 0, max 1000. Example: '7'.",
+                "examples": [7],
+                "type": "integer"
+              },
+              "scope": {
+                "description": "Optional unit of work this task belongs to, so resume_packet groups it. Example: 'permit-review-2026-08'.",
+                "examples": ["permit-review-2026-08"],
+                "type": "string"
+              }
+            },
+            "required": ["objective"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": false,
+            "openWorldHint": false,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": false,
+            "openWorld": false,
+            "readOnly": false
+          },
+          "digest": "sha256:c2984dab27ede67403d16b50198ccc494801239eddfbdbde63abec879f53e200"
+        },
+        {
+          "name": "job_cancel",
+          "title": "Tell every worker on a job to stop",
+          "description": "There is otherwise NO WAY TO TELL FIVE RUNNING AGENTS TO STOP — they finish and bill you for work you no longer want. This sets a durable stop flag on the job. FREE and idempotent. work_take on a cancelled job hands out nothing (and charges nothing), and should_continue answers 'no'. We do not kill anything: workers cooperate by checking, which is the only honest thing a service outside your process can offer. FREE — this tool never charges. Authenticate with Authorization: Bearer <agent_secret>, or pass agent_key as an argument if your host cannot set headers. Equivalent HTTP route: POST /v1/job/cancel.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "agent_key": {
+                "description": "Your agent_secret, if your MCP host cannot set the Authorization header. Prefer the header.",
+                "examples": ["the agent_secret that register returned"],
+                "type": "string"
+              },
+              "job_id": {
+                "description": "The job to cancel. This is the same identifier as a work queue's queue_id, so cancelling a queue stops its workers. Alias: queue_id. Example: 'permit-batch-2026-08'.",
+                "examples": ["permit-batch-2026-08"],
+                "type": "string"
+              },
+              "reason": {
+                "description": "Optional short reason, <=512 chars, returned to every worker that asks. Example: 'customer withdrew the request'.",
+                "examples": ["customer withdrew the request"],
+                "type": "string"
+              }
+            },
+            "required": ["job_id"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": true,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": false
+          },
+          "digest": "sha256:9dff16ba770daedad40d14f88e62b612e99282d5f3c717f844117308c4480f54"
+        },
+        {
+          "name": "lease",
+          "title": "Acquire a mutual-exclusion lease",
+          "description": "Mutual exclusion so two instances of the same agent do not both process one item. Returns acquired:true with a fence token (FREE), or acquired:false naming the current holder and when the lease expires. ACQUIRED:FALSE MEANS YOU DO NOT HOLD THE LOCK — you must NOT proceed, and must not treat the refusal as advisory: stop work on that resource, wait retry_after_seconds, or do something else. acquired:null means we could not determine the state, which is also not permission to proceed. YOU ARE GIVEN TWO NUMBERS AND THEY DO DIFFERENT JOBS. `fence` is a CREDENTIAL: a large integer drawn fresh and independently for every acquisition, so it is never 1, never a step from the fence you held last time, and not computable from any number of fences you have ever been given. Treat it as a secret — it is the one thing that tells you apart from another instance using your holder label. `generation` is the ORDER: a counter that strictly increases on every fresh acquisition and never resets, not on expiry and not on release. It is not a secret, it is the number to compare and the number to hand to an external store that must reject stale writers. A revived holder from an earlier generation therefore cannot renew or release a lease someone else now holds — not because its number is smaller, but because it does not have the new one. RE-ACQUIRING A LEASE YOU HOLD IS A RENEWAL ONLY IF YOU PRESENT ITS `fence` — a holder LABEL is not proof, because two instances of the same agent are exactly the callers most likely to share one, and we will not hand the same lock to both. A live lease requested under its own label without the fence is REFUSED with acquired:false, same_holder_label:true and held_by, never silently renewed. A renewal keeps your fence and stays free. $0.002 is charged the first time you are refused by a given holder; being refused again by the SAME holder is free. Costs $0.002 USDC per call via x402 on Base, and ONLY when acquired === false, and this refusal by this holder has not been billed before; otherwise the same call returns the full answer and settles nothing. Authenticate with Authorization: Bearer <agent_secret>, or pass agent_key as an argument if your host cannot set headers. Equivalent HTTP route: POST /v1/lease.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "agent_key": {
+                "description": "Your agent_secret, if your MCP host cannot set the Authorization header. Prefer the header.",
+                "examples": ["the agent_secret that register returned"],
+                "type": "string"
+              },
+              "fence": {
+                "description": "Optional: the fence token you were given for this key. Supply it to RENEW the lease you already hold. Omit it and a live lease is refused rather than renewed, because a holder label alone cannot tell you apart from another instance using the same one. It is a CREDENTIAL, not a counter: each acquisition draws an independent large integer, so it is never 1, never the last one plus one, and cannot be computed from any fence you have held before. The value below is a shape, not a value that will work. Example: '3170294857216913'.",
+                "examples": [3170294857216913],
+                "type": "integer"
+              },
+              "holder": {
+                "description": "Who is asking — an instance id you choose. Required, and it MUST BE UNIQUE PER LIVE INSTANCE: two concurrently running copies that send the same holder are two different callers, and only one of them can hold the lock. Use a per-process value (a uuid, a pod name), not a role name every replica shares. Example: 'worker-3-6f2a91'.",
+                "examples": ["worker-3-6f2a91"],
+                "type": "string"
+              },
+              "key": {
+                "description": "Resource being locked. Namespace-scoped, hashed before storage. Example: 'queue/orders'.",
+                "examples": ["queue/orders"],
+                "type": "string"
+              },
+              "scope": {
+                "description": "Optional unit of work, so resume_packet can report the leases you still hold. IT IS ALSO WHAT MAKES THIS LEASE RECOVERABLE: a dead-man switch releases only leases recorded against a scope, so a lease taken without one is invisible to it and a dead holder's lock will block the work for the lease's full TTL. Pass it on every lease you want a switch to be able to give back. Example: 'permit-review-2026-08'.",
+                "examples": ["permit-review-2026-08"],
+                "type": "string"
+              },
+              "ttl_seconds": {
+                "description": "Lease lifetime. Default 60, max 3600. Example: '60'.",
+                "examples": [60],
+                "type": "integer"
+              }
+            },
+            "required": ["holder", "key"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": false
+          },
+          "digest": "sha256:cbe2db34170244faba0af8b41ab45f99ab4d2f126197923b03465c0ceed45601"
+        },
+        {
+          "name": "lease_release",
+          "title": "Release a lease",
+          "description": "Release a lease you hold so the next worker can take it immediately instead of waiting for the TTL. FREE. If you no longer hold it we REFUSE rather than free someone else's lock: a stale fence returns released:false, reason 'not_holder', naming the current holder — treat that as having lost the lock and stop work. An already-expired lease returns released:false, reason 'expired'. Neither is an error you can retry away; both mean the lock is not yours. A successful release also corrects the scope ledger, so resume_packet stops briefing a later agent that it still holds a lock it gave back. FREE — this tool never charges. Authenticate with Authorization: Bearer <agent_secret>, or pass agent_key as an argument if your host cannot set headers. Equivalent HTTP route: POST /v1/lease/release.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "agent_key": {
+                "description": "Your agent_secret, if your MCP host cannot set the Authorization header. Prefer the header.",
+                "examples": ["the agent_secret that register returned"],
+                "type": "string"
+              },
+              "fence": {
+                "description": "The fence token from lease(). Required, and checked exactly: a stale one is refused, never honoured. Each acquisition's token is an independent draw, so the one you were given for an earlier generation of this key does not become the current one by adding to it. The example below is a shape, not a usable value. Example: '3170294857216913'.",
+                "examples": [3170294857216913],
+                "type": "integer"
+              },
+              "holder": {
+                "description": "The holder id that owns the lease. Example: 'worker-3-6f2a91'.",
+                "examples": ["worker-3-6f2a91"],
+                "type": "string"
+              },
+              "key": {
+                "description": "The leased key. Example: 'queue/orders'.",
+                "examples": ["queue/orders"],
+                "type": "string"
+              }
+            },
+            "required": ["fence", "holder", "key"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": true,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": false
+          },
+          "digest": "sha256:37e07821b5fe3c80f31a53619acd2d3b0fe523a70b37f9fec37396930d402d27"
+        },
+        {
+          "name": "lease_renew",
+          "title": "Extend a lease you hold",
+          "description": "Extend a lease you still hold, using the fence token you were given. FREE. Fails (renewed:false) if the lease expired or was taken by someone else — treat that as having lost the lock and stop work. A renewal keeps both of your numbers: the same fence and the same generation, because it is the same acquisition. A successful renewal also corrects the scope ledger, so resume_packet and the dead-man switch see the real new expiry rather than the one recorded when you first acquired it. FREE — this tool never charges. Authenticate with Authorization: Bearer <agent_secret>, or pass agent_key as an argument if your host cannot set headers. Equivalent HTTP route: POST /v1/lease/renew.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "agent_key": {
+                "description": "Your agent_secret, if your MCP host cannot set the Authorization header. Prefer the header.",
+                "examples": ["the agent_secret that register returned"],
+                "type": "string"
+              },
+              "fence": {
+                "description": "The fence token from lease(). Required, and only the caller lease() handed it to has it — it is drawn independently for each acquisition, so it cannot be derived from an earlier one and the example below is a shape, not a usable value. Example: '3170294857216913'.",
+                "examples": [3170294857216913],
+                "type": "integer"
+              },
+              "holder": {
+                "description": "The same holder id you acquired with. Example: 'worker-3-6f2a91'.",
+                "examples": ["worker-3-6f2a91"],
+                "type": "string"
+              },
+              "key": {
+                "description": "The leased key. Example: 'queue/orders'.",
+                "examples": ["queue/orders"],
+                "type": "string"
+              },
+              "ttl_seconds": {
+                "description": "New lifetime from now. Default 60, max 3600. Example: '60'.",
+                "examples": [60],
+                "type": "integer"
+              }
+            },
+            "required": ["fence", "holder", "key"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": false
+          },
+          "digest": "sha256:013579dc22fa135627ac62d74578444b04f55999ed9f6eccfe8523daa21815d6"
+        },
+        {
+          "name": "register",
+          "title": "Register an agent namespace and mailbox",
+          "description": "Create a durable identity for an agent. Returns an agent_secret (the only credential; store it in the agent's configuration the way you would an API key — an amnesiac agent cannot remember it for you), the public agent address other agents mail work to, and the namespace id. FREE. The secret is never stored here: the namespace id is its salted SHA-256 digest, so a dump of our storage cannot reveal it, and we cannot recover it for you if you lose it. FREE — this tool never charges. Authenticate with Authorization: Bearer <agent_secret>, or pass agent_key as an argument if your host cannot set headers. Equivalent HTTP route: POST /v1/register.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "agent_id": {
+                "description": "A label you choose and own, <=64 chars. Never derive it from a provider's session/thread/run id — that would bind your continuation to the platform that issued it. Alias: label. Example: 'pricing-agent'.",
+                "examples": ["pricing-agent"],
+                "type": "string"
+              },
+              "agent_secret": {
+                "description": "Optional: bring your own secret (>=32 chars) derived from your own secret manager. Omit to have one generated. Example: 'a-secret-of-at-least-32-characters-from-your-own-manager'.",
+                "examples": ["a-secret-of-at-least-32-characters-from-your-own-manager"],
+                "type": "string"
+              }
+            },
+            "required": [],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": false,
+            "openWorldHint": false,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": false,
+            "openWorld": false,
+            "readOnly": false
+          },
+          "digest": "sha256:6fee1d04289c3cfe18d1ebf377a7d421f04cf5afe2d9ce77feba2f80f7f6edcb"
+        },
+        {
+          "name": "resume_packet",
+          "title": "Resume the work, not the conversation",
+          "description": "THE HEADLINE TOOL. Returns a briefing, not an archive: objective, last verified state, what arrived while you were gone, the single next action, files, risks, open questions, tools already used and budget remaining. Composed from your last checkpoint PLUS server-observed facts we hold ourselves — the claims you made, the leases you still hold, the watermarks you set, the mail that arrived since — so the packet is not limited to what an earlier session remembered to write down. Provider-neutral plain JSON: a checkpoint written by one model under one framework is resumable by any other. $0.002 only when there is a real packet to return AND that briefing has changed since you last paid for it — recomposing the same briefing is free. An empty scope tells you so and costs nothing. Costs $0.002 USDC per call via x402 on Base, and ONLY when the packet carries something — a checkpoint, new events since it, or server-observed facts — and this exact briefing has not been billed before; otherwise the same call returns the full answer and settles nothing. Authenticate with Authorization: Bearer <agent_secret>, or pass agent_key as an argument if your host cannot set headers. Equivalent HTTP route: POST /v1/resume.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "agent_key": {
+                "description": "Your agent_secret, if your MCP host cannot set the Authorization header. Prefer the header.",
+                "examples": ["the agent_secret that register returned"],
+                "type": "string"
+              },
+              "box": {
+                "description": "Sub-mailbox to count new events from, default 'inbox'. Example: 'inbox'.",
+                "examples": ["inbox"],
+                "type": "string"
+              },
+              "max_events": {
+                "description": "How many new-event headers to include, 1..50. Default 25. Example: '25'.",
+                "examples": [25],
+                "type": "integer"
+              },
+              "scope": {
+                "description": "The unit of work to resume — a workflow, project or task id you choose. Namespace-scoped. Example: 'permit-review-2026-08'.",
+                "examples": ["permit-review-2026-08"],
+                "type": "string"
+              }
+            },
+            "required": ["scope"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:5323733e1bfd7c031691dd372e2c6cbb870443e2d90534b755df43e7a3c64921"
+        },
+        {
+          "name": "retry_state",
+          "title": "Attempt count and backoff that survives a crash",
+          "description": "Durable retry bookkeeping, so backoff survives the session that died. Returns the attempt count, first and last attempt times, and a deterministic suggested backoff. Pass record:true to count this attempt. $0.002 ONLY when we return remembered history from an earlier session (attempts>0 before this call), and only when that attempt count has changed since you last paid for it. The very first call for a key tells you nothing you did not know, so it is free. NOTE that record:true is a WRITE: it counts a new attempt, so it produces a genuinely new answer and is billable again. Use the default record:false to read the history without changing it. Costs $0.002 USDC per call via x402 on Base, and ONLY when attempts_before_call >= 1 (remembered history from an earlier session), and this exact attempt count has not been billed before; otherwise the same call returns the full answer and settles nothing. Authenticate with Authorization: Bearer <agent_secret>, or pass agent_key as an argument if your host cannot set headers. Equivalent HTTP route: POST /v1/retry-state.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "agent_key": {
+                "description": "Your agent_secret, if your MCP host cannot set the Authorization header. Prefer the header.",
+                "examples": ["the agent_secret that register returned"],
+                "type": "string"
+              },
+              "key": {
+                "description": "What is being retried. Namespace-scoped, hashed before storage. Example: 'sync-vendor-7'.",
+                "examples": ["sync-vendor-7"],
+                "type": "string"
+              },
+              "record": {
+                "description": "Count this attempt before answering. Default false. Example: 'true'.",
+                "examples": ["true"],
+                "type": "boolean"
+              },
+              "scope": {
+                "description": "Optional unit of work, so resume_packet can report what is being retried. Example: 'permit-review-2026-08'.",
+                "examples": ["permit-review-2026-08"],
+                "type": "string"
+              },
+              "ttl_seconds": {
+                "description": "Retention. Default 604800 (7d), max 2592000. Example: '604800'.",
+                "examples": [604800],
+                "type": "integer"
+              }
+            },
+            "required": ["key"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": false
+          },
+          "digest": "sha256:683f4b0ad416e655b272d72020300b709612f1e1721abf1ee1f4d854678c0be9"
+        },
+        {
+          "name": "seen_add",
+          "title": "Remember items you processed",
+          "description": "Record items you have already processed. FREE. Items are stored ONLY as salted SHA-256 digests — we can test membership but cannot read, list or reconstruct what you deduped. A set holds up to 10000 entries; when full, adds are refused (never silently forgotten) and you should rotate to a new set name. FREE — this tool never charges. Authenticate with Authorization: Bearer <agent_secret>, or pass agent_key as an argument if your host cannot set headers. Equivalent HTTP route: POST /v1/seen/add.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "agent_key": {
+                "description": "Your agent_secret, if your MCP host cannot set the Authorization header. Prefer the header.",
+                "examples": ["the agent_secret that register returned"],
+                "type": "string"
+              },
+              "items": {
+                "description": "Up to 100 strings per call, each <=1024 chars. Example: '[\"id-1\",\"id-2\"]'.",
+                "examples": ["[\"id-1\",\"id-2\"]"],
+                "type": "array"
+              },
+              "scope": {
+                "description": "Optional unit of work, so resume_packet can report which sets you are deduping against. Example: 'permit-review-2026-08'.",
+                "examples": ["permit-review-2026-08"],
+                "type": "string"
+              },
+              "set": {
+                "description": "Set name. Namespace-scoped, hashed before storage. Example: 'processed-ids'.",
+                "examples": ["processed-ids"],
+                "type": "string"
+              },
+              "ttl_seconds": {
+                "description": "Sliding set lifetime, refreshed on each add. Default 2592000 (30d), max 31536000. Example: '2592000'.",
+                "examples": [2592000],
+                "type": "integer"
+              }
+            },
+            "required": ["items", "set"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": false
+          },
+          "digest": "sha256:9f6a88a76bc25c96637e103df96010f9f1a35eaf05592dd5c77e5d99a5ff9e8b"
+        },
+        {
+          "name": "seen_check",
+          "title": "Which of these are new",
+          "description": "Given a batch of items, return only the ones not already in the set — the work you actually still have to do. $0.002 ONLY when we filter at least one item out, because that is the call where we saved you work, AND only when that answer has changed since you last paid for it — asking the same question again while the set has not grown is free. If every item is new we tell you so and charge nothing. Costs $0.002 USDC per call via x402 on Base, and ONLY when filtered_count >= 1, and this exact set of already-seen items has not been billed before; otherwise the same call returns the full answer and settles nothing. Authenticate with Authorization: Bearer <agent_secret>, or pass agent_key as an argument if your host cannot set headers. Equivalent HTTP route: POST /v1/seen/check.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "agent_key": {
+                "description": "Your agent_secret, if your MCP host cannot set the Authorization header. Prefer the header.",
+                "examples": ["the agent_secret that register returned"],
+                "type": "string"
+              },
+              "items": {
+                "description": "Up to 100 strings per call. Example: '[\"id-1\",\"id-9\"]'.",
+                "examples": ["[\"id-1\",\"id-9\"]"],
+                "type": "array"
+              },
+              "set": {
+                "description": "The set name. Example: 'processed-ids'.",
+                "examples": ["processed-ids"],
+                "type": "string"
+              }
+            },
+            "required": ["items", "set"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:a2de94ff42cf046b6aa168bd946a4d428d1129e4787324f5354a8e68db34ef5b"
+        },
+        {
+          "name": "send",
+          "title": "Mail a task envelope to an agent",
+          "description": "Agent-to-agent mail. Queue a rich task envelope addressed to any registered agent so it finds the work waiting whenever it next starts. Nobody waits and nobody polls. FREE. You may SEND to an address but never READ another agent's mailbox — reading requires that agent's secret. The envelope carries objective, context, attachments and history so the receiving invocation can start work without rebuilding state it no longer has. A mailbox holds 1000 pending items, of which ordinary mail may occupy 968; the last 32 are reserved for the recipient's OWN dead-man alerts and barrier notifications, so filling someone's mailbox can never silence their safety notifications. FREE — this tool never charges. Authenticate with Authorization: Bearer <agent_secret>, or pass agent_key as an argument if your host cannot set headers. Equivalent HTTP route: POST /v1/mail/send.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "agent_key": {
+                "description": "Your agent_secret, if your MCP host cannot set the Authorization header. Prefer the header.",
+                "examples": ["the agent_secret that register returned"],
+                "type": "string"
+              },
+              "attachments": {
+                "description": "Opaque refs or blobs. Example: '[]'.",
+                "examples": ["[]"],
+                "type": "array"
+              },
+              "context": {
+                "description": "Opaque payload the receiver needs. Never parsed or logged. Example: '{\"permit_id\":\"P-1\"}'.",
+                "examples": ["{\"permit_id\":\"P-1\"}"],
+                "type": "object"
+              },
+              "dedupe_key": {
+                "description": "Optional. A second send with the same dedupe_key to the same mailbox is refused as a duplicate. Example: 'permit-P-1'.",
+                "examples": ["permit-P-1"],
+                "type": "string"
+              },
+              "due_at": {
+                "description": "ISO-8601 time it becomes visible. Default: immediately. Example: '2026-08-13T09:00:00Z'.",
+                "examples": ["2026-08-13T09:00:00Z"],
+                "type": "string"
+              },
+              "every_seconds": {
+                "description": "Optional repeat interval (>=60). A new occurrence is queued when this one is acked. Example: '86400'.",
+                "examples": [86400],
+                "type": "integer"
+              },
+              "history": {
+                "description": "Prior reasoning or tool output from earlier episodes. Example: '[]'.",
+                "examples": ["[]"],
+                "type": "array"
+              },
+              "in_seconds": {
+                "description": "Alternative to due_at: become visible this many seconds from now. Example: '3600'.",
+                "examples": [3600],
+                "type": "integer"
+              },
+              "max_deliveries": {
+                "description": "Attempts before dead-lettering. Default 5, max 50. Example: '5'.",
+                "examples": [5],
+                "type": "integer"
+              },
+              "objective": {
+                "description": "What the receiving agent should achieve, <=2048 chars. Example: 'Determine if this creates a sales opportunity'.",
+                "examples": ["Determine if this creates a sales opportunity"],
+                "type": "string"
+              },
+              "priority": {
+                "description": "0 (highest) to 9. Default 5. Among the items that are DUE, delivery order is priority first, then oldest due time. So a stream of higher-priority items can delay a lower-priority one indefinitely — that is deliberate: it is what lets a dead-man alert (priority 1) reach an agent ahead of a backlog of ordinary mail (default 5). Example: '5'.",
+                "examples": [5],
+                "type": "integer"
+              },
+              "provider_extras": {
+                "description": "Vendor/framework-specific state. Carried verbatim, never interpreted. Example: '{}'.",
+                "examples": ["{}"],
+                "type": "object"
+              },
+              "repeat_count": {
+                "description": "How many further occurrences to queue. Default 0, max 1000. Example: '7'.",
+                "examples": [7],
+                "type": "integer"
+              },
+              "scope": {
+                "description": "Optional unit of work this task belongs to, so the recipient's resume_packet groups it. Example: 'permit-review-2026-08'.",
+                "examples": ["permit-review-2026-08"],
+                "type": "string"
+              },
+              "to": {
+                "description": "Destination address, 'agent:<id>' or 'agent:<id>/<box>'. Must be registered. Example: 'agent:7k2p.../pricing'.",
+                "examples": ["agent:7k2p.../pricing"],
+                "type": "string"
+              }
+            },
+            "required": ["objective", "to"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": false,
+            "openWorldHint": false,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": false,
+            "openWorld": false,
+            "readOnly": false
+          },
+          "digest": "sha256:980bc3298199230e161b636c00801436f22bb6d22a55d79696b07ea011322cc1"
+        },
+        {
+          "name": "should_continue",
+          "title": "Should I keep going",
+          "description": "The check a worker makes between items. $0.002 ONLY WHEN THE ANSWER IS 'no' — that is the call that saved you money, and the first caller told to stop is the only one billed for it, because every later 'no' is the same fact. A 'keep going' answer told you nothing you did not already assume, so it is FREE, always. An unknown job answers 'keep going' and charges nothing. If we cannot determine the state we fail closed with continue:null and you should retry rather than guess. Costs $0.002 USDC per call via x402 on Base, and ONLY when continue === false, and this cancellation has not been billed before; otherwise the same call returns the full answer and settles nothing. Authenticate with Authorization: Bearer <agent_secret>, or pass agent_key as an argument if your host cannot set headers. Equivalent HTTP route: POST /v1/job/should-continue.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "agent_key": {
+                "description": "Your agent_secret, if your MCP host cannot set the Authorization header. Prefer the header.",
+                "examples": ["the agent_secret that register returned"],
+                "type": "string"
+              },
+              "job_id": {
+                "description": "The job to check. Alias: queue_id. Example: 'permit-batch-2026-08'.",
+                "examples": ["permit-batch-2026-08"],
+                "type": "string"
+              }
+            },
+            "required": ["job_id"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": false
+          },
+          "digest": "sha256:415460fa16adb6c429fd746833662528da672b8f46e2e3970202de46b0d65ff0"
+        },
+        {
+          "name": "watermark_get",
+          "title": "What is new since I last looked",
+          "description": "Fetch the position you last recorded for a stream, so you can ask an upstream only for what is new. $0.002 ONLY when a watermark exists AND its position has moved since you last paid for it — re-reading an unchanged position is free. Never set one? Then we tell you so and charge nothing. Costs $0.002 USDC per call via x402 on Base, and ONLY when found === true, and this exact position has not been billed before; otherwise the same call returns the full answer and settles nothing. Authenticate with Authorization: Bearer <agent_secret>, or pass agent_key as an argument if your host cannot set headers. Equivalent HTTP route: POST /v1/watermark/get.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "agent_key": {
+                "description": "Your agent_secret, if your MCP host cannot set the Authorization header. Prefer the header.",
+                "examples": ["the agent_secret that register returned"],
+                "type": "string"
+              },
+              "stream": {
+                "description": "The stream identifier. Example: 'orders-feed'.",
+                "examples": ["orders-feed"],
+                "type": "string"
+              }
+            },
+            "required": ["stream"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:6520436c4e82cbcd89eb3b3dd476fe2dedfee143acc5b4339ae690ed57b6d565"
+        },
+        {
+          "name": "watermark_set",
+          "title": "Record how far you read",
+          "description": "Record how far you got through a stream, feed or table so the next invocation knows where to start. FREE. The position is an opaque string we store verbatim and never interpret. FREE — this tool never charges. Authenticate with Authorization: Bearer <agent_secret>, or pass agent_key as an argument if your host cannot set headers. Equivalent HTTP route: POST /v1/watermark/set.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "agent_key": {
+                "description": "Your agent_secret, if your MCP host cannot set the Authorization header. Prefer the header.",
+                "examples": ["the agent_secret that register returned"],
+                "type": "string"
+              },
+              "position": {
+                "description": "Opaque cursor/offset/timestamp, <=1024 chars. Example: '2026-08-12T09:00:00Z'.",
+                "examples": ["2026-08-12T09:00:00Z"],
+                "type": "string"
+              },
+              "scope": {
+                "description": "Optional unit of work, so resume_packet can report where you had read to. Example: 'permit-review-2026-08'.",
+                "examples": ["permit-review-2026-08"],
+                "type": "string"
+              },
+              "stream": {
+                "description": "Stream identifier. Namespace-scoped, hashed before storage. Example: 'orders-feed'.",
+                "examples": ["orders-feed"],
+                "type": "string"
+              },
+              "ttl_seconds": {
+                "description": "Retention. Default 7776000 (90d), max 31536000 (365d). Example: '7776000'.",
+                "examples": [7776000],
+                "type": "integer"
+              }
+            },
+            "required": ["position", "stream"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": false
+          },
+          "digest": "sha256:f3ba0bca5fc34d00dd18799dcfcb15f21b3299ad023e26e99d3e99ef5abf54f4"
+        },
+        {
+          "name": "whoami",
+          "title": "Your address and mailbox counts",
+          "description": "Report this namespace's public address, registration time, and mailbox counts: how many items exist, how many are due right now, when the next one falls due, and how many are dead-lettered. FREE, deliberately: knowing THAT work exists must never cost money — only the envelope itself is billable. Poll this for free, then pay only when there is something to collect. FREE — this tool never charges. Authenticate with Authorization: Bearer <agent_secret>, or pass agent_key as an argument if your host cannot set headers. Equivalent HTTP route: POST /v1/whoami.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "agent_key": {
+                "description": "Your agent_secret, if your MCP host cannot set the Authorization header. Prefer the header.",
+                "examples": ["the agent_secret that register returned"],
+                "type": "string"
+              }
+            },
+            "required": [],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:0345bf481241529eac8460fa4aaaea1b567de64b313ccb0ffeb1e57483b39ec2"
+        },
+        {
+          "name": "work_done",
+          "title": "Mark a work item finished",
+          "description": "Complete an item you hold. FREE. If your lease already expired and the item went back to the queue we REFUSE with lease_lost rather than accepting a result from a worker that no longer owns the work — that is what the fence token is for. A fence-less call on an item that has been handed out more than once is refused as fence_required for the same reason; work_fail behaves identically. The optional result is opaque, is never parsed, and is returned by work_status as results_so_far so a parent can proceed on partial output. FREE — this tool never charges. Authenticate with Authorization: Bearer <agent_secret>, or pass agent_key as an argument if your host cannot set headers. Equivalent HTTP route: POST /v1/work/done.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "agent_key": {
+                "description": "Your agent_secret, if your MCP host cannot set the Authorization header. Prefer the header.",
+                "examples": ["the agent_secret that register returned"],
+                "type": "string"
+              },
+              "fence": {
+                "description": "The fence token from work_take, for THIS item. Checked exactly when supplied; when omitted we accept the call only while the item has been handed out exactly once, and otherwise refuse with fence_required. Every item on a queue draws its own token independently, so the fence you hold for one item is not one step away from the fence another worker holds for another. The example below is a shape, not a usable value. Example: '3170294857216913'.",
+                "examples": [3170294857216913],
+                "type": "integer"
+              },
+              "item_id": {
+                "description": "The item you were given. Example: 'P-1'.",
+                "examples": ["P-1"],
+                "type": "string"
+              },
+              "queue_id": {
+                "description": "The queue. Alias: job_id. Example: 'permit-batch-2026-08'.",
+                "examples": ["permit-batch-2026-08"],
+                "type": "string"
+              },
+              "result": {
+                "description": "Optional opaque outcome, <=8192 bytes. Never parsed or indexed. Example: '{\"ok\":true}'.",
+                "examples": ["{\"ok\":true}"],
+                "type": "object"
+              }
+            },
+            "required": ["item_id", "queue_id"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": true,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": false
+          },
+          "digest": "sha256:e7547ba4fba63e5fb9d246f2598a3d9f3c3d6b76260f2951405092c7b30cdf0e"
+        },
+        {
+          "name": "work_fail",
+          "title": "Give a work item back, or fail it for good",
+          "description": "Report that an item did not work out. FREE. THIS IS ALSO THE CORRECT WAY TO HAND AN ITEM BACK WHEN NOTHING WENT WRONG — there is no work_release; retry:true (the default) returns it immediately for another worker instead of waiting out the lease. When its attempts are exhausted it is DEAD-LETTERED and SURFACED in work_status, never silently dropped. With retry:false it is marked permanently failed, stops consuming attempts, and CANNOT BE UNDONE. PASS `fence`: exactly like work_done, if your lease already expired and the item went back to the queue we REFUSE with lease_lost, a stale fence is refused as not_holder, and a fence-less call on an item that has been handed out more than once is refused as fence_required — because accepting it would let a revived worker dead-letter an item another worker is processing right now. FREE — this tool never charges. Authenticate with Authorization: Bearer <agent_secret>, or pass agent_key as an argument if your host cannot set headers. Equivalent HTTP route: POST /v1/work/fail.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "agent_key": {
+                "description": "Your agent_secret, if your MCP host cannot set the Authorization header. Prefer the header.",
+                "examples": ["the agent_secret that register returned"],
+                "type": "string"
+              },
+              "error": {
+                "description": "Optional short reason, <=512 chars, surfaced on the dead letter so a human can see WHY it exhausted. Example: 'upstream 503'.",
+                "examples": ["upstream 503"],
+                "type": "string"
+              },
+              "fence": {
+                "description": "The fence token from work_take, for THIS item. Checked exactly when supplied; when omitted we accept the call only while the item has been handed out exactly once, and otherwise refuse with fence_required. Every item on a queue draws its own token independently, so the fence you hold for one item is not one step away from the fence another worker holds for another. The example below is a shape, not a usable value. Example: '3170294857216913'.",
+                "examples": [3170294857216913],
+                "type": "integer"
+              },
+              "item_id": {
+                "description": "The item you were given. Example: 'P-1'.",
+                "examples": ["P-1"],
+                "type": "string"
+              },
+              "queue_id": {
+                "description": "The queue. Alias: job_id. Example: 'permit-batch-2026-08'.",
+                "examples": ["permit-batch-2026-08"],
+                "type": "string"
+              },
+              "retry": {
+                "description": "Put it back for another attempt (default true), or fail it permanently (false). Example: 'true'.",
+                "examples": ["true"],
+                "type": "boolean"
+              }
+            },
+            "required": ["item_id", "queue_id"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": true,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": false
+          },
+          "digest": "sha256:58ad328dc1066b4eb5e3a6dd26070042ed3990919689661f34e89437cc51cc2c"
+        },
+        {
+          "name": "work_push",
+          "title": "Push work items onto a durable queue",
+          "description": "THE ALTERNATIVE TO THIS IS WRITING DISTRIBUTED WORK-DISTRIBUTION CODE YOURSELF — assignment, collision avoidance, lease expiry, retry, dead-worker recovery, straggler policy. Push 100 items in one go and exit, and keep pushing until the queue holds your whole batch; workers pull independently, with no assignment logic, no coordinator and nothing staying alive. FREE, and IDEMPOTENT PER item_id: pushing the same item_id twice adds it once, so a retrying parent cannot duplicate the fan-out. Payloads are opaque and never parsed. FREE — this tool never charges. Authenticate with Authorization: Bearer <agent_secret>, or pass agent_key as an argument if your host cannot set headers. Equivalent HTTP route: POST /v1/work/push.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "agent_key": {
+                "description": "Your agent_secret, if your MCP host cannot set the Authorization header. Prefer the header.",
+                "examples": ["the agent_secret that register returned"],
+                "type": "string"
+              },
+              "items": {
+                "description": "Up to 100 per call. Each entry is {item_id, payload} or a bare string used as the item_id. item_id <=128 chars, payload <=8192 bytes. A queue holds 2000 items over its LIFETIME, finished ones included, because work_status keeps their results and dead letters; over that, pushes are refused by name rather than dropped. Example: '[{\"item_id\":\"P-1\",\"payload\":{\"url\":\"...\"}}]'.",
+                "examples": ["[{\"item_id\":\"P-1\",\"payload\":{\"url\":\"...\"}}]"],
+                "type": "array"
+              },
+              "max_attempts": {
+                "description": "How many times an item may be handed to a worker before it is dead-lettered. Default 3, max 20. Set on first push; later pushes do not change it. Example: '3'.",
+                "examples": [3],
+                "type": "integer"
+              },
+              "queue_id": {
+                "description": "Your name for this queue. Namespace-scoped: it belongs to the namespace that created it, and only a caller holding that agent_secret can push to or take from it. Example: 'permit-batch-2026-08'.",
+                "examples": ["permit-batch-2026-08"],
+                "type": "string"
+              },
+              "ttl_seconds": {
+                "description": "Queue retention. Default 604800 (7d), max 2592000 (30d). Example: '604800'.",
+                "examples": [604800],
+                "type": "integer"
+              }
+            },
+            "required": ["items", "queue_id"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": false
+          },
+          "digest": "sha256:3c3f395885f4962b6501355f9b103a645fcf3508760ef86385e004e839cbf8f9"
+        },
+        {
+          "name": "work_status",
+          "title": "How far along is the fan-out",
+          "description": "Turn a fan-out from a black box into something you can act on: how many items are pending, leased, done, failed and dead-lettered, the results collected so far, and every dead letter with the error that exhausted it. THIS IS WHAT LETS A PARENT PROCEED WITH 4 OF 5 instead of blocking on a straggler. Counts are produced by scanning the queue, not from counters that can drift. $0.002 ONLY when there is real progress — at least one completion, failure or dead letter — and only when the answer has changed since you last paid for it. An untouched queue charges nothing and says so. The counts are exact and never paged; the results and dead-letter ARRAYS are windowed at 50 rows each and hand you a page token when there is more, so every dead-lettered item is genuinely reachable rather than merely flagged as missing. Paging is free — you are charged per distinct progress state, not per page. Costs $0.002 USDC per call via x402 on Base, and ONLY when done + failed + dead_lettered >= 1, and this exact progress state has not been billed before; otherwise the same call returns the full answer and settles nothing. Authenticate with Authorization: Bearer <agent_secret>, or pass agent_key as an argument if your host cannot set headers. Equivalent HTTP route: POST /v1/work/status.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "agent_key": {
+                "description": "Your agent_secret, if your MCP host cannot set the Authorization header. Prefer the header.",
+                "examples": ["the agent_secret that register returned"],
+                "type": "string"
+              },
+              "dead_page_token": {
+                "description": "Optional: the `next_dead_page_token` from a previous call, to read the next page of dead letters. Opaque — hand it back exactly as given. Omit for the first page. Example: 'x:item-0051'.",
+                "examples": ["x:item-0051"],
+                "type": "string"
+              },
+              "queue_id": {
+                "description": "The queue. Alias: job_id. Example: 'permit-batch-2026-08'.",
+                "examples": ["permit-batch-2026-08"],
+                "type": "string"
+              },
+              "results_page_token": {
+                "description": "Optional: the `next_results_page_token` from a previous call, to read the next page of results. Opaque — hand it back exactly as given. Omit for the first page. Example: 'c:00001754932100000:item-0051'.",
+                "examples": ["c:00001754932100000:item-0051"],
+                "type": "string"
+              }
+            },
+            "required": ["queue_id"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": false
+          },
+          "digest": "sha256:da7f6feb59051d48c66d5780f4e459a40f7d3f4686fb2027d43857faed39cdd8"
+        },
+        {
+          "name": "work_take",
+          "title": "Take work, leased so a dead worker cannot lose it",
+          "description": "Take up to n items, LEASED not deleted — the same lease semantics as lease()/renew()/release(): a holder, a fence token, an expiry. Two workers can never be handed the same item, because one single-threaded Durable Object owns the queue. IF YOUR PROCESS DIES THE LEASE SIMPLY EXPIRES AND THE ITEMS RETURN TO THE QUEUE with attempts incremented; nothing had to stay alive to notice, and that recovery is the point. EACH ITEM CARRIES ITS OWN FENCE, drawn independently on every take: the token you are given for one item tells you nothing about the token another worker was given for another item, and it is not the previous holder's token plus one. The item's ORDER is `generation` (identical to `attempts`, the number of times it has been handed out) — that is the number to compare and the number to hand to an external store; the fence is the secret. $0.002 when at least one item is handed to you for the FIRST time; a re-take after your own lease expired is free, exactly like mailbox redelivery. An empty or cancelled queue returns nothing, says so, and costs nothing. Costs $0.002 USDC per call via x402 on Base, and ONLY when at least one item was handed to a worker for the FIRST time (a re-take after a lease expired is free); otherwise the same call returns the full answer and settles nothing. Authenticate with Authorization: Bearer <agent_secret>, or pass agent_key as an argument if your host cannot set headers. Equivalent HTTP route: POST /v1/work/take.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "agent_key": {
+                "description": "Your agent_secret, if your MCP host cannot set the Authorization header. Prefer the header.",
+                "examples": ["the agent_secret that register returned"],
+                "type": "string"
+              },
+              "holder": {
+                "description": "Who is taking — an instance id you choose, exactly as with lease(). Default 'worker'. Example: 'worker-3'.",
+                "examples": ["worker-3"],
+                "type": "string"
+              },
+              "lease_seconds": {
+                "description": "How long you hold them before they return to the queue. Default 300, min 5, max 86400. Example: '300'.",
+                "examples": [300],
+                "type": "integer"
+              },
+              "n": {
+                "description": "How many items to take. 1..25. Default 1. Example: '5'.",
+                "examples": [5],
+                "type": "integer"
+              },
+              "queue_id": {
+                "description": "The queue to take from. Alias: job_id — a job and its work queue are the same thing. Example: 'permit-batch-2026-08'.",
+                "examples": ["permit-batch-2026-08"],
+                "type": "string"
+              }
+            },
+            "required": ["queue_id"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": false,
+            "openWorldHint": false,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": false,
+            "openWorld": false,
+            "readOnly": false
+          },
+          "digest": "sha256:66fdedea481a16673b48486f04ca6b122c5ef5ee83115f1d3c5503392cb94a05"
+        }
+      ],
+      "digest": "sha256:b7f05ba405463c9914b57850f7beabd4939395d05cf3b688c6bdd93bf0668648"
+    }
+  }
+}

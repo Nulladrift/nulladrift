@@ -1,0 +1,1206 @@
+{
+  "lockfileVersion": 2,
+  "subjects": {
+    "com.pga/pga-golf": {
+      "kind": "mcp-server",
+      "source": {
+        "client": "manual",
+        "file": "registry.modelcontextprotocol.io"
+      },
+      "transport": {
+        "type": "http",
+        "url": "https://mcp.pga.com/mcp"
+      },
+      "protocol": {
+        "era": "legacy",
+        "version": "2025-11-25"
+      },
+      "serverInfo": {
+        "name": "com.pga/pga-golf",
+        "title": "PGA Golf",
+        "version": "1.0.0",
+        "description": "PGA's official MCP Server for all things golf-related. Find a coach, discover programs, play golf, improve your game.",
+        "websiteUrl": "https://mcp.pga.com"
+      },
+      "capabilities": {
+        "resources": {
+          "listChanged": true
+        },
+        "tools": {
+          "listChanged": true
+        }
+      },
+      "instructions": "The PGA of America MCP server is designed to provide AI agents and LLMs with the insight and expertise of over 31,000 certified PGA golf professionals through a suite of specialized tools. Use this server to find a golf coach, search for programs, book a lesson, and improve your game.\n\n## Tool Selection Guardrails\n\n- Use `search_golf_coaches` when the user is trying to find, browse, or compare coaches for private lessons in a location. Coach results also include a short teaser of upcoming public programs those coaches host.\n- Use `search_golf_programs` when the user is trying to find clinics, camps, classes, group events, or other PGA Coach programs in a location.\n- Use `get_golf_coach_availability` only when a specific coach has already been identified (via coach profile URL, known slug, or prior selection from `search_golf_coaches` or `search_golf_programs` results).\n- If the user asks for availability but has not selected a coach, run `search_golf_coaches` first (or reuse a coach already identified from `search_golf_programs`) and ask the user to choose a coach.\n- If the user request is unrelated to golf lesson/program discovery or lesson booking (for example weather, travel booking, or general sports trivia), do not call these tools.\n- Never display or mention internal identifiers to the user (for example coach `slug`, offering `id`/`offeringId`, program `id`, facility IDs, or pagination cursors). Use these values only for tool calls.\n\n## Workflows\n\n### Find a program\n\n1. Collect a location if the user has not provided one.\n2. Call `search_golf_programs` with `searchLocation` (and optional `searchRadius`; default 50 miles).\n3. Present program titles, dates, prices, hosting coaches, and facilities. Do not expose internal identifiers.\n4. Use the top-level `coaches` and `facilities` arrays to summarize who is teaching and where programs are held.\n5. Direct the user to each program's `programUrl` to view details and register. Offer coach `profileUrl` / `bookingUrl` when helpful.\n6. If the user wants more results from the same query, call `search_golf_programs` again with `paginationCursor` from the prior response while preserving the original location and radius. Additional pages reuse the collected nearby programs and do not repeat GraphQL discovery.\n\n### Book a lesson\n\nUse the following tool-call sequence to successfully book a lesson:\n\n1. Collect missing prerequisites:\n   - If a coach was already identified from `search_golf_programs`, reuse that coach `slug` and skip to availability.\n   - If no location is provided and no coach is selected, ask for a location before calling `search_golf_coaches`.\n   - If the user wants more coach results from the same query, call `search_golf_coaches` again with `paginationCursor` from the prior response while preserving the original location and radius.\n2. If no coach is selected yet, call `search_golf_coaches` with the user's location (`searchLocation`, optionally `searchRadius`) to find candidate coaches and offerings.\n3. Present coaches and offering titles to the user, but do not expose internal identifiers. Save the selected coach `slug` and desired offering context for internal use only.\n4. Resolve references to selected coaches (for example \"Anthony\" or \"him\") to the chosen coach `slug` before continuing. If ambiguous, ask a clarifying question.\n5. Call `get_golf_coach_availability` with the selected coach `slug` to retrieve up-to-date offering availability (`availableTimes`) and offering IDs.\n   - If the user already selected a specific offering, pass its `offeringId` to scope results to that offering.\n6. Let the user choose an offering and time:\n   - Prefer the availability/search widgets when shown. When the user continues from a widget, read the selected booking from the widget/view model context (`offeringId`, `startDateTime`, title, coach, price) — treat that as their selection and continue in chat (do not send them back into widget forms). The visible follow-up message is human-friendly only; do not expect internal IDs in chat text.\n   - Chat-only booking (no widget interaction) is also supported: ask the user to choose one available time from the tool results.\n   - Resolve the offering by title from prior search or availability context when needed. If multiple offerings share a similar name, ask a clarifying question before booking.\n   - Match the chosen date/time to one of the returned `availableTimes` ISO8601 values for `startDateTime`.\n7. Collect required participant details in chat (natural language), then call `book_golf_lesson`:\n   - Ask who the lesson is for. If they are booking for someone other than themselves, or age is unclear, ask whether that person is 17 or younger.\n   - Adult (18+): `firstName`, `lastName`, `email`, optional `phone`\n   - Junior (17 or younger): `firstName`, `lastName`, `guardianFirstName`, `guardianLastName`, `email`, optional `phone`\n   - Call `book_golf_lesson` with:\n     - `offeringId` (from widget/view model context or availability/search result, never user-entered text)\n     - `startDateTime` (exact ISO8601 from widget/view model context, or one of the returned `availableTimes`)\n     - `student` object matching the `adult` or `junior` schema\n8. Handle booking outcome:\n   - If `lesson.confirmationCode` is returned, confirm the booking and share the confirmation code.\n   - If `continuationUrl` is returned, direct the user to that URL to complete payment or other required steps.\n   - If only `message` indicates failure, report it and help the user choose another time or offering.\n",
+      "tools": [
+        {
+          "name": "book_golf_lesson",
+          "title": "Book Golf Lesson",
+          "description": "Request to book a golf lesson for a specific coach's offering.\n- `offeringId` is an internal identifier; never show or mention it to the user.\n- A continuation URL will be returned that you can direct the user to after calling this tool.\n- If the offering was booked automatically (e.g., free lesson or no prepayment required), the confirmation code will also be included.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "properties": {
+              "offeringId": {
+                "description": "Internal offering record ID to book a lesson for. Never display or mention this identifier to the user.",
+                "type": "string"
+              },
+              "startDateTime": {
+                "description": "The start date and time of the lesson in ISO 8601 format.",
+                "type": "string"
+              },
+              "student": {
+                "anyOf": [
+                  {
+                    "properties": {
+                      "email": {
+                        "description": "The email address of the student booking the lesson.",
+                        "type": "string"
+                      },
+                      "firstName": {
+                        "description": "The first name of the student booking the lesson.",
+                        "type": "string"
+                      },
+                      "lastName": {
+                        "description": "The last name of the student booking the lesson.",
+                        "type": "string"
+                      },
+                      "phone": {
+                        "description": "The phone number of the student booking the lesson.",
+                        "type": "string"
+                      },
+                      "type": {
+                        "const": "adult",
+                        "type": "string"
+                      }
+                    },
+                    "required": ["email", "firstName", "lastName", "type"],
+                    "type": "object"
+                  },
+                  {
+                    "description": "The contact information for the student participating in the lesson. Student type can be either 'adult' or 'junior'. If the student is a junior, the guardian's information is also required.",
+                    "properties": {
+                      "email": {
+                        "description": "The email address of the student booking the lesson.",
+                        "type": "string"
+                      },
+                      "firstName": {
+                        "description": "The first name of the student booking the lesson.",
+                        "type": "string"
+                      },
+                      "guardianFirstName": {
+                        "description": "The first name of the guardian booking the lesson.",
+                        "type": "string"
+                      },
+                      "guardianLastName": {
+                        "description": "The last name of the guardian booking the lesson.",
+                        "type": "string"
+                      },
+                      "lastName": {
+                        "description": "The last name of the student booking the lesson.",
+                        "type": "string"
+                      },
+                      "phone": {
+                        "description": "The phone number of the student booking the lesson.",
+                        "type": "string"
+                      },
+                      "type": {
+                        "const": "junior",
+                        "type": "string"
+                      }
+                    },
+                    "required": ["email", "firstName", "guardianFirstName", "guardianLastName", "lastName", "type"],
+                    "type": "object"
+                  }
+                ]
+              }
+            },
+            "required": ["offeringId", "startDateTime", "student"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "continuationUrl": {
+                "description": "The URL to continue the booking flow after calling this tool.",
+                "type": "string"
+              },
+              "lesson": {
+                "additionalProperties": false,
+                "description": "Confirmation details for the booked lesson (if booked successfully).",
+                "properties": {
+                  "confirmationCode": {
+                    "type": "string"
+                  }
+                },
+                "required": ["confirmationCode"],
+                "type": "object"
+              },
+              "message": {
+                "description": "A message describing the outcome of the booking.",
+                "type": "string"
+              }
+            },
+            "required": ["message"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "openWorldHint": false,
+            "readOnlyHint": false,
+            "title": "Book Golf Lesson"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": false,
+            "openWorld": false,
+            "readOnly": false
+          },
+          "meta": {
+            "openai/toolInvocation/invoked": "Booking request complete.",
+            "openai/toolInvocation/invoking": "Booking lesson…",
+            "securitySchemes": [
+              {
+                "scopes": ["mcp:coaching"],
+                "type": "oauth2"
+              }
+            ],
+            "ui": {
+              "resourceUri": "ui://views/ext-apps/book_golf_lesson.html?v=0a04ba87"
+            },
+            "ui/resourceUri": "ui://views/ext-apps/book_golf_lesson.html?v=0a04ba87"
+          },
+          "digest": "sha256:4a819eba8e75bc5162dc71c2f99ebfb635eb75a7275012322924e575ab73cce8"
+        },
+        {
+          "name": "get_golf_coach_availability",
+          "title": "Get Golf Coach Availability",
+          "description": "Retrieve offering details and available lesson times for one specific coach.\nUse this when the user asks for schedule, openings, or available times for a known coach.\nIf the user has not selected a coach yet, call `search_golf_coaches` first (or reuse a coach already identified from `search_golf_programs`).\nCoach `slug` and offering `id` values are internal identifiers and must never be shown or mentioned to the user.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "properties": {
+              "offeringId": {
+                "description": "Optional offering ID to scope availability to a single offering. Use this when the user has already selected an offering.",
+                "type": "string"
+              },
+              "slug": {
+                "description": "Coach slug from a pga.com profile URL, prior `search_golf_coaches` results, or prior `search_golf_programs` results (e.g., `anthonyvitale`). Internal-only value; never display or mention it to the user.",
+                "type": "string"
+              }
+            },
+            "required": ["slug"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "coach": {
+                "additionalProperties": false,
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "offerings": {
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "availableTimes": {
+                          "description": "The available times for the offering in ISO8601 (format with offset)",
+                          "items": {
+                            "type": "string"
+                          },
+                          "type": "array"
+                        },
+                        "duration": {
+                          "description": "Session duration in minutes",
+                          "type": "number"
+                        },
+                        "id": {
+                          "description": "The unique identifier for the offering. DO NOT display this to the user. Reference this as the `offeringId` when booking a lesson via the `book_golf_lesson` tool.",
+                          "type": "string"
+                        },
+                        "location": {
+                          "description": "Where the session will take place",
+                          "type": "string"
+                        },
+                        "price": {
+                          "description": "Price per session in USD",
+                          "type": "number"
+                        },
+                        "requiresPrepayment": {
+                          "description": "Whether this offering requires online prepayment",
+                          "type": "boolean"
+                        },
+                        "timezone": {
+                          "description": "The IANA timezone (e.g., America/Los_Angeles) for the location",
+                          "type": "string"
+                        },
+                        "title": {
+                          "description": "The name of the offering. Use this instead of the `id` when describing the offering to the user",
+                          "type": "string"
+                        }
+                      },
+                      "required": ["availableTimes", "duration", "id", "location", "price", "requiresPrepayment", "timezone", "title"],
+                      "type": "object"
+                    },
+                    "type": "array"
+                  },
+                  "photo": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "slug": {
+                    "description": "Internal unique identifier for the coach. Do not display or mention this value to users; use it only when calling other tools.",
+                    "type": "string"
+                  },
+                  "title": {
+                    "type": "string"
+                  }
+                },
+                "required": ["name", "offerings", "photo", "slug", "title"],
+                "type": "object"
+              }
+            },
+            "required": ["coach"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Get Golf Coach Availability"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "openai/toolInvocation/invoked": "Availability retrieved.",
+            "openai/toolInvocation/invoking": "Fetching coach availability…",
+            "securitySchemes": [
+              {
+                "type": "noauth"
+              },
+              {
+                "type": "oauth2"
+              }
+            ],
+            "ui": {
+              "resourceUri": "ui://views/ext-apps/get_golf_coach_availability.html?v=7e7106d3"
+            },
+            "ui/resourceUri": "ui://views/ext-apps/get_golf_coach_availability.html?v=7e7106d3"
+          },
+          "digest": "sha256:b2e9f074c1b98c9391b537514fabd72ccb6e0605619309c85fb49ce90743324a"
+        },
+        {
+          "name": "search_golf_coaches",
+          "title": "Search Golf Coaches",
+          "description": "Search for qualified PGA golf coaches listed on pga.com/coach in the specified location (required).\nUse this tool when the user asks to find, browse, or compare coaches for private lessons in a location.\nFor location-first discovery of clinics, camps, classes, or other group programs, use `search_golf_programs` instead.\nIf the user asks for availability for a specific coach, use `get_golf_coach_availability` instead.\nInternal record identifiers (for example coach `slug` and offering `id`) are for tool calls only and must never be shown or mentioned to the user.\n- Search results include the coach's profile information, private-lesson offerings, pricing, and a short teaser of upcoming public programs they host (capped at 2). For location-first program discovery, use `search_golf_programs`.\n- Use that program context to recommend which group offering best fits the golfer when relevant; present upcoming programs when available.\n- Results are ordered by proximity to the search location, so list them to the user in this order.\n- Results are paginated, so use the pagination cursor provided at the end of the response to retrieve the next page of results.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "properties": {
+              "paginationCursor": {
+                "description": "Pagination cursor from a prior `search_golf_coaches` response. Use only when fetching additional pages of the same search.",
+                "type": "string"
+              },
+              "searchLocation": {
+                "description": "Required location used to find nearby coaches. Accepts city/state, ZIP code, full address, or latitude/longitude coordinates.",
+                "type": "string"
+              },
+              "searchRadius": {
+                "default": 25,
+                "description": "Search radius in miles from `searchLocation`. Use 25 by default unless the user requests a different radius.",
+                "minimum": 0,
+                "type": "number"
+              }
+            },
+            "required": ["searchLocation"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "coaches": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "bio": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "bookingUrl": {
+                      "description": "The URL to view the coach's offerings and book a lesson",
+                      "format": "uri",
+                      "type": "string"
+                    },
+                    "facilities": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "id": {
+                            "type": "string"
+                          },
+                          "name": {
+                            "type": "string"
+                          }
+                        },
+                        "required": ["id", "name"],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "location": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "city": {
+                          "type": "string"
+                        },
+                        "state": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["city", "state"],
+                      "type": "object"
+                    },
+                    "memberType": {
+                      "anyOf": [
+                        {
+                          "enum": ["PGA Member", "PGA Associate"],
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "The coach's membership designation with the PGA of America"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "nextAvailability": {
+                      "anyOf": [
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "dateTime": {
+                              "description": "The next available time in ISO8601 format with offset",
+                              "type": "string"
+                            },
+                            "timezone": {
+                              "description": "The IANA timezone (e.g., America/Los_Angeles)",
+                              "type": "string"
+                            }
+                          },
+                          "required": ["dateTime", "timezone"],
+                          "type": "object"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "The next available time to book a session"
+                    },
+                    "offerings": {
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "category": {
+                            "enum": ["INTRO", "PRIVATE", "ON_COURSE", "SWING_EVALUATION", "CLUB_FITTING", "OTHER"],
+                            "type": "string"
+                          },
+                          "duration": {
+                            "description": "Session duration in minutes",
+                            "type": "number"
+                          },
+                          "id": {
+                            "description": "The unique identifier for the offering. DO NOT display this to the user. Reference this as the `offeringId` when booking a lesson via the `book_golf_lesson` tool.",
+                            "type": "string"
+                          },
+                          "location": {
+                            "description": "Where the session will take place",
+                            "type": "string"
+                          },
+                          "price": {
+                            "description": "Price per session in USD",
+                            "type": "number"
+                          },
+                          "requiresPrepayment": {
+                            "description": "Whether this offering requires online prepayment",
+                            "type": "boolean"
+                          },
+                          "timezone": {
+                            "description": "The IANA timezone (e.g., America/Los_Angeles) for the location",
+                            "type": "string"
+                          },
+                          "title": {
+                            "description": "The name of the offering. Use this instead of the `id` when describing the offering to the user",
+                            "type": "string"
+                          }
+                        },
+                        "required": ["category", "duration", "id", "location", "price", "requiresPrepayment", "timezone", "title"],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "photo": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "profileUrl": {
+                      "description": "The URL to the coach's profile",
+                      "format": "uri",
+                      "type": "string"
+                    },
+                    "programs": {
+                      "description": "Upcoming public group programs hosted by this coach (clinics, camps, classes), capped at 2 teasers. Use search_golf_programs for location-first discovery. Empty when none are listed.",
+                      "items": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "description": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "endDateTime": {
+                            "description": "Program end time in ISO8601 format with offset",
+                            "type": "string"
+                          },
+                          "facility": {
+                            "anyOf": [
+                              {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "city": {
+                                    "type": "string"
+                                  },
+                                  "name": {
+                                    "type": "string"
+                                  },
+                                  "state": {
+                                    "type": "string"
+                                  },
+                                  "street": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "zipCode": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  }
+                                },
+                                "required": ["city", "name", "state", "street", "zipCode"],
+                                "type": "object"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "hasWaitlist": {
+                            "type": "boolean"
+                          },
+                          "photo": {
+                            "anyOf": [
+                              {
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "price": {
+                            "anyOf": [
+                              {
+                                "type": "number"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ],
+                            "description": "Program price in USD"
+                          },
+                          "programUrl": {
+                            "description": "Public URL to view details and register",
+                            "format": "uri",
+                            "type": "string"
+                          },
+                          "registrationFull": {
+                            "type": "boolean"
+                          },
+                          "sessionCount": {
+                            "anyOf": [
+                              {
+                                "type": "number"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ],
+                            "description": "Number of sessions in the program, when available"
+                          },
+                          "startDateTime": {
+                            "description": "Program start time in ISO8601 format with offset",
+                            "type": "string"
+                          },
+                          "tags": {
+                            "items": {
+                              "type": "string"
+                            },
+                            "type": "array"
+                          },
+                          "timezone": {
+                            "description": "The IANA timezone for the program times",
+                            "type": "string"
+                          },
+                          "title": {
+                            "type": "string"
+                          }
+                        },
+                        "required": ["description", "endDateTime", "facility", "hasWaitlist", "photo", "price", "programUrl", "registrationFull", "sessionCount", "startDateTime", "tags", "timezone", "title"],
+                        "type": "object"
+                      },
+                      "type": "array"
+                    },
+                    "slug": {
+                      "description": "Internal unique identifier for the coach. Do not display or mention this value to users; use it only when calling other tools.",
+                      "type": "string"
+                    },
+                    "title": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": ["bio", "bookingUrl", "facilities", "location", "memberType", "name", "nextAvailability", "offerings", "photo", "profileUrl", "programs", "slug", "title"],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "count": {
+                "type": "number"
+              },
+              "endCursor": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "hasNextPage": {
+                "type": "boolean"
+              }
+            },
+            "required": ["coaches", "count", "endCursor", "hasNextPage"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Search Golf Coaches"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "openai/toolInvocation/invoked": "Search complete.",
+            "openai/toolInvocation/invoking": "Searching for PGA golf coaches…",
+            "securitySchemes": [
+              {
+                "type": "noauth"
+              },
+              {
+                "type": "oauth2"
+              }
+            ],
+            "ui": {
+              "resourceUri": "ui://views/ext-apps/search_golf_coaches.html?v=6898e83f"
+            },
+            "ui/resourceUri": "ui://views/ext-apps/search_golf_coaches.html?v=6898e83f"
+          },
+          "digest": "sha256:dc98cb7a29b1a641eb1dabe75545541fb9a3eab6a6c71e044a12e47c8a0e59e8"
+        },
+        {
+          "name": "search_golf_programs",
+          "title": "Search Golf Programs",
+          "description": "Search for upcoming public PGA Coach programs (clinics, camps, classes, and other group events) near a location (required).\nUse this tool when the user asks to find programs, clinics, camps, classes, or group events — not private one-on-one lessons.\nFor private lesson coaches, use `search_golf_coaches` instead.\nInternal record identifiers (for example program `id` and coach `slug`) are for tool calls only and must never be shown or mentioned to the user.\n- Search results include program details plus the hosting coach and facility for each program.\n- The response also includes top-level `coaches` and `facilities` arrays summarizing the unique coaches and venues in the result set — always present those to the user.\n- Results are ordered by program start instant and filtered to the requested radius.\n- Discovery uses nearby PGA Coach profiles (nearest 20 in the radius), then loads up to 30 upcoming public programs per coach in a 180-day window in one batched GraphQL request. Facility coordinates still have to fall inside the radius.\n- Results are paginated. The pagination cursor carries the remaining nearby programs so additional pages do not repeat GraphQL discovery. Reuse that cursor with the original location and radius.\n- Direct golfers to the program URL to view details and register. Coach profile and booking URLs are also included when the golfer wants to learn more about the coach.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "properties": {
+              "paginationCursor": {
+                "description": "Pagination cursor from a prior `search_golf_programs` response. Use only when fetching additional pages of the same search (same location and radius).",
+                "type": "string"
+              },
+              "searchLocation": {
+                "description": "Required location used to find nearby PGA Coach programs. Accepts city/state, ZIP code, full address, or latitude/longitude coordinates.",
+                "type": "string"
+              },
+              "searchRadius": {
+                "default": 50,
+                "description": "Search radius in miles from `searchLocation`. Use 50 by default unless the user requests a different radius.",
+                "minimum": 0,
+                "type": "number"
+              }
+            },
+            "required": ["searchLocation"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "coaches": {
+                "description": "Unique coaches hosting the returned programs. Present these alongside the programs so golfers can see who is teaching.",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "bio": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "bookingUrl": {
+                      "description": "The URL to view the coach's offerings and book a lesson",
+                      "format": "uri",
+                      "type": "string"
+                    },
+                    "location": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "city": {
+                          "type": "string"
+                        },
+                        "state": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["city", "state"],
+                      "type": "object"
+                    },
+                    "memberType": {
+                      "anyOf": [
+                        {
+                          "enum": ["PGA Member", "PGA Associate"],
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "The coach's membership designation with the PGA of America"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "photo": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "profileUrl": {
+                      "description": "The URL to the coach's public PGA.com profile",
+                      "format": "uri",
+                      "type": "string"
+                    },
+                    "slug": {
+                      "description": "Internal coach slug. Do not display or mention this value to users; use it only when calling other tools.",
+                      "type": "string"
+                    },
+                    "title": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": ["bio", "bookingUrl", "location", "memberType", "name", "photo", "profileUrl", "slug", "title"],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "count": {
+                "type": "number"
+              },
+              "endCursor": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "facilities": {
+                "description": "Unique facilities hosting the returned programs. Present these alongside the programs so golfers can see where programs are held.",
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "city": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "state": {
+                      "type": "string"
+                    },
+                    "street": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "timezone": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "The IANA timezone for the facility, when available"
+                    },
+                    "zipCode": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": ["city", "name", "state", "street", "timezone", "zipCode"],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "hasNextPage": {
+                "type": "boolean"
+              },
+              "programs": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "coach": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "bio": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "bookingUrl": {
+                          "description": "The URL to view the coach's offerings and book a lesson",
+                          "format": "uri",
+                          "type": "string"
+                        },
+                        "location": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "city": {
+                              "type": "string"
+                            },
+                            "state": {
+                              "type": "string"
+                            }
+                          },
+                          "required": ["city", "state"],
+                          "type": "object"
+                        },
+                        "memberType": {
+                          "anyOf": [
+                            {
+                              "enum": ["PGA Member", "PGA Associate"],
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ],
+                          "description": "The coach's membership designation with the PGA of America"
+                        },
+                        "name": {
+                          "type": "string"
+                        },
+                        "photo": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "profileUrl": {
+                          "description": "The URL to the coach's public PGA.com profile",
+                          "format": "uri",
+                          "type": "string"
+                        },
+                        "slug": {
+                          "description": "Internal coach slug. Do not display or mention this value to users; use it only when calling other tools.",
+                          "type": "string"
+                        },
+                        "title": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      },
+                      "required": ["bio", "bookingUrl", "location", "memberType", "name", "photo", "profileUrl", "slug", "title"],
+                      "type": "object"
+                    },
+                    "description": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "distanceMiles": {
+                      "description": "Approximate distance from the search location in miles",
+                      "type": "number"
+                    },
+                    "endDateTime": {
+                      "description": "Program end time in ISO8601 format with offset",
+                      "type": "string"
+                    },
+                    "facility": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "city": {
+                          "type": "string"
+                        },
+                        "name": {
+                          "type": "string"
+                        },
+                        "state": {
+                          "type": "string"
+                        },
+                        "street": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "timezone": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ],
+                          "description": "The IANA timezone for the facility, when available"
+                        },
+                        "zipCode": {
+                          "anyOf": [
+                            {
+                              "type": "string"
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      },
+                      "required": ["city", "name", "state", "street", "timezone", "zipCode"],
+                      "type": "object"
+                    },
+                    "hasWaitlist": {
+                      "type": "boolean"
+                    },
+                    "id": {
+                      "description": "Internal unique identifier for the program. Do not display or mention this value to users.",
+                      "type": "string"
+                    },
+                    "photo": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "price": {
+                      "anyOf": [
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "Program price in USD"
+                    },
+                    "programUrl": {
+                      "description": "Public URL where a golfer can view and register",
+                      "format": "uri",
+                      "type": "string"
+                    },
+                    "registrationFull": {
+                      "type": "boolean"
+                    },
+                    "sessionCount": {
+                      "anyOf": [
+                        {
+                          "type": "number"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "Number of sessions included in the program, when available"
+                    },
+                    "startDateTime": {
+                      "description": "Program start time in ISO8601 format with offset",
+                      "type": "string"
+                    },
+                    "tags": {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    },
+                    "timezone": {
+                      "description": "The IANA timezone (e.g., America/Los_Angeles)",
+                      "type": "string"
+                    },
+                    "title": {
+                      "type": "string"
+                    }
+                  },
+                  "required": ["coach", "description", "distanceMiles", "endDateTime", "facility", "hasWaitlist", "id", "photo", "price", "programUrl", "registrationFull", "sessionCount", "startDateTime", "tags", "timezone", "title"],
+                  "type": "object"
+                },
+                "type": "array"
+              }
+            },
+            "required": ["coaches", "count", "endCursor", "facilities", "hasNextPage", "programs"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Search Golf Programs"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "openai/toolInvocation/invoked": "Search complete.",
+            "openai/toolInvocation/invoking": "Searching for PGA Coach programs…",
+            "securitySchemes": [
+              {
+                "type": "noauth"
+              },
+              {
+                "type": "oauth2"
+              }
+            ],
+            "ui": {
+              "resourceUri": "ui://views/ext-apps/search_golf_programs.html?v=2f83308e"
+            },
+            "ui/resourceUri": "ui://views/ext-apps/search_golf_programs.html?v=2f83308e"
+          },
+          "digest": "sha256:5cabc5c212be50496a1017dcc6f057fdb9616bb646ab22c119dbe3fc2a4c53f3"
+        }
+      ],
+      "resources": [
+        {
+          "uri": "ui://views/ext-apps/book_golf_lesson.html?v=0a04ba87",
+          "name": "book_golf_lesson",
+          "description": "A status display for a golf lesson booking request",
+          "meta": {
+            "openai/widgetDescription": "Shows the status and next steps for a golf lesson booking request.",
+            "ui": {
+              "csp": {
+                "baseUriDomains": ["https://mcp.pga.com"],
+                "connectDomains": ["https://mcp.pga.com", "https://www.pga.com", "https://my.pga.com", "https://checkout.stripe.com"],
+                "resourceDomains": ["https://mcp.pga.com", "https://cdn.openai.com"]
+              },
+              "description": "A status display for a golf lesson booking request",
+              "domain": "https://mcp.pga.com"
+            }
+          },
+          "digest": "sha256:f70f385ca0f7b00879cc4e721b85af59e54c759dee68b62ab8e89c29e502351a"
+        },
+        {
+          "uri": "ui://widgets/ext-apps/book_golf_lesson.html",
+          "name": "book_golf_lesson",
+          "description": "A status display for a golf lesson booking request",
+          "digest": "sha256:a0b50d4808b38153538588ed7e5f4a40628e196c130c99f418c75ff03d71f7ef"
+        },
+        {
+          "uri": "ui://views/ext-apps/get_golf_coach_availability.html?v=7e7106d3",
+          "name": "get_golf_coach_availability",
+          "description": "A scheduler display for booking with a golf coach",
+          "meta": {
+            "openai/widgetDescription": "Shows an interactive lesson scheduler for a selected PGA coach.",
+            "ui": {
+              "csp": {
+                "baseUriDomains": ["https://mcp.pga.com"],
+                "connectDomains": ["https://mcp.pga.com", "https://www.pga.com", "https://my.pga.com", "https://checkout.stripe.com"],
+                "resourceDomains": ["https://mcp.pga.com", "https://cdn.openai.com"]
+              },
+              "description": "A scheduler display for booking with a golf coach",
+              "domain": "https://mcp.pga.com"
+            }
+          },
+          "digest": "sha256:4b55e358e258aec67031f8522571d9f1f058d5d842ccf257a490b1969c600a76"
+        },
+        {
+          "uri": "ui://widgets/ext-apps/get_golf_coach_availability.html",
+          "name": "get_golf_coach_availability",
+          "description": "A scheduler display for booking with a golf coach",
+          "digest": "sha256:026efae0a989e23f31f3f5890f850839f25564041aabcfc87081dd07e837d465"
+        },
+        {
+          "uri": "ui://views/ext-apps/search_golf_coaches.html?v=6898e83f",
+          "name": "search_golf_coaches",
+          "description": "A carousel of PGA golf coaches near a specified location",
+          "meta": {
+            "openai/widgetDescription": "Shows an interactive carousel of PGA golf coaches near a specified location for discovery and comparison.",
+            "ui": {
+              "csp": {
+                "baseUriDomains": ["https://mcp.pga.com"],
+                "connectDomains": ["https://mcp.pga.com", "https://www.pga.com", "https://my.pga.com", "https://checkout.stripe.com"],
+                "resourceDomains": ["https://mcp.pga.com", "https://cdn.openai.com", "https://res.cloudinary.com", "https://s3.amazonaws.com", "https://www.pga.com"]
+              },
+              "description": "A carousel of PGA golf coaches near a specified location",
+              "domain": "https://mcp.pga.com"
+            }
+          },
+          "digest": "sha256:bf0c67d00d9664a4a0a4a67d584c1be548e1d51374a4792ff7ac64e1f740e6af"
+        },
+        {
+          "uri": "ui://widgets/ext-apps/search_golf_coaches.html",
+          "name": "search_golf_coaches",
+          "description": "A carousel of PGA golf coaches near a specified location",
+          "digest": "sha256:ba97a07bdcc2ff3ad928e60939d2838f91e2d13f25d6915a80aacb27d146441d"
+        },
+        {
+          "uri": "ui://views/ext-apps/search_golf_programs.html?v=2f83308e",
+          "name": "search_golf_programs",
+          "description": "A carousel of upcoming PGA Coach programs near a specified location, including coaches and facilities",
+          "meta": {
+            "openai/widgetDescription": "Shows an interactive carousel of upcoming PGA Coach programs near a specified location, including hosting coaches and facilities.",
+            "ui": {
+              "csp": {
+                "baseUriDomains": ["https://mcp.pga.com"],
+                "connectDomains": ["https://mcp.pga.com", "https://www.pga.com", "https://my.pga.com"],
+                "resourceDomains": ["https://mcp.pga.com", "https://cdn.openai.com", "https://res.cloudinary.com", "https://s3.amazonaws.com", "https://images.ctfassets.net", "https://www.pga.com"]
+              },
+              "description": "A carousel of upcoming PGA Coach programs near a specified location, including coaches and facilities",
+              "domain": "https://mcp.pga.com"
+            }
+          },
+          "digest": "sha256:474870d74f1f2839a6b6d6ede1458b591f4bdeb7c650885a3c124f9ae4a3b085"
+        },
+        {
+          "uri": "ui://widgets/ext-apps/search_golf_programs.html",
+          "name": "search_golf_programs",
+          "description": "A carousel of upcoming PGA Coach programs near a specified location, including coaches and facilities",
+          "digest": "sha256:f9079b367a4956382f9463ec4913d299e55d48f7732449013c5a0ceb88ea857b"
+        }
+      ],
+      "digest": "sha256:210fbc31f4132ec7fffe23df43f5564e3ed2f7f9d8e326fd95064231726e4ab9"
+    }
+  }
+}
