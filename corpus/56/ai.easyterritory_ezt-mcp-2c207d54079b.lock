@@ -49,7 +49,7 @@
         {
           "name": "account_build",
           "title": "Build Territories by Account Field",
-          "description": "Builds territories that follow an account column, such as rep name or territory code from CRM: each part goes to the group holding most of its accounts (conflict_policy). Adds a new alignment (TAL). Needs an ingested point_layer, grouping_field, part_layer, and tal_label. Grouping values are labels, not balance metrics. part_scope: bbox_intersect (default; parts near the accounts) or explicit with part_filter, e.g. {state_abbr: TX}. A declared visit-frequency column needs visit_frequency_field or ignore_visit_frequency (CLARIFICATION_REQUIRED otherwise). With map_session_id the open map is the input. Returns a task; the result carries tal_id and ts_handle. analyze reports the statistics.",
+          "description": "Builds territories that follow an account column, such as rep name or territory code from CRM: each part goes to the group holding most of its accounts (conflict_policy). Adds a new alignment (TAL). Needs an ingested point_layer, grouping_field, part_layer, and tal_label. Grouping values are labels, not balance metrics. part_scope: bbox_intersect (default; parts near the accounts) or explicit with part_filter, e.g. {state_abbr: TX}; in_tal: {tal_id} keeps only that TAL's parts, not_in_tal: {tal_id} only the parts it leaves uncovered. A declared visit-frequency column needs visit_frequency_field or ignore_visit_frequency (CLARIFICATION_REQUIRED otherwise). With map_session_id the open map is the input. Returns a task; the result carries tal_id and ts_handle. analyze reports the statistics.",
           "inputSchema": {
             "properties": {
               "conflict_policy": {
@@ -125,6 +125,59 @@
                       "county_name": {
                         "type": ["string", "array"]
                       },
+                      "in_tal": {
+                        "additionalProperties": false,
+                        "description": "Keep only the parts assigned to a leaf territory of tal_id: the TAL's whole footprint, however many separate regions it has. ANDed with the other predicates (alone it is exactly that footprint). The TAL must use the same part_layer and hold parts. query_parts needs ts_handle or map_session_id here; builds read the TAL from the build's own Territory Solution.",
+                        "properties": {
+                          "map_session_id": {
+                            "description": "query_parts only: open map session whose Territory Solution holds the TAL.",
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "tal_id": {
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "territory_ids": {
+                            "description": "Narrow to these territory_id values (not display labels); a rollup includes every leaf below it. Unknown ids return UNKNOWN_TERRITORY_ID with available_territory_ids.",
+                            "items": {
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "minItems": 1,
+                            "type": "array"
+                          },
+                          "ts_handle": {
+                            "description": "query_parts only: Territory Solution reference (tsh_...) holding the TAL.",
+                            "minLength": 1,
+                            "type": "string"
+                          }
+                        },
+                        "required": ["tal_id"],
+                        "type": "object"
+                      },
+                      "not_in_tal": {
+                        "additionalProperties": false,
+                        "description": "White space: drop every part assigned to a leaf territory of tal_id from whatever the other predicates select (the whole layer when alone). The TAL must use the same part_layer. query_parts needs ts_handle or map_session_id here; builds read the TAL from the build's own Territory Solution.",
+                        "properties": {
+                          "map_session_id": {
+                            "description": "query_parts only: open map session whose Territory Solution holds the TAL.",
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "tal_id": {
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "ts_handle": {
+                            "description": "query_parts only: Territory Solution reference (tsh_...) holding the TAL.",
+                            "minLength": 1,
+                            "type": "string"
+                          }
+                        },
+                        "required": ["tal_id"],
+                        "type": "object"
+                      },
                       "part_layer": {
                         "type": "string"
                       },
@@ -165,6 +218,11 @@
                           }
                         ]
                       },
+                      "selection_task_id": {
+                        "description": "Builds only (auto_build, account_build, seed_build): a committed request_part_selection task (psel_...) whose part_ids become the scope; it is the only key in that part_filter.",
+                        "minLength": 1,
+                        "type": "string"
+                      },
                       "spatial": {
                         "additionalProperties": false,
                         "oneOf": [
@@ -200,44 +258,6 @@
                       "state_abbr": {
                         "type": ["string", "array"]
                       },
-                      "territory": {
-                        "additionalProperties": false,
-                        "oneOf": [
-                          {
-                            "required": ["ts_handle"]
-                          },
-                          {
-                            "required": ["map_session_id"]
-                          }
-                        ],
-                        "properties": {
-                          "include_descendants": {
-                            "default": true,
-                            "description": "When true, rollup territories include descendant leaf territory part_ids.",
-                            "type": "boolean"
-                          },
-                          "map_session_id": {
-                            "description": "Open map session whose Territory Solution holds the TAL.",
-                            "minLength": 1,
-                            "type": "string"
-                          },
-                          "tal_id": {
-                            "minLength": 1,
-                            "type": "string"
-                          },
-                          "territory_id": {
-                            "minLength": 1,
-                            "type": "string"
-                          },
-                          "ts_handle": {
-                            "description": "Territory Solution reference (tsh_...) holding the TAL (no inline TS).",
-                            "minLength": 1,
-                            "type": "string"
-                          }
-                        },
-                        "required": ["tal_id", "territory_id"],
-                        "type": "object"
-                      },
                       "text": {
                         "additionalProperties": false,
                         "properties": {
@@ -270,7 +290,7 @@
                   }
                 ],
                 "default": null,
-                "description": "Attribute filter resolved via query_parts (e.g. {\"state_abbr\": [\"FL\", \"GA\"]}). Implies part_scope explicit. Mutually exclusive with part_ids."
+                "description": "Attribute filter resolved via query_parts (e.g. {\"state_abbr\": [\"FL\", \"GA\"]}). Implies part_scope explicit. Mutually exclusive with part_ids. An existing TAL's footprint (a new version over the same parts, all its regions): {\"in_tal\": {\"tal_id\": \"tal-1\"}}. White space (parts no TAL covers): add not_in_tal, e.g. {\"state_abbr\": \"TX\", \"not_in_tal\": {\"tal_id\": \"tal-1\"}}; a person-trimmed set is {\"selection_task_id\": \"psel_...\"} after get_part_selection reports committed."
               },
               "part_ids": {
                 "anyOf": [
@@ -502,7 +522,7 @@
             "openWorld": false,
             "readOnly": false
           },
-          "digest": "sha256:696453028dc2a87709a8132b385536de336094ce72ced73b7a0a50f7f88ed7f1"
+          "digest": "sha256:74c5e25bef33357a1733ac370060db441c6bbd0fe0cee78fb3b085ba0e8c89bc"
         },
         {
           "name": "analyze",
@@ -1444,7 +1464,7 @@
         {
           "name": "auto_build",
           "title": "Auto-Build Territories",
-          "description": "Partitions ingested account points into balanced sales territories with equal workload, metric, or count over a part layer (e.g. ZIPs) as a new alignment (TAL). Needs the user's choices: build_mode (fixed_territory_count + territory_count, fixed_workload_target + target_workload hours, or scoped_split), objective (workload_bias for drive time + dwell; metric + metric_bias for a column such as Revenue; biases sum to 100), and dwell_time (a column or a stated scalar). Each missing choice returns CLARIFICATION_REQUIRED with ask_user; a declared visit-frequency column also needs visit_frequency_field or ignore_visit_frequency. part_scope: bbox_intersect (default; parts near the accounts, can reach national scale) or explicit with part_filter, e.g. {state_abbr: TX}. The filter limits parts; accounts outside it stay on the layer, unassigned (UNASSIGNED_ACCOUNTS). With map_session_id the open map is the input. Returns a task; national builds take minutes and estimated_remaining_ms is capped, not a forecast. The result carries tal_id, ts_handle, and phase_timings_ms; analyze has statistics.",
+          "description": "Partitions ingested account points into balanced sales territories with equal workload, metric, or count over a part layer (e.g. ZIPs) as a new alignment (TAL). Needs the user's choices: build_mode (fixed_territory_count + territory_count, fixed_workload_target + target_workload hours, or scoped_split), objective (workload_bias = drive + dwell, metric_bias = one column such as Revenue, count_bias = account count; sum 100), and dwell_time (a column or a stated scalar). A missing choice returns CLARIFICATION_REQUIRED with ask_user; a visit-frequency column also needs visit_frequency_field or ignore_visit_frequency. seed_point_layer seeds territories from provider points (any count). part_scope: bbox_intersect (default; can be national) or explicit with part_filter, e.g. {state_abbr: TX}; accounts outside stay unassigned (UNASSIGNED_ACCOUNTS). part_filter {in_tal: {tal_id}} keeps a TAL's parts; {not_in_tal: {tal_id}} its white space. With map_session_id the open map is the input. Returns a task; national builds take minutes. The result carries tal_id, ts_handle, and phase_timings_ms.",
           "inputSchema": {
             "properties": {
               "build_mode": {
@@ -1590,14 +1610,20 @@
                 "anyOf": [
                   {
                     "additionalProperties": true,
-                    "description": "Balance objective: {metric: '<column>|__account_count__', workload_bias: 0..100, metric_bias: 0..100}. Biases sum to 100. For pure metric balance, pass {metric: '<column>', workload_bias: 0, metric_bias: 100} (or {metric: '<column>'} on restructure tools). When omitted on restructure tools, inherits the source TAL build_provenance objective or seed_build target.",
+                    "description": "Balance objective: workload_bias + metric_bias + count_bias = 100, weighting workload (drive + dwell), one metric column, and account count. Workload: {workload_bias: 100}. Metric: {metric: '<column>', workload_bias: 0, metric_bias: 100}. Count: {workload_bias: 0, count_bias: 100}. Three-way: {metric: 'Score', workload_bias: 40, metric_bias: 40, count_bias: 20}. Only one metric column balances; combine several into one score column at ingest. Omitted on restructure tools: inherits the source TAL build_provenance objective.",
                     "properties": {
+                      "count_bias": {
+                        "description": "Weight (0..100) on account count (locations per territory). Default 0.",
+                        "maximum": 100,
+                        "minimum": 0,
+                        "type": "integer"
+                      },
                       "metric": {
-                        "description": "Point metric column name to balance (e.g. 'Revenue', 'weekly_volume'), or '__account_count__' for location-count balance.",
+                        "description": "Point metric column name to balance (e.g. 'Revenue', 'Score'). Required when metric_bias > 0. Account count is count_bias, not a column.",
                         "type": "string"
                       },
                       "metric_bias": {
-                        "description": "Weight (0..100) on the metric or location-count dimension.",
+                        "description": "Weight (0..100) on the metric column.",
                         "maximum": 100,
                         "minimum": 0,
                         "type": "integer"
@@ -1633,6 +1659,59 @@
                     "properties": {
                       "county_name": {
                         "type": ["string", "array"]
+                      },
+                      "in_tal": {
+                        "additionalProperties": false,
+                        "description": "Keep only the parts assigned to a leaf territory of tal_id: the TAL's whole footprint, however many separate regions it has. ANDed with the other predicates (alone it is exactly that footprint). The TAL must use the same part_layer and hold parts. query_parts needs ts_handle or map_session_id here; builds read the TAL from the build's own Territory Solution.",
+                        "properties": {
+                          "map_session_id": {
+                            "description": "query_parts only: open map session whose Territory Solution holds the TAL.",
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "tal_id": {
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "territory_ids": {
+                            "description": "Narrow to these territory_id values (not display labels); a rollup includes every leaf below it. Unknown ids return UNKNOWN_TERRITORY_ID with available_territory_ids.",
+                            "items": {
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "minItems": 1,
+                            "type": "array"
+                          },
+                          "ts_handle": {
+                            "description": "query_parts only: Territory Solution reference (tsh_...) holding the TAL.",
+                            "minLength": 1,
+                            "type": "string"
+                          }
+                        },
+                        "required": ["tal_id"],
+                        "type": "object"
+                      },
+                      "not_in_tal": {
+                        "additionalProperties": false,
+                        "description": "White space: drop every part assigned to a leaf territory of tal_id from whatever the other predicates select (the whole layer when alone). The TAL must use the same part_layer. query_parts needs ts_handle or map_session_id here; builds read the TAL from the build's own Territory Solution.",
+                        "properties": {
+                          "map_session_id": {
+                            "description": "query_parts only: open map session whose Territory Solution holds the TAL.",
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "tal_id": {
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "ts_handle": {
+                            "description": "query_parts only: Territory Solution reference (tsh_...) holding the TAL.",
+                            "minLength": 1,
+                            "type": "string"
+                          }
+                        },
+                        "required": ["tal_id"],
+                        "type": "object"
                       },
                       "part_layer": {
                         "type": "string"
@@ -1674,6 +1753,11 @@
                           }
                         ]
                       },
+                      "selection_task_id": {
+                        "description": "Builds only (auto_build, account_build, seed_build): a committed request_part_selection task (psel_...) whose part_ids become the scope; it is the only key in that part_filter.",
+                        "minLength": 1,
+                        "type": "string"
+                      },
                       "spatial": {
                         "additionalProperties": false,
                         "oneOf": [
@@ -1709,44 +1793,6 @@
                       "state_abbr": {
                         "type": ["string", "array"]
                       },
-                      "territory": {
-                        "additionalProperties": false,
-                        "oneOf": [
-                          {
-                            "required": ["ts_handle"]
-                          },
-                          {
-                            "required": ["map_session_id"]
-                          }
-                        ],
-                        "properties": {
-                          "include_descendants": {
-                            "default": true,
-                            "description": "When true, rollup territories include descendant leaf territory part_ids.",
-                            "type": "boolean"
-                          },
-                          "map_session_id": {
-                            "description": "Open map session whose Territory Solution holds the TAL.",
-                            "minLength": 1,
-                            "type": "string"
-                          },
-                          "tal_id": {
-                            "minLength": 1,
-                            "type": "string"
-                          },
-                          "territory_id": {
-                            "minLength": 1,
-                            "type": "string"
-                          },
-                          "ts_handle": {
-                            "description": "Territory Solution reference (tsh_...) holding the TAL (no inline TS).",
-                            "minLength": 1,
-                            "type": "string"
-                          }
-                        },
-                        "required": ["tal_id", "territory_id"],
-                        "type": "object"
-                      },
                       "text": {
                         "additionalProperties": false,
                         "properties": {
@@ -1779,7 +1825,7 @@
                   }
                 ],
                 "default": null,
-                "description": "Attribute filter resolved via query_parts (e.g. {\"state_abbr\": \"TX\"}). Implies part_scope explicit. Mutually exclusive with part_ids."
+                "description": "Attribute filter resolved via query_parts (e.g. {\"state_abbr\": \"TX\"}). Implies part_scope explicit. Mutually exclusive with part_ids. An existing TAL's footprint (a new version over the same parts, all its regions): {\"in_tal\": {\"tal_id\": \"tal-1\"}}. White space (parts no TAL covers): add not_in_tal, e.g. {\"state_abbr\": \"TX\", \"not_in_tal\": {\"tal_id\": \"tal-1\"}}; a person-trimmed set is {\"selection_task_id\": \"psel_...\"} after get_part_selection reports committed."
               },
               "part_ids": {
                 "anyOf": [
@@ -1824,6 +1870,34 @@
                 "enum": ["default", "strict", "report_only"],
                 "title": "Repair Policy",
                 "type": "string"
+              },
+              "seed_attraction": {
+                "anyOf": [
+                  {
+                    "maximum": 100,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "0 = providers only pick the start; 100 = each territory stays centered on its provider. Default 70. Needs seed_point_layer.",
+                "title": "Seed Attraction"
+              },
+              "seed_point_layer": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "A second ingested point layer (service providers, offices, rep homes) that seeds the territories; each used provider names its territory.",
+                "title": "Seed Point Layer"
               },
               "tal_label": {
                 "title": "Tal Label",
@@ -1934,6 +2008,9 @@
                   "scoped_split_summary": {
                     "type": "object"
                   },
+                  "seed_summary": {
+                    "type": "object"
+                  },
                   "sleep_ms": {
                     "type": "integer"
                   },
@@ -1995,7 +2072,7 @@
             "openWorld": false,
             "readOnly": false
           },
-          "digest": "sha256:c2799009de221340a7a33675386de042e45bc19d3c59bbd16768b574b9e739b1"
+          "digest": "sha256:637c2f6b0907c70fc7f520e4ea1e5ec0e296c43c4c5744af8b6063eaa14d7f83"
         },
         {
           "name": "calculate_route",
@@ -2507,7 +2584,7 @@
         {
           "name": "cluster_points",
           "title": "Cluster Points",
-          "description": "Groups the points of one ingested layer into balanced clusters directly, with no ZIP or part layer and no territory alignment. Writes group_field (default group_id) on every point and colors the layer by it, replacing any prior color classification (size and shape channels stay). Needs build_mode (fixed_territory_count or fixed_workload_target), objective, and dwell_time, as in auto_build; a missing one returns CLARIFICATION_REQUIRED with the question. point_filter (e.g. {STATE: FL}) clusters a subset of the layer; unmatched points stay, ungrouped. Max 25,000 points after the filter. seed_point_layer, a second point layer such as technician homes, anchors one group per seed (the seed count matches the group count, else seed_count_mismatch); seed_attraction 0-100 (default 70) is the pull of each seed on its group. Returns a task; the result lists groups with point_count, workload_hours, and point_ids.",
+          "description": "Groups the points of one ingested layer into balanced clusters directly, with no ZIP or part layer and no territory alignment. Writes group_field (default group_id) on every point and colors the layer by it, replacing any prior color classification (size and shape channels stay). Needs build_mode (fixed_territory_count or fixed_workload_target), objective, and dwell_time, as in auto_build; a missing one returns CLARIFICATION_REQUIRED with the question. point_filter (e.g. {STATE: FL}) clusters a subset of the layer; unmatched points stay, ungrouped. Max 25,000 points after the filter. seed_point_layer, a second point layer such as technician homes, seeds the groups: with more seeds than groups the best-placed ones are used (seed_summary.unused lists the rest), with fewer the solver adds supplemental seeds in uncovered demand. seed_attraction 0-100 (default 70) is the pull of each seed on its group. Returns a task; the result lists groups with point_count, workload_hours, and point_ids.",
           "inputSchema": {
             "properties": {
               "build_mode": {
@@ -2662,14 +2739,20 @@
                 "anyOf": [
                   {
                     "additionalProperties": true,
-                    "description": "Balance objective: {metric: '<column>|__account_count__', workload_bias: 0..100, metric_bias: 0..100}. Biases sum to 100. For pure metric balance, pass {metric: '<column>', workload_bias: 0, metric_bias: 100} (or {metric: '<column>'} on restructure tools). When omitted on restructure tools, inherits the source TAL build_provenance objective or seed_build target.",
+                    "description": "Balance objective: workload_bias + metric_bias + count_bias = 100, weighting workload (drive + dwell), one metric column, and account count. Workload: {workload_bias: 100}. Metric: {metric: '<column>', workload_bias: 0, metric_bias: 100}. Count: {workload_bias: 0, count_bias: 100}. Three-way: {metric: 'Score', workload_bias: 40, metric_bias: 40, count_bias: 20}. Only one metric column balances; combine several into one score column at ingest. Omitted on restructure tools: inherits the source TAL build_provenance objective.",
                     "properties": {
+                      "count_bias": {
+                        "description": "Weight (0..100) on account count (locations per territory). Default 0.",
+                        "maximum": 100,
+                        "minimum": 0,
+                        "type": "integer"
+                      },
                       "metric": {
-                        "description": "Point metric column name to balance (e.g. 'Revenue', 'weekly_volume'), or '__account_count__' for location-count balance.",
+                        "description": "Point metric column name to balance (e.g. 'Revenue', 'Score'). Required when metric_bias > 0. Account count is count_bias, not a column.",
                         "type": "string"
                       },
                       "metric_bias": {
-                        "description": "Weight (0..100) on the metric or location-count dimension.",
+                        "description": "Weight (0..100) on the metric column.",
                         "maximum": 100,
                         "minimum": 0,
                         "type": "integer"
@@ -2760,7 +2843,7 @@
                   }
                 ],
                 "default": null,
-                "description": "Second ingested point layer whose locations anchor the group centroids one-to-one (technician homes, depots). Must differ from point_layer; its point count must equal the group count.",
+                "description": "Second ingested point layer whose locations seed the groups (technician homes, depots). Must differ from point_layer. More seeds than groups: the best-placed are used and the rest land in seed_summary.unused. Fewer: the solver adds supplemental seeds in uncovered demand.",
                 "title": "Seed Point Layer"
               },
               "ts_handle": {
@@ -2940,12 +3023,12 @@
             "openWorld": false,
             "readOnly": false
           },
-          "digest": "sha256:b32afb6b004d0ad621749d88024bf7ff735c1467173d6d4f4c60a399b38dff8d"
+          "digest": "sha256:1fb79bdf36580a826e33d2089b70bc0196c229bf5b4e30981b9233352b087886"
         },
         {
           "name": "configure_map",
           "title": "Configure Map",
-          "description": "Updates map settings on the Territory Solution and refreshes the live map: project_name (map heading), theme (dark | light basemap and UI style), loaded_part_layers ([] hides ZIP/part outlines; builds never load them), active_part_layer, active_tal_id, center and zoom (default view; the live map jumps there), and point symbology. point_layer_classifications entries are {point_layer, field, method: quantile | equal_interval | categorical | manual, class_count 2-12, channel: color | size | shape, optional colors/sizes/shapes/style}; the server computes the breaks and returns per-class counts. One classification per channel per layer; clear:true removes one. Shapes include circle, square, triangle, diamond, star, cross, house, pin, flag, hexagon, pentagon, shield, arrow_up, building, person. classification without point_layer is a project-level setting that does not color points. Input: map_session_id (the live map) or ts_handle.",
+          "description": "Updates map settings on the Territory Solution and refreshes the live map: project_name (map heading), theme (dark | light basemap and UI style), loaded_part_layers ([] hides ZIP/part outlines; builds never load them), active_part_layer, active_tal_id, center and zoom (default view; the live map jumps there), and point symbology. point_layer_classifications entries are {point_layer, field, method: quantile | equal_interval | categorical | manual, class_count 2-12, channel: color | size | shape, optional colors/sizes/shapes/style}; the server computes the breaks and returns per-class counts. One classification per channel per layer; clear:true removes one. Shapes cover role icons and all Designer symbols (circle, ring, square, triangle, triangle_down, diamond, star, star4, star6, star8, cross, house, pin, pin_solid, square_pin, flag, hexagon, pentagon, shield, arrow_up, building, tower, person, vehicle, gear, paint_swath, plus *_open variants). classification without point_layer is a project-level setting that does not color points. Input: map_session_id (the live map) or ts_handle.",
           "inputSchema": {
             "properties": {
               "active_part_layer": {
@@ -3167,7 +3250,7 @@
                           "type": "string"
                         },
                         "shapes": {
-                          "description": "Required for the shape channel unless every manual class carries a shape. Catalog: circle, square, triangle, diamond, star, cross, house, pin, flag, hexagon, pentagon, shield, arrow_up, building, person (aliases: home, marker/map_pin, hex, arrow/up, warehouse/depot, user/people/tech/technician/rep, plus/x).",
+                          "description": "Required for the shape channel unless every manual class carries a shape. Catalog: circle, ring, square, square_open, triangle, triangle_open, triangle_down, triangle_down_open, diamond, diamond_open, star, star4, star6, star8, cross, house, pin, pin_solid, square_pin, square_pin_solid, flag, hexagon, pentagon, shield, arrow_up, building, tower, person, vehicle, gear, paint_swath (Designer and role aliases such as user/rep, residence, warehouse, truck, circle2, invertedTriangle, superstar also work).",
                           "items": {
                             "minLength": 1,
                             "type": "string"
@@ -3195,7 +3278,7 @@
                               "type": "number"
                             },
                             "shape": {
-                              "description": "Point symbol from the MC catalog: circle|square|triangle|diamond|star|cross|house|pin|flag|hexagon|pentagon|shield|arrow_up|building|person.",
+                              "description": "Point symbol from the MC catalog: circle|ring|square|square_open|triangle|triangle_open|triangle_down|triangle_down_open|diamond|diamond_open|star|star4|star6|star8|cross|house|pin|pin_solid|square_pin|square_pin_solid|flag|hexagon|pentagon|shield|arrow_up|building|tower|person|vehicle|gear|paint_swath.",
                               "minLength": 1,
                               "type": "string"
                             },
@@ -3397,7 +3480,7 @@
             "openWorld": false,
             "readOnly": false
           },
-          "digest": "sha256:1089c556de93cf7cff9d55a1cd8af194a1e0ffb3d6799fe295ea7bd67c7d48f9"
+          "digest": "sha256:3aabdd5cea2ec8b06670c056818f0162f08e7f98a739fe7fc5ecc0b6a339665d"
         },
         {
           "name": "create_territory_from_parts",
@@ -5691,7 +5774,7 @@
         {
           "name": "geocode_address",
           "title": "Geocode Addresses",
-          "description": "Geocode-only pass: turns staged customer addresses into coordinates with match confidence, without loading a map layer. The rows are staged with request_account_upload (file, csv_text, or rows; up to 10,000 rows here) and passed as its upload_handle; the handle is not claimed, so ingest_accounts can load the same rows afterward. Accepts address/address_line1/street, city, state, and postal columns (common source headers are mapped). accept_suboptimal_geocodes=true accepts ZIP-centroid matches. Cached addresses are free; billable lookups count against a monthly per-key quota, and past it the result is PROVIDER_QUOTA_EXCEEDED with limit, used, remaining, and period_resets_at. Returns a task; the result has summary, sample_rows (10), failed_rows (first 50), a geocoded_rows_artifact with share_url for every row, and suggested_ingest. ingest_accounts alone also geocodes while it loads the map layer.",
+          "description": "Geocode-only pass: turns staged customer addresses into coordinates with match confidence, without loading a map layer. The rows are staged with request_account_upload (file, csv_text, or rows; up to 10,000 rows here) and passed as its upload_handle; the handle is not claimed, so ingest_accounts can load the same rows afterward. Accepts address/address_line1/street, city, state, and postal columns (common source headers are mapped). accept_suboptimal_geocodes=true accepts ZIP-centroid matches. Each address is billed once: cached no-match and suboptimal verdicts return free (failed_rows cached_verdict); a corrected address is a new lookup. Billable lookups count against a monthly per-key quota, and past it the result is PROVIDER_QUOTA_EXCEEDED with limit, used, remaining, and period_resets_at. Returns a task; the result has summary, sample_rows (10), failed_rows (first 50), a geocoded_rows_artifact with share_url for every row, and suggested_ingest. ingest_accounts alone also geocodes while it loads the map layer.",
           "inputSchema": {
             "properties": {
               "accept_suboptimal_geocodes": {
@@ -5714,6 +5797,7 @@
               },
               "force_regeocode": {
                 "default": false,
+                "description": "Admin keys only (debug/testing); a customer key gets ADMIN_REQUIRED. Leave false. True geocodes rows that already have coordinates, billing each one.",
                 "title": "Force Regeocode",
                 "type": "boolean"
               },
@@ -5747,6 +5831,12 @@
                 "default": null,
                 "title": "Region Hint"
               },
+              "retry_bad_geocodes": {
+                "default": false,
+                "description": "Admin keys only (debug/testing); a customer key gets ADMIN_REQUIRED. Leave false. True re-asks the provider, billed, for the same address text whose cached verdict is no-match or suboptimal. A corrected address needs no flag: it is a new lookup.",
+                "title": "Retry Bad Geocodes",
+                "type": "boolean"
+              },
               "upload_handle": {
                 "description": "upload_handle (aup_...) from request_account_upload holding the address rows. Not claimed: ingest_accounts can reuse it.",
                 "title": "Upload Handle",
@@ -5754,6 +5844,7 @@
               },
               "use_cache": {
                 "default": true,
+                "description": "Admin keys only (debug/testing); a customer key gets ADMIN_REQUIRED. Leave true. False skips both geocode caches and bills a provider lookup for every address.",
                 "title": "Use Cache",
                 "type": "boolean"
               }
@@ -5885,7 +5976,7 @@
             "openWorld": true,
             "readOnly": false
           },
-          "digest": "sha256:f9a020145222356667b31aaca95701813abedf17fd8dcbf257688a903a6dbf73"
+          "digest": "sha256:76964c67a3f9505dd1bd1375854d4760d38a7d47a415686ce76729be65e9c825"
         },
         {
           "name": "get_guidance",
@@ -6389,6 +6480,9 @@
                   "expires_at": {
                     "type": "string"
                   },
+                  "initial_part_count": {
+                    "type": "integer"
+                  },
                   "map_session_id": {
                     "type": "string"
                   },
@@ -6456,7 +6550,7 @@
             "openWorld": false,
             "readOnly": true
           },
-          "digest": "sha256:5e63b3e71dc0fa07222f1963c26bea18f8b06cb3e1e3015198d3f969e27e3cc1"
+          "digest": "sha256:23a6711da4e27e71e7f4dc07019bef0ba5e62c450610ebd1038b5c138a8b47f5"
         },
         {
           "name": "import_dataverse_view",
@@ -6611,7 +6705,7 @@
         {
           "name": "import_designer_project",
           "title": "Import Designer Project",
-          "description": "Opens an EasyTerritory Designer project as a Territory Solution: the server exports it from Designer and imports it (territories with part_ids, point layers up to 250,000 features, routes). No file passes through the agent. Returns a task; the result has ts_handle and designer_warnings. With map_session_id the project replaces the open map's content. include_points / point_layers / include_routes / include_manual_polygons narrow it; part_layer forces the part layer. A Designer part layer is mapped to its EZT part layer id (listed in designer_warnings); one with no EZT match fails UNKNOWN_PART_LAYER with available_part_layers; retry with the user's choice as part_layer. Requires link_designer; project_id comes from list_designer_projects.",
+          "description": "Opens an EasyTerritory Designer project as a Territory Solution: the server exports it from Designer and imports it (part-based territories, non-part polygon areas such as radius buffers or hand-drawn shapes, point layers up to 250,000 features with Designer symbols/classifications, and routes). No file passes through the agent. Returns a task; the result has ts_handle and designer_warnings. With map_session_id the project replaces the open map's content. include_points / point_layers / include_routes / include_manual_polygons narrow it; part_layer forces the part layer. A Designer part layer is mapped to its EZT part layer id (listed in designer_warnings); one with no EZT match fails UNKNOWN_PART_LAYER with available_part_layers; retry with the user's choice as part_layer. Requires link_designer; project_id comes from list_designer_projects.",
           "inputSchema": {
             "properties": {
               "include_manual_polygons": {
@@ -6766,12 +6860,12 @@
             "openWorld": true,
             "readOnly": false
           },
-          "digest": "sha256:2601cbc92fb0280559949776a5530f3a2b26f88c0aad489f57aac7c641c78402"
+          "digest": "sha256:d4ec4a9b7b43de741ddd9d83e338e1d6d8b987eb682b7ab665ecd06f4ae719ad"
         },
         {
           "name": "import_geojson",
           "title": "Import GeoJSON",
-          "description": "Opens a GeoJSON FeatureCollection (points, or a territory file, plain or gzip/zip) as a Territory Solution; returns ts_handle and a summary. A file of any real size moves by reference, never inline: call with no file argument for an upload_url (give the user share_with_user, or POST it with curl_example), then poll import_geojson(upload_handle) every recommended_poll_delay_ms until upload_status=received. geojson_file takes a host file (download_url). Inline geojson / geojson_text / geojson_gzip take at most 256 KB; a larger one returns INLINE_PAYLOAD_TOO_LARGE with the upload_url call to make. Polygons without part_ids need part_layer + overlay_policy=centroid_within. For a Designer project, use import_designer_project.",
+          "description": "Opens a GeoJSON FeatureCollection (points, or a territory file, plain or gzip/zip) as a Territory Solution; returns ts_handle and a summary. A file of any real size moves by reference, never inline: call with no file argument for an upload_url (give the user share_with_user, or POST it with curl_example), then poll import_geojson(upload_handle) every recommended_poll_delay_ms until upload_status=received. geojson_file takes a host file (download_url). Inline geojson / geojson_text / geojson_gzip take at most 256 KB; a larger one returns INLINE_PAYLOAD_TOO_LARGE with the upload_url call to make. Polygons without part_ids import as polygon areas with tal_kind=\"polygon\" (measured by point-in-polygon), or convert to parts with part_layer + overlay_policy=\"centroid_within\". For a Designer project, use import_designer_project.",
           "inputSchema": {
             "properties": {
               "geojson": {
@@ -6852,7 +6946,7 @@
                   }
                 ],
                 "default": null,
-                "description": "Explicit opt-in for importing territory polygons without part_ids: assigns parts whose centroids fall inside each polygon.",
+                "description": "Explicit opt-in for converting territory polygons without part_ids into a part-based TAL: assigns parts whose centroids fall inside each polygon.",
                 "title": "Overlay Policy"
               },
               "part_layer": {
@@ -6880,6 +6974,19 @@
                 "default": null,
                 "description": "Name for the imported point layer (default: points).",
                 "title": "Point Layer"
+              },
+              "tal_kind": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Import polygons without part_ids directly as an area layer (tal_kind=polygon), measured by point-in-polygon with no part_layer.",
+                "title": "Tal Kind"
               },
               "tal_label": {
                 "anyOf": [
@@ -7001,12 +7108,12 @@
           "meta": {
             "openai/fileParams": ["geojson_file"]
           },
-          "digest": "sha256:6c43acfe2937235dc8f21abe8ddc6fc1f535d4e37d047f2a0d58a258bfd845ee"
+          "digest": "sha256:23975bbf99e3c43b1f9e3ccc2d1489965ec52d6df82a6cf2db2d08c9656dccb5"
         },
         {
           "name": "ingest_accounts",
           "title": "Ingest Accounts",
-          "description": "Account ingest: loads account rows (CRM records, a CSV, a spreadsheet) as point data on a named point layer of the Territory Solution, to add them to the map, geocoding rows without coordinates. Rows come only as accounts_handle from request_account_upload (the user's file, csv_text, or rows; 100,000-row cap); its suggested_ingest carries these args. latitude/lat and longitude/lon/lng pass through; other names need latitude_field/longitude_field, and unused coordinate-like columns return CLARIFICATION_REQUIRED (needs_coordinate_fields). id_field is a unique key (default row_id); duplicates return needs_unique_row_id. Only declared columns are kept: metric_fields, workload_fields, dwell_time_field, visit_frequency_field, grouping_fields, display_fields, search_fields; to load a contractor list, layer_role=contractors adds trade_field, tier_field, capacity_field, service_zip_field (analyze_network_coverage). Later use of an undeclared column returns UNDECLARED_FIELD. Over geocode quota fails it whole. Returns a task with failed_rows and map_refresh.",
+          "description": "Account ingest: loads account rows (CRM records, a CSV, a spreadsheet) as point data on a named point layer of the Territory Solution, to add them to the map, geocoding rows without coordinates. Rows come only as accounts_handle from request_account_upload (a file, csv_text, or rows; 100,000-row cap); its suggested_ingest carries these args. latitude/lat and longitude/lon/lng pass through; other names need latitude_field/longitude_field, and unused coordinate-like columns return CLARIFICATION_REQUIRED (needs_coordinate_fields). id_field is a unique key (default row_id); duplicates return needs_unique_row_id. Only declared columns are kept: metric_fields, workload_fields, dwell_time_field, visit_frequency_field, grouping_fields, display_fields, search_fields; to load a contractor list, layer_role=contractors adds trade_field, tier_field, capacity_field, service_zip_field (analyze_network_coverage). Later use of an undeclared column returns UNDECLARED_FIELD. Over geocode quota fails it whole; a bad address bills once (fix it to retry). Returns a task with failed_rows and map_refresh.",
           "inputSchema": {
             "$defs": {
               "RepoShape1": {
@@ -7111,7 +7218,7 @@
               },
               "force_regeocode": {
                 "default": false,
-                "description": "When true, ignore existing coordinates and geocode addresses. Also confirms intentional address geocoding when unused numeric lat/lon-like columns are present (skips needs_coordinate_fields guard).",
+                "description": "Admin keys only (debug/testing); a customer key gets ADMIN_REQUIRED. Leave false. True geocodes rows that already have coordinates, billing each one.",
                 "title": "Force Regeocode",
                 "type": "boolean"
               },
@@ -7238,6 +7345,12 @@
                 "title": "Replace Existing",
                 "type": "boolean"
               },
+              "retry_bad_geocodes": {
+                "default": false,
+                "description": "Admin keys only (debug/testing); a customer key gets ADMIN_REQUIRED. Leave false. True re-asks the provider, billed, for the same address text whose cached verdict is no-match or suboptimal. A corrected address needs no flag: it is a new lookup.",
+                "title": "Retry Bad Geocodes",
+                "type": "boolean"
+              },
               "search_fields": {
                 "anyOf": [
                   {
@@ -7308,6 +7421,7 @@
               },
               "use_cache": {
                 "default": true,
+                "description": "Admin keys only (debug/testing); a customer key gets ADMIN_REQUIRED. Leave true. False skips both geocode caches and bills a provider lookup for every address.",
                 "title": "Use Cache",
                 "type": "boolean"
               },
@@ -7485,7 +7599,7 @@
             "openWorld": true,
             "readOnly": false
           },
-          "digest": "sha256:4146946dae4dcd3c34a191d025499472cb2079eda5b1714fbb66c7bd3fbbb838"
+          "digest": "sha256:9c6269ba1f0993b92f4ce5552f29240d03e58ff1e900ba0301803345cc600544"
         },
         {
           "name": "isochrone_build",
@@ -9122,7 +9236,7 @@
         {
           "name": "query_parts",
           "title": "Query Territory Parts",
-          "description": "Returns attributes (no geometry) for parts of a part layer listed by list_part_layers or ezt://part-layers. Takes exactly one of filter (e.g. {state_abbr: TX}) or part_ids; neither or both returns INVALID_REQUEST. Paged with page_token. filter.territory {tal_id, territory_id} with ts_handle or map_session_id lists one territory's parts.",
+          "description": "Returns attributes (no geometry) for parts of a part layer listed by list_part_layers or ezt://part-layers. Takes exactly one of filter (e.g. {state_abbr: TX}) or part_ids; neither or both returns INVALID_REQUEST. Paged with page_token. TAL membership (each needs map_session_id or ts_handle inside): filter.in_tal {tal_id, territory_ids?} keeps only the parts that TAL assigns (its whole footprint, however many separate regions; territory_ids narrows to those territories and everything under them); filter.not_in_tal {tal_id} drops that TAL's parts (white space), e.g. {state_abbr: TX, not_in_tal: {...}}. Both AND with other predicates. total_count is the set size. Build from it with the same part_filter.",
           "inputSchema": {
             "properties": {
               "filter": {
@@ -9133,6 +9247,59 @@
                     "properties": {
                       "county_name": {
                         "type": ["string", "array"]
+                      },
+                      "in_tal": {
+                        "additionalProperties": false,
+                        "description": "Keep only the parts assigned to a leaf territory of tal_id: the TAL's whole footprint, however many separate regions it has. ANDed with the other predicates (alone it is exactly that footprint). The TAL must use the same part_layer and hold parts. query_parts needs ts_handle or map_session_id here; builds read the TAL from the build's own Territory Solution.",
+                        "properties": {
+                          "map_session_id": {
+                            "description": "query_parts only: open map session whose Territory Solution holds the TAL.",
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "tal_id": {
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "territory_ids": {
+                            "description": "Narrow to these territory_id values (not display labels); a rollup includes every leaf below it. Unknown ids return UNKNOWN_TERRITORY_ID with available_territory_ids.",
+                            "items": {
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "minItems": 1,
+                            "type": "array"
+                          },
+                          "ts_handle": {
+                            "description": "query_parts only: Territory Solution reference (tsh_...) holding the TAL.",
+                            "minLength": 1,
+                            "type": "string"
+                          }
+                        },
+                        "required": ["tal_id"],
+                        "type": "object"
+                      },
+                      "not_in_tal": {
+                        "additionalProperties": false,
+                        "description": "White space: drop every part assigned to a leaf territory of tal_id from whatever the other predicates select (the whole layer when alone). The TAL must use the same part_layer. query_parts needs ts_handle or map_session_id here; builds read the TAL from the build's own Territory Solution.",
+                        "properties": {
+                          "map_session_id": {
+                            "description": "query_parts only: open map session whose Territory Solution holds the TAL.",
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "tal_id": {
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "ts_handle": {
+                            "description": "query_parts only: Territory Solution reference (tsh_...) holding the TAL.",
+                            "minLength": 1,
+                            "type": "string"
+                          }
+                        },
+                        "required": ["tal_id"],
+                        "type": "object"
                       },
                       "part_layer": {
                         "type": "string"
@@ -9174,6 +9341,11 @@
                           }
                         ]
                       },
+                      "selection_task_id": {
+                        "description": "Builds only (auto_build, account_build, seed_build): a committed request_part_selection task (psel_...) whose part_ids become the scope; it is the only key in that part_filter.",
+                        "minLength": 1,
+                        "type": "string"
+                      },
                       "spatial": {
                         "additionalProperties": false,
                         "oneOf": [
@@ -9209,44 +9381,6 @@
                       "state_abbr": {
                         "type": ["string", "array"]
                       },
-                      "territory": {
-                        "additionalProperties": false,
-                        "oneOf": [
-                          {
-                            "required": ["ts_handle"]
-                          },
-                          {
-                            "required": ["map_session_id"]
-                          }
-                        ],
-                        "properties": {
-                          "include_descendants": {
-                            "default": true,
-                            "description": "When true, rollup territories include descendant leaf territory part_ids.",
-                            "type": "boolean"
-                          },
-                          "map_session_id": {
-                            "description": "Open map session whose Territory Solution holds the TAL.",
-                            "minLength": 1,
-                            "type": "string"
-                          },
-                          "tal_id": {
-                            "minLength": 1,
-                            "type": "string"
-                          },
-                          "territory_id": {
-                            "minLength": 1,
-                            "type": "string"
-                          },
-                          "ts_handle": {
-                            "description": "Territory Solution reference (tsh_...) holding the TAL (no inline TS).",
-                            "minLength": 1,
-                            "type": "string"
-                          }
-                        },
-                        "required": ["tal_id", "territory_id"],
-                        "type": "object"
-                      },
                       "text": {
                         "additionalProperties": false,
                         "properties": {
@@ -9279,7 +9413,7 @@
                   }
                 ],
                 "default": null,
-                "description": "Attribute/text/range/spatial/territory filter. Mutually exclusive with top-level part_ids."
+                "description": "Attribute/text/range/spatial/in_tal/not_in_tal filter. Mutually exclusive with top-level part_ids."
               },
               "max_results": {
                 "default": 100,
@@ -9434,7 +9568,7 @@
             "openWorld": false,
             "readOnly": true
           },
-          "digest": "sha256:60997ea1a12a9ab8b3a1ec9fd0489f13fe66044a5e65398a97e61637ad116d48"
+          "digest": "sha256:fea2f1183ef06c702239b6829e97f2d0f925e8fa3e5eb6c6a6594d4f8196608f"
         },
         {
           "name": "realign",
@@ -10283,7 +10417,7 @@
         {
           "name": "request_part_selection",
           "title": "Request Part Selection",
-          "description": "Lets the person adjust boundaries by picking parts (e.g. ZIPs) on the map: puts the open map into select mode on a part_layer, for purpose realign, a new territory, or a plain list. Returns selection_task_id; get_part_selection reports status (awaiting_user_selection, then committed, expired, or cancelled) and the committed part_ids, and its response carries recommended_poll_delay_ms. The commit happens on the map, not in chat. destination_territory_id and realign_operation pre-set a realign. Works on the in-chat map and the map_url tab. map_session_id selects on the open map; ts_handle opens a stored Territory Solution first. A selection the person started from the map legend is read with get_map_selection.",
+          "description": "Lets the person adjust boundaries by picking parts (e.g. ZIPs) on the map: puts the open map into select mode on a part_layer, for purpose realign, a new territory, or a plain list. Returns selection_task_id; get_part_selection reports status (awaiting_user_selection, then committed, expired, or cancelled) and the committed part_ids, and its response carries recommended_poll_delay_ms. The commit happens on the map, not in chat. destination_territory_id and realign_operation pre-set a realign. Works on the in-chat map and the map_url tab. map_session_id selects on the open map; ts_handle opens a stored Territory Solution first. initial_part_filter opens with a set pre-selected (e.g. in_tal or white space not_in_tal) for the person to trim; build from the committed set with part_filter {selection_task_id}. A selection the person started from the map legend is read with get_map_selection.",
           "inputSchema": {
             "properties": {
               "active_tal_id": {
@@ -10323,6 +10457,182 @@
                 ],
                 "default": null,
                 "title": "Expiry Seconds"
+              },
+              "initial_part_filter": {
+                "anyOf": [
+                  {
+                    "additionalProperties": true,
+                    "minProperties": 1,
+                    "properties": {
+                      "county_name": {
+                        "type": ["string", "array"]
+                      },
+                      "in_tal": {
+                        "additionalProperties": false,
+                        "description": "Keep only the parts assigned to a leaf territory of tal_id: the TAL's whole footprint, however many separate regions it has. ANDed with the other predicates (alone it is exactly that footprint). The TAL must use the same part_layer and hold parts. query_parts needs ts_handle or map_session_id here; builds read the TAL from the build's own Territory Solution.",
+                        "properties": {
+                          "map_session_id": {
+                            "description": "query_parts only: open map session whose Territory Solution holds the TAL.",
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "tal_id": {
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "territory_ids": {
+                            "description": "Narrow to these territory_id values (not display labels); a rollup includes every leaf below it. Unknown ids return UNKNOWN_TERRITORY_ID with available_territory_ids.",
+                            "items": {
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "minItems": 1,
+                            "type": "array"
+                          },
+                          "ts_handle": {
+                            "description": "query_parts only: Territory Solution reference (tsh_...) holding the TAL.",
+                            "minLength": 1,
+                            "type": "string"
+                          }
+                        },
+                        "required": ["tal_id"],
+                        "type": "object"
+                      },
+                      "not_in_tal": {
+                        "additionalProperties": false,
+                        "description": "White space: drop every part assigned to a leaf territory of tal_id from whatever the other predicates select (the whole layer when alone). The TAL must use the same part_layer. query_parts needs ts_handle or map_session_id here; builds read the TAL from the build's own Territory Solution.",
+                        "properties": {
+                          "map_session_id": {
+                            "description": "query_parts only: open map session whose Territory Solution holds the TAL.",
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "tal_id": {
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "ts_handle": {
+                            "description": "query_parts only: Territory Solution reference (tsh_...) holding the TAL.",
+                            "minLength": 1,
+                            "type": "string"
+                          }
+                        },
+                        "required": ["tal_id"],
+                        "type": "object"
+                      },
+                      "part_layer": {
+                        "type": "string"
+                      },
+                      "population": {
+                        "oneOf": [
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "minProperties": 1,
+                            "properties": {
+                              "between": {
+                                "items": {
+                                  "type": "number"
+                                },
+                                "maxItems": 2,
+                                "minItems": 2,
+                                "type": "array"
+                              },
+                              "eq": {
+                                "type": "number"
+                              },
+                              "gt": {
+                                "type": "number"
+                              },
+                              "gte": {
+                                "type": "number"
+                              },
+                              "lt": {
+                                "type": "number"
+                              },
+                              "lte": {
+                                "type": "number"
+                              }
+                            },
+                            "type": "object"
+                          }
+                        ]
+                      },
+                      "selection_task_id": {
+                        "description": "Builds only (auto_build, account_build, seed_build): a committed request_part_selection task (psel_...) whose part_ids become the scope; it is the only key in that part_filter.",
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "spatial": {
+                        "additionalProperties": false,
+                        "oneOf": [
+                          {
+                            "required": ["bbox"]
+                          },
+                          {
+                            "required": ["geometry"]
+                          }
+                        ],
+                        "properties": {
+                          "bbox": {
+                            "description": "[min_lon, min_lat, max_lon, max_lat] in EPSG:4326.",
+                            "items": {
+                              "type": "number"
+                            },
+                            "maxItems": 4,
+                            "minItems": 4,
+                            "type": "array"
+                          },
+                          "geometry": {
+                            "description": "GeoJSON Polygon or MultiPolygon in EPSG:4326.",
+                            "type": "object"
+                          },
+                          "operator": {
+                            "enum": ["intersects", "within", "contains"],
+                            "type": "string"
+                          }
+                        },
+                        "required": ["operator"],
+                        "type": "object"
+                      },
+                      "state_abbr": {
+                        "type": ["string", "array"]
+                      },
+                      "text": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "case_sensitive": {
+                            "default": false,
+                            "type": "boolean"
+                          },
+                          "field": {
+                            "description": "Safe text field to search. Defaults to the public part ID column.",
+                            "type": "string"
+                          },
+                          "mode": {
+                            "default": "prefix",
+                            "enum": ["prefix", "contains", "exact"],
+                            "type": "string"
+                          },
+                          "value": {
+                            "minLength": 1,
+                            "type": "string"
+                          }
+                        },
+                        "required": ["value"],
+                        "type": "object"
+                      }
+                    },
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Pre-selects the parts this filter matches (same shape as auto_build part_filter, e.g. {in_tal: {tal_id}} or {state_abbr: TX, not_in_tal: {tal_id}}). Resolved server-side, up to 50,000 parts; selection_task_id is rejected here."
               },
               "map_session_id": {
                 "anyOf": [
@@ -10484,6 +10794,9 @@
                   "expires_at": {
                     "type": "string"
                   },
+                  "initial_part_count": {
+                    "type": "integer"
+                  },
                   "map_session_id": {
                     "type": "string"
                   },
@@ -10574,7 +10887,7 @@
               "resourceUri": "ui://easyterritory/map-viewer"
             }
           },
-          "digest": "sha256:9096cd509ee7690db7e81c2420a217e3d95309f93755ee8ea0f36e39c1ce0152"
+          "digest": "sha256:7b650ea26a5def10bde3ba3ef23db5d413f79a99718b5c84293f52bb380d8903"
         },
         {
           "name": "schedule_visits",
@@ -10630,7 +10943,7 @@
                 "description": "Stop location resolved from a point layer in the TS or inline WGS84 coordinates (T-214).",
                 "oneOf": [
                   {
-                    "$ref": "#/$defs/RepoShape5"
+                    "$ref": "#/$defs/RepoShape6"
                   },
                   {
                     "$ref": "#/$defs/RepoShape4"
@@ -10678,7 +10991,7 @@
                 "required": ["latitude", "longitude"],
                 "type": "object"
               },
-              "RepoShape5": {
+              "RepoShape6": {
                 "additionalProperties": false,
                 "properties": {
                   "dwell_minutes": {
@@ -11454,12 +11767,12 @@
             "openWorld": false,
             "readOnly": false
           },
-          "digest": "sha256:76931d585ff8b6489278679cb9bf4d55f05384b5ca315d66b7b83c2264d74ecf"
+          "digest": "sha256:ce301058d821ee55846a423e27ae3084ea4bc46621ef275fa14b4e6f4cfc6cbb"
         },
         {
           "name": "seed_build",
           "title": "Grow Territory from Seed",
-          "description": "Grows one territory outward from a seed {longitude, latitude} over a part layer until it holds a target: {type: location_count, value: N} or {type: metric_sum, field: <declared metric>, value: X}, counted from an ingested point layer. Adds the territory as a leaf of tal_id, or as a new alignment. Fit is closest: target_status is reached, closest_under, closest_over, frontier_exhausted, or max_parts_reached, with SEED_TARGET_UNDERSHOT/OVERSHOT warnings and the difference. Parts already in that alignment are never taken; the territory grows around them (blocked_part_count, seed_offset_km), and a seed inside an assigned part returns SEED_PART_ASSIGNED. part_scope=explicit with part_filter confines growth to an area. One seed per call. An undeclared metric field returns UNDECLARED_FIELD. Returns a task with created_territory and ts_handle; the open map repaints with map_session_id.",
+          "description": "Grows one territory outward from a seed {longitude, latitude} over a part layer until it holds a target: {type: location_count, value: N} or {type: metric_sum, field: <declared metric>, value: X}, counted from an ingested point layer. Adds the territory as a leaf of tal_id, or as a new alignment. Fit is closest: target_status is reached, closest_under, closest_over, frontier_exhausted, or max_parts_reached, with SEED_TARGET_UNDERSHOT/OVERSHOT warnings and the difference. Parts already in that alignment are never taken; the territory grows around them (blocked_part_count, seed_offset_km), and a seed inside an assigned part returns SEED_PART_ASSIGNED. part_scope=explicit with part_filter confines growth to an area (not_in_tal: {tal_id} keeps it out of another TAL; in_tal: {tal_id} keeps it inside one, with no tal_id so it starts a new alignment). One seed per call. An undeclared metric field returns UNDECLARED_FIELD. Returns a task with created_territory and ts_handle; the open map repaints with map_session_id.",
           "inputSchema": {
             "properties": {
               "map_session_id": {
@@ -11496,6 +11809,59 @@
                     "properties": {
                       "county_name": {
                         "type": ["string", "array"]
+                      },
+                      "in_tal": {
+                        "additionalProperties": false,
+                        "description": "Keep only the parts assigned to a leaf territory of tal_id: the TAL's whole footprint, however many separate regions it has. ANDed with the other predicates (alone it is exactly that footprint). The TAL must use the same part_layer and hold parts. query_parts needs ts_handle or map_session_id here; builds read the TAL from the build's own Territory Solution.",
+                        "properties": {
+                          "map_session_id": {
+                            "description": "query_parts only: open map session whose Territory Solution holds the TAL.",
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "tal_id": {
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "territory_ids": {
+                            "description": "Narrow to these territory_id values (not display labels); a rollup includes every leaf below it. Unknown ids return UNKNOWN_TERRITORY_ID with available_territory_ids.",
+                            "items": {
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "minItems": 1,
+                            "type": "array"
+                          },
+                          "ts_handle": {
+                            "description": "query_parts only: Territory Solution reference (tsh_...) holding the TAL.",
+                            "minLength": 1,
+                            "type": "string"
+                          }
+                        },
+                        "required": ["tal_id"],
+                        "type": "object"
+                      },
+                      "not_in_tal": {
+                        "additionalProperties": false,
+                        "description": "White space: drop every part assigned to a leaf territory of tal_id from whatever the other predicates select (the whole layer when alone). The TAL must use the same part_layer. query_parts needs ts_handle or map_session_id here; builds read the TAL from the build's own Territory Solution.",
+                        "properties": {
+                          "map_session_id": {
+                            "description": "query_parts only: open map session whose Territory Solution holds the TAL.",
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "tal_id": {
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "ts_handle": {
+                            "description": "query_parts only: Territory Solution reference (tsh_...) holding the TAL.",
+                            "minLength": 1,
+                            "type": "string"
+                          }
+                        },
+                        "required": ["tal_id"],
+                        "type": "object"
                       },
                       "part_layer": {
                         "type": "string"
@@ -11537,6 +11903,11 @@
                           }
                         ]
                       },
+                      "selection_task_id": {
+                        "description": "Builds only (auto_build, account_build, seed_build): a committed request_part_selection task (psel_...) whose part_ids become the scope; it is the only key in that part_filter.",
+                        "minLength": 1,
+                        "type": "string"
+                      },
                       "spatial": {
                         "additionalProperties": false,
                         "oneOf": [
@@ -11572,44 +11943,6 @@
                       "state_abbr": {
                         "type": ["string", "array"]
                       },
-                      "territory": {
-                        "additionalProperties": false,
-                        "oneOf": [
-                          {
-                            "required": ["ts_handle"]
-                          },
-                          {
-                            "required": ["map_session_id"]
-                          }
-                        ],
-                        "properties": {
-                          "include_descendants": {
-                            "default": true,
-                            "description": "When true, rollup territories include descendant leaf territory part_ids.",
-                            "type": "boolean"
-                          },
-                          "map_session_id": {
-                            "description": "Open map session whose Territory Solution holds the TAL.",
-                            "minLength": 1,
-                            "type": "string"
-                          },
-                          "tal_id": {
-                            "minLength": 1,
-                            "type": "string"
-                          },
-                          "territory_id": {
-                            "minLength": 1,
-                            "type": "string"
-                          },
-                          "ts_handle": {
-                            "description": "Territory Solution reference (tsh_...) holding the TAL (no inline TS).",
-                            "minLength": 1,
-                            "type": "string"
-                          }
-                        },
-                        "required": ["tal_id", "territory_id"],
-                        "type": "object"
-                      },
                       "text": {
                         "additionalProperties": false,
                         "properties": {
@@ -11642,7 +11975,7 @@
                   }
                 ],
                 "default": null,
-                "description": "Attribute filter resolved via query_parts (e.g. {\"state_abbr\": \"TX\"}). Implies part_scope explicit. Mutually exclusive with part_ids."
+                "description": "Attribute filter resolved via query_parts (e.g. {\"state_abbr\": \"TX\"}). Implies part_scope explicit. Mutually exclusive with part_ids. Inside an existing TAL's footprint: {\"in_tal\": {\"tal_id\": \"tal-1\"}} with no seed tal_id (in_tal of the seed's own tal_id is INVALID_REQUEST). White space (parts no TAL covers): add not_in_tal, e.g. {\"state_abbr\": \"TX\", \"not_in_tal\": {\"tal_id\": \"tal-1\"}}; a person-trimmed set is {\"selection_task_id\": \"psel_...\"} after get_part_selection reports committed."
               },
               "part_ids": {
                 "anyOf": [
@@ -11962,7 +12295,7 @@
             "openWorld": false,
             "readOnly": false
           },
-          "digest": "sha256:41baca23aa7ea164b368420c849a5ffe5e95f5700a4e4789cd448b097597b8f5"
+          "digest": "sha256:bbf00b25a425336eaa80be36eb41c901a7949a1414a1c317bffa2f8e18694f69"
         },
         {
           "name": "set_map_state",
@@ -13012,14 +13345,20 @@
                 "anyOf": [
                   {
                     "additionalProperties": true,
-                    "description": "Balance objective: {metric: '<column>|__account_count__', workload_bias: 0..100, metric_bias: 0..100}. Biases sum to 100. For pure metric balance, pass {metric: '<column>', workload_bias: 0, metric_bias: 100} (or {metric: '<column>'} on restructure tools). When omitted on restructure tools, inherits the source TAL build_provenance objective or seed_build target.",
+                    "description": "Balance objective: workload_bias + metric_bias + count_bias = 100, weighting workload (drive + dwell), one metric column, and account count. Workload: {workload_bias: 100}. Metric: {metric: '<column>', workload_bias: 0, metric_bias: 100}. Count: {workload_bias: 0, count_bias: 100}. Three-way: {metric: 'Score', workload_bias: 40, metric_bias: 40, count_bias: 20}. Only one metric column balances; combine several into one score column at ingest. Omitted on restructure tools: inherits the source TAL build_provenance objective.",
                     "properties": {
+                      "count_bias": {
+                        "description": "Weight (0..100) on account count (locations per territory). Default 0.",
+                        "maximum": 100,
+                        "minimum": 0,
+                        "type": "integer"
+                      },
                       "metric": {
-                        "description": "Point metric column name to balance (e.g. 'Revenue', 'weekly_volume'), or '__account_count__' for location-count balance.",
+                        "description": "Point metric column name to balance (e.g. 'Revenue', 'Score'). Required when metric_bias > 0. Account count is count_bias, not a column.",
                         "type": "string"
                       },
                       "metric_bias": {
-                        "description": "Weight (0..100) on the metric or location-count dimension.",
+                        "description": "Weight (0..100) on the metric column.",
                         "maximum": 100,
                         "minimum": 0,
                         "type": "integer"
@@ -13271,7 +13610,7 @@
             "openWorld": false,
             "readOnly": false
           },
-          "digest": "sha256:273771c96da5a8c33735e5e872b44a4e5bf552041befba6ece78043b5208e2f7"
+          "digest": "sha256:759fd9819a4e2d1e72f96acba69c62ddaba54dcadd67d4fada9401ac3581a830"
         },
         {
           "name": "territory_rebalance",
@@ -13373,14 +13712,20 @@
                 "anyOf": [
                   {
                     "additionalProperties": true,
-                    "description": "Balance objective: {metric: '<column>|__account_count__', workload_bias: 0..100, metric_bias: 0..100}. Biases sum to 100. For pure metric balance, pass {metric: '<column>', workload_bias: 0, metric_bias: 100} (or {metric: '<column>'} on restructure tools). When omitted on restructure tools, inherits the source TAL build_provenance objective or seed_build target.",
+                    "description": "Balance objective: workload_bias + metric_bias + count_bias = 100, weighting workload (drive + dwell), one metric column, and account count. Workload: {workload_bias: 100}. Metric: {metric: '<column>', workload_bias: 0, metric_bias: 100}. Count: {workload_bias: 0, count_bias: 100}. Three-way: {metric: 'Score', workload_bias: 40, metric_bias: 40, count_bias: 20}. Only one metric column balances; combine several into one score column at ingest. Omitted on restructure tools: inherits the source TAL build_provenance objective.",
                     "properties": {
+                      "count_bias": {
+                        "description": "Weight (0..100) on account count (locations per territory). Default 0.",
+                        "maximum": 100,
+                        "minimum": 0,
+                        "type": "integer"
+                      },
                       "metric": {
-                        "description": "Point metric column name to balance (e.g. 'Revenue', 'weekly_volume'), or '__account_count__' for location-count balance.",
+                        "description": "Point metric column name to balance (e.g. 'Revenue', 'Score'). Required when metric_bias > 0. Account count is count_bias, not a column.",
                         "type": "string"
                       },
                       "metric_bias": {
-                        "description": "Weight (0..100) on the metric or location-count dimension.",
+                        "description": "Weight (0..100) on the metric column.",
                         "maximum": 100,
                         "minimum": 0,
                         "type": "integer"
@@ -13600,7 +13945,7 @@
             "openWorld": false,
             "readOnly": false
           },
-          "digest": "sha256:3d063693474a83ff838c0aa4d5b8f4f5ed830c856e40863bf49e3b6086a8acdc"
+          "digest": "sha256:939ac67af9b3576095a815111ac045fd3e5846046d3adfaf3b276a9a22d335fb"
         },
         {
           "name": "territory_split",
@@ -13715,14 +14060,20 @@
                 "anyOf": [
                   {
                     "additionalProperties": true,
-                    "description": "Balance objective: {metric: '<column>|__account_count__', workload_bias: 0..100, metric_bias: 0..100}. Biases sum to 100. For pure metric balance, pass {metric: '<column>', workload_bias: 0, metric_bias: 100} (or {metric: '<column>'} on restructure tools). When omitted on restructure tools, inherits the source TAL build_provenance objective or seed_build target.",
+                    "description": "Balance objective: workload_bias + metric_bias + count_bias = 100, weighting workload (drive + dwell), one metric column, and account count. Workload: {workload_bias: 100}. Metric: {metric: '<column>', workload_bias: 0, metric_bias: 100}. Count: {workload_bias: 0, count_bias: 100}. Three-way: {metric: 'Score', workload_bias: 40, metric_bias: 40, count_bias: 20}. Only one metric column balances; combine several into one score column at ingest. Omitted on restructure tools: inherits the source TAL build_provenance objective.",
                     "properties": {
+                      "count_bias": {
+                        "description": "Weight (0..100) on account count (locations per territory). Default 0.",
+                        "maximum": 100,
+                        "minimum": 0,
+                        "type": "integer"
+                      },
                       "metric": {
-                        "description": "Point metric column name to balance (e.g. 'Revenue', 'weekly_volume'), or '__account_count__' for location-count balance.",
+                        "description": "Point metric column name to balance (e.g. 'Revenue', 'Score'). Required when metric_bias > 0. Account count is count_bias, not a column.",
                         "type": "string"
                       },
                       "metric_bias": {
-                        "description": "Weight (0..100) on the metric or location-count dimension.",
+                        "description": "Weight (0..100) on the metric column.",
                         "maximum": 100,
                         "minimum": 0,
                         "type": "integer"
@@ -13955,7 +14306,7 @@
             "openWorld": false,
             "readOnly": false
           },
-          "digest": "sha256:9d3c8fe059946ff743a48c597e7d4599cb09c9b15d7b7a223b43e9e9171a53a5"
+          "digest": "sha256:9503612025210846cb60f9bc2fc9f1b543e3f0152ef6b87b455db7b41ecbc555"
         },
         {
           "name": "workflow_advisor",
@@ -13984,6 +14335,10 @@
                       "grouping_field": {
                         "type": "string"
                       },
+                      "in_tal": {
+                        "description": "Build scope inside an existing TAL: tal_id (or {tal_id, territory_ids}) whose parts are kept; drafts part_filter.in_tal alongside state_abbr / part_filter.",
+                        "type": ["string", "object"]
+                      },
                       "moves": {
                         "description": "realign: explicit [{part_id, to_territory_id}] moves (skips map-selection steps).",
                         "type": "array"
@@ -13993,6 +14348,10 @@
                       },
                       "new_territory_label": {
                         "type": "string"
+                      },
+                      "not_in_tal": {
+                        "description": "Build scope white space: tal_id (or {tal_id}) whose parts are subtracted; drafts part_filter.not_in_tal alongside state_abbr / part_filter.",
+                        "type": ["string", "object"]
                       },
                       "operation": {
                         "description": "restructure: which restructure tool (default rebalance).",
@@ -14067,7 +14426,7 @@
                 "description": "Optional plan parameters used to draft next_args."
               },
               "intent_category": {
-                "description": "build_from_accounts | account_grouping | point_clustering | known_assignments | realign_existing | restructure | delete_territory | load_part_layer | reachable_area | seed_growth | coverage_gap_analysis | route_stops | routes_layer | delete_route | delete_point_layer | points_in_territory | periodic_scheduling. Tool names (auto_build, account_build, cluster_points, direct_build, isochrone_build, seed_build, analyze_network_coverage) are accepted as aliases; any other value returns the unsupported-category fallback.",
+                "description": "build_from_accounts | account_grouping | point_clustering | known_assignments | realign_existing | restructure | delete_territory | load_part_layer | reachable_area | seed_growth | coverage_gap_analysis | route_stops | routes_layer | delete_route | delete_point_layer | points_in_territory | periodic_scheduling. Tool names (auto_build, account_build, cluster_points, direct_build, isochrone_build, seed_build, analyze_network_coverage) are aliases; white_space_build / tal_footprint_build are auto_build with inputs.not_in_tal / in_tal; any other value returns the unsupported-category fallback.",
                 "title": "Intent Category",
                 "type": "string"
               },
@@ -14270,7 +14629,7 @@
             "openWorld": false,
             "readOnly": true
           },
-          "digest": "sha256:63e9fcdeafae67bf33169102102185e465a711e7fbb0d490b3283dc775fde40a"
+          "digest": "sha256:b7c8e663765f3a2e5b4320e2e684bd3d7eb929b0297d6b7c2d3a630e510c2834"
         }
       ],
       "resources": [
@@ -14407,7 +14766,7 @@
           "digest": "sha256:f64790bd19a8262351854804bb6d0544aef7020c57c3ceb8615b93b4610241e5"
         }
       ],
-      "digest": "sha256:bfa4d4b408f3c861123ca75a43bbc83d3b8e166425e0bc13687eda6c19df2bb6"
+      "digest": "sha256:b1614e6b39787a7428b70c69533448df91b57526381929b70c79c7c33d83ca7f"
     }
   }
 }

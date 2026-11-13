@@ -7,10 +7,10 @@ public servers in the MCP registry and diffing it against the previous reading.
 
 | Measure | Value |
 | --- | ---: |
-| Changes per server-year | 56.39 |
-| Servers that ever changed | 104 of 6357 (1.6%) |
-| Comparisons that found a change | 104 of 6122 (1.7%) |
-| Observation window | 673.2 server-days over 3 run(s) |
+| Changes per server-year | 52.97 |
+| Servers that ever changed | 884 of 6440 (13.7%) |
+| Comparisons that found a change | 948 of 12134 (7.8%) |
+| Observation window | 6532.9 server-days over 4 run(s) |
 
 Quote the per-server-year figure. The per-comparison share depends on how often the crawl
 runs and is not comparable to anything measured on a different schedule.
@@ -23,39 +23,43 @@ not counted at all. The true rate is at least this.
 
 | Change kind | Occurrences |
 | --- | ---: |
-| `tool.changed` | 164 |
-| `tool.description.changed` | 77 |
-| `tool.input_schema.narrowed` | 63 |
-| `tool.removed` | 51 |
-| `tool.input_schema.changed` | 50 |
-| `tool.added` | 45 |
-| `server.identity.changed` | 37 |
-| `server.instructions.changed` | 36 |
-| `tool.output_schema.changed` | 35 |
-| `tool.input_schema.widened` | 33 |
-| `resource.changed` | 7 |
-| `tool.capability.gained` | 4 |
-| `resource.added` | 3 |
-| `resource.removed` | 3 |
-| `server.capabilities.narrowed` | 2 |
-| `tool.behavior.relaxed` | 2 |
-| `tool.behavior.escalated` | 1 |
-| `server.protocol.changed` | 1 |
-| `prompt.added` | 1 |
+| `tool.description.changed` | 1368 |
+| `resource.added` | 620 |
+| `tool.added` | 563 |
+| `resource.removed` | 509 |
+| `tool.output_schema.changed` | 496 |
+| `tool.input_schema.changed` | 417 |
+| `tool.changed` | 407 |
+| `server.instructions.changed` | 317 |
+| `tool.input_schema.widened` | 280 |
+| `server.identity.changed` | 193 |
+| `tool.removed` | 183 |
+| `tool.input_schema.narrowed` | 149 |
+| `resource.changed` | 51 |
+| `tool.behavior.relaxed` | 26 |
+| `prompt.changed` | 14 |
+| `prompt.added` | 13 |
+| `tool.behavior.escalated` | 9 |
+| `tool.capability.gained` | 5 |
+| `server.protocol.changed` | 4 |
+| `server.capabilities.narrowed` | 4 |
+| `server.capabilities.widened` | 4 |
+| `server.capabilities.changed` | 3 |
+| `server.transport.changed` | 1 |
 
 ## Coverage, and what it misses
 
 | Population | Count |
 | --- | ---: |
-| Servers measured in the last run | 6165 |
-|  of those, re-baselined after a collector change (not compared) | 23 |
+| Servers measured in the last run | 6099 |
+|  of those, re-baselined after a collector change (not compared) | 4 |
 | Required credentials (not measurable anonymously) | 5667 |
-| Unreachable | 2044 |
+| Unreachable | 2043 |
 | stdio packages run in a container | 0 |
-| stdio packages skipped | 1038 |
-|  of those, unpinned or not an npm package | 303 |
-| Failing 3+ runs in a row (treated as gone) | 7463 |
-| Failing for fewer runs than that (an outage, so far) | 393 |
+| stdio packages skipped | 1045 |
+|  of those, unpinned or not an npm package | 296 |
+| Failing 3+ runs in a row (treated as gone) | 7617 |
+| Failing for fewer runs than that (an outage, so far) | 377 |
 
 This run read **remote servers only**. Auditing a stdio entry means executing a third-party package; `--include-stdio` does it in a container, and without that flag those entries are skipped. Remote servers skew toward hosted and commercial operators, so a remote-only sample is not a uniform sample of everything anyone runs.
 
@@ -70,117 +74,857 @@ authorized one sees, so counting them would mix two different measurements.
 
 | Revision | Servers |
 | --- | ---: |
-| `legacy/2025-11-25` | 3082 (50.0%) |
-| `modern/2026-07-28` | 1711 (27.8%) |
-| `legacy/2025-06-18` | 1062 (17.2%) |
-| `legacy/2025-03-26` | 188 (3.0%) |
+| `legacy/2025-11-25` | 3051 (50.0%) |
+| `modern/2026-07-28` | 1701 (27.9%) |
+| `legacy/2025-06-18` | 1039 (17.0%) |
+| `legacy/2025-03-26` | 186 (3.0%) |
 | `legacy/2024-11-05` | 122 (2.0%) |
 
 ## Servers that changed in the latest run
 
-- `ai.agentgates/compute`
+- `ai.agent-bev/bev-door`
+- `ai.agentlookups/groundtruth`
 - `ai.agilex.service/docs`
+- `ai.alphabazaar/arena`
+- `ai.ankra/docs`
+- `ai.athenahq/mcp`
+- `ai.augmap/maps`
+- `ai.beliefstate/investor-research`
+- `ai.bowmark/bowmark`
 - `ai.capxule/capxule`
+- `ai.cloudworldmodel/cloud-world-model`
 - `ai.commercebook/commercebook`
+- `ai.datasnack/datasnack`
+- `ai.deepvalues/deepvalues`
 - `ai.dotsy/mcp`
-- `ai.e-acc/eacc`
+- `ai.dreamlit/mcp`
+- `ai.easy-peasy/mcp`
+- `ai.easyterritory/ezt-mcp`
+- `ai.egonex/marketplace`
+- `ai.excessionlabs/site`
+- `ai.flamel/public-content`
+- `ai.fordeal/price-hunter`
+- `ai.frontierdesk/desk`
+- `ai.greyridgesignals/business-verification-mcp`
+- `ai.greyridgesignals/sports-scores-mcp`
+- `ai.haggl/haggl`
+- `ai.harcourtvaluations/nav`
+- `ai.harny/accounts`
+- `ai.harny/action-record`
+- `ai.harny/actions`
+- `ai.harny/context`
+- `ai.harny/harness`
 - `ai.hoghogh/chistara`
 - `ai.homouniversalis/cryptography-merkle-tree-rfc6962-jws-ed25519-es256-zero-knowledge-python-ast-code-audit-formal-verification-mutation-testing-reed-muller-multi-agent-deep-think-crucible-barycenter`
 - `ai.homouniversalis/diamond-verifier`
-- `ai.instantclips/instantclips`
-- `ai.letsship/ship`
-- `ai.machinerelations/mri`
+- `ai.humansfix/humansfix`
+- `ai.jerry/insurance`
+- `ai.keenable/web-search`
+- `ai.kottos/venues`
+- `ai.liquidagent.api/liquid-agent`
+- `ai.llpro.agentrecord/agent-record`
 - `ai.makeviral/makeviral`
+- `ai.mapsdata/mapsdata`
+- `ai.modulos/demo-booking`
+- `ai.nobi/shop-nobi`
+- `ai.nyna/mcp`
+- `ai.opper/opper`
+- `ai.patchdesign/patch-designer`
 - `ai.pipefire/pipefire`
-- `ai.ptally/ptally`
+- `ai.postquick.www/postquickai`
+- `ai.pubfi/mcp`
+- `ai.quantifyme/quantifyme`
+- `ai.roosteragents/switchboard`
 - `ai.shorti/shorti`
+- `ai.shreddy/shreddy`
+- `ai.signalry/countersign`
+- `ai.sitectrl/sitectrl`
+- `ai.stablenews/news`
+- `ai.stonewake/stonewake`
+- `ai.surfingdog/search`
+- `ai.switchapp/switch`
+- `ai.syntropi/o-plus-plus`
+- `ai.tigertiger/tigertiger`
+- `ai.timix/time-tracking`
 - `ai.withby/withby`
-- `ai.zindex/zindex`
-- `app.dataclue/catalog`
-- `app.everynumber/spreadsheet-dashboard`
-- `app.fluentive/mcp`
+- `ai.workpods/agent-ready-mcp`
+- `ai.yuanwu/aisub`
+- `ai.zairalabs/guide`
+- `app.awwab/qibla`
+- `app.cellarion/wine-registry`
+- `app.chopit/chopit`
+- `app.dealermax/public-search`
+- `app.floot.via-router/via-gateway`
+- `app.flowershow/flowershow`
+- `app.fotofoto/photo-book`
+- `app.gamecollecting/price-guide`
+- `app.gingerguide/catalog`
+- `app.inescapable/booking`
+- `app.jetopolis/game`
+- `app.knowra/knowra`
 - `app.liquidvision/derivatives`
 - `app.luala/luala`
+- `app.moosetracker/moose-tracker`
+- `app.naulon/naulon`
+- `app.netlify.uncork/uncork`
+- `app.openkrill/postkit`
+- `app.permtracker/perm-tracker`
+- `app.pitbi/pitbi`
+- `app.postel/postel`
+- `app.prickelly/tracker`
+- `app.qrcodecreator/qr-codes`
 - `app.quantcalc/retirement-engine`
-- `app.travelhealthpass/healthpass`
-- `app.ucad/ucad`
+- `app.sallim/contract-compass`
+- `app.sallim/korea-realty`
+- `app.samiswoi/firmy`
+- `app.seatsherpa/rides`
+- `app.seoaeogeo/seo-aeo-geo`
+- `app.speakeroo/speaking-coach`
+- `app.topoalpin/mcp`
+- `app.unmerge/unmerge`
+- `app.vercel.automaton-tx-explainer/base-tools`
 - `app.vercel.fork-for-agents/fork`
 - `app.vercel.watchesinstock-mcp/watches-in-stock`
-- `at.memebo/memeboat-mcp`
+- `app.whichpost/whichpost`
+- `app.whichpost/whichpost-public`
+- `app.wieldr/radar`
+- `app.zolvaagent/zolva`
+- `art.aidating/aidating`
+- `art.aieventpro/aieventpro`
+- `at.space-core/game`
+- `au.com.aiframework/australian-ai-governance-framework`
+- `au.com.cgctransfers/booking`
+- `au.com.microburbs/property-data`
+- `au.com.staylonger/mcp`
+- `au.com.vividads/vivid-ads-commerce`
+- `au.publicdata/mcp`
 - `au.sagashi/sagashi`
-- `biz.online-druck/druckprodukte`
+- `be.cloo/ofertas`
+- `be.co-legal/legal-lookup`
+- `be.florealholidays/workspace`
+- `bible.besorah/besorah`
+- `biz.agentconcierge/agent-concierge`
+- `biz.valuein/mcp`
+- `br.com.azpay/monetize`
+- `br.com.brasilnfe/fiscal`
+- `br.com.buscazap/busca-produtos`
+- `br.com.omofi/mofi`
+- `br.ia.rota-nacional/rota-nacional`
+- `broker.aidata/market`
+- `build.swapi/star-wars`
 - `ca.bakhour/profitcollector`
+- `ca.gpucloud/gpu-cloud`
 - `ca.veilpoint/opportunity-exchange`
+- `care.vide.shop/vide-vita`
+- `cc.cyberjobs/mcp`
+- `cc.hlist/hlist-ai-tools`
+- `cc.thecolony/mcp-server`
+- `ch.bitspire/website`
+- `ch.heimster/heimster`
 - `ch.kulalabs.pazair/pazair`
 - `ch.neubau-radar/baupublikationen`
+- `ch.swisslivingindex/swiss-living-index`
 - `ch.zuerstzuhause/neubauprojekte`
+- `chat.conecto/calendar`
+- `chat.conecto/e-signature`
+- `chat.conecto/invoices`
+- `chat.conecto/website-chat`
+- `chat.zorgverzekering.mcp/zorgverzekering`
+- `cloud.dchub/mcp-server`
+- `cloud.postdata/postdata`
+- `cn.com.ihaola/health-checkup-planner`
+- `cn.pianam/mycel-mcp`
+- `cn.suanlinfang/stt-tts-ocr-decision`
+- `co.ainumbers/tools`
+- `co.anana.app/stays`
+- `co.clutch/mcp`
+- `co.deadbrands/arena`
 - `co.esimcompare/travel-esim-prices`
+- `co.fictura/mcp`
+- `co.getclippy/clippy`
+- `co.golfdata/golfdata`
+- `co.ivfcost/ivf-cost-data`
+- `co.lovie/company-formation`
+- `co.peptidesacademy/peptides-academy`
+- `co.schoolscope/mcp`
+- `co.seatac/rides`
+- `co.startupperks/startup-perks`
+- `co.truerent/rental-review`
+- `codes.onv/onv-mcp`
+- `com.163yu/hetianyu`
+- `com.409acost/site`
+- `com.409aproviders/site`
 - `com.6ix/mcp`
+- `com.a-upgradenet/aun`
+- `com.a2a2p/a2a2p`
+- `com.a2awire/a2awire`
+- `com.a2awire/agent-rooms`
+- `com.a2awire/benchmark-accept-1102-reclaim-342a471e`
+- `com.a2awire/benchmark-accept-1102-shortfall-342a471e`
+- `com.a2awire/benchmark-access-change-request-recertify-2026-09-15-b578285f`
+- `com.a2awire/benchmark-access-request-review-2026-09-10-81479355`
+- `com.a2awire/benchmark-accurate-financial-record-reconcile-2026-09-22-af293a80`
+- `com.a2awire/benchmark-ap-exception-review-2026-09-10-ad46e3f1`
+- `com.a2awire/benchmark-ap-exception-review-2026-09-10-run-037bea`
+- `com.a2awire/benchmark-ap-exception-review-2026-09-10-run-13e274`
+- `com.a2awire/benchmark-application-audit-2026-10-01-6e0ad047`
+- `com.a2awire/benchmark-application-review-2026-09-15-4229ca88`
+- `com.a2awire/benchmark-authorization-review-2026-09-16-2bd7f518`
+- `com.a2awire/benchmark-bench-eval-1102-cat-sent-3ea7e7ea`
+- `com.a2awire/benchmark-campaign-incrementality-audit-v1`
+- `com.a2awire/benchmark-catch-the-overpayment-v1`
+- `com.a2awire/benchmark-charge-3pl-invoice-audit-2026-09-10-749db5bd`
+- `com.a2awire/benchmark-claim-review-2026-09-10-4cd7d405`
+- `com.a2awire/benchmark-coded-claim-audit-2026-09-14-a7b04acd`
+- `com.a2awire/benchmark-coded-claim-review-2026-09-14-eed490ea`
+- `com.a2awire/benchmark-commission-statement-review-2026-09-17-f8485f73`
+- `com.a2awire/benchmark-custom-entry-review-2026-09-17-2eef943e`
+- `com.a2awire/benchmark-cw-capitals-1108-a17627f5`
+- `com.a2awire/benchmark-data-record-audit-2026-09-19-ec80e494`
+- `com.a2awire/benchmark-data-record-triage-2026-10-12-8effd564`
+- `com.a2awire/benchmark-document-review-2026-10-02-6e5a2dd9`
+- `com.a2awire/benchmark-freight-bill-audit-2026-09-14-4aaa7ae2`
+- `com.a2awire/benchmark-freight-bill-reconcile-2026-09-15-24f53095`
+- `com.a2awire/benchmark-freight-bill-review-2026-09-14-6c5a409b`
+- `com.a2awire/benchmark-freight-bill-screen-2026-09-24-8d42472e`
+- `com.a2awire/benchmark-freight-bill-validate-2026-09-17-5c17ece8`
+- `com.a2awire/benchmark-grant-report-review-2026-09-17-9189341d`
+- `com.a2awire/benchmark-inventory-ledger-reconciliation-v1`
+- `com.a2awire/benchmark-invoice-reconcile-2026-09-23-9888f269`
+- `com.a2awire/benchmark-invoice-total-extraction-koda-24cece89`
+- `com.a2awire/benchmark-launch-recurring-bill-audit-2026-09-16-ebc0f6a3`
+- `com.a2awire/benchmark-launch-recurring-bill-reconcile-2026-09-17-c9c2481b`
+- `com.a2awire/benchmark-loan-application-review-2026-09-11-61b5d8c8`
+- `com.a2awire/benchmark-medical-record-review-2026-09-21-dd8c58b7`
+- `com.a2awire/benchmark-moderation-case-review-2026-09-19-ba3b90e4`
+- `com.a2awire/benchmark-onboarding-document-review-2026-09-18-38029b5d`
+- `com.a2awire/benchmark-pr1002r2-prize-createblock`
+- `com.a2awire/benchmark-pr1002r2-prize-main`
+- `com.a2awire/benchmark-pr1002r2-rest-prize`
+- `com.a2awire/benchmark-predict-the-news`
+- `com.a2awire/benchmark-production-schedule-optimizer-v1`
+- `com.a2awire/benchmark-r3-qa033-shortfall-1103`
+- `com.a2awire/benchmark-r4-qa035-fresh-1103`
+- `com.a2awire/benchmark-r5-qa033-shortfall-1103`
+- `com.a2awire/benchmark-record-audit-2026-09-21-16725bbb`
+- `com.a2awire/benchmark-record-review-2026-09-24-4f9382bf`
+- `com.a2awire/benchmark-refund-request-audit-2026-09-10-2b20046e`
+- `com.a2awire/benchmark-report-audit-2026-09-21-b9e5e630`
+- `com.a2awire/benchmark-report-review-2026-09-23-f72b2bd5`
+- `com.a2awire/benchmark-requisition-audit-2026-09-11-98e58b8b`
+- `com.a2awire/benchmark-resume-audit-2026-10-02-66514bc8`
+- `com.a2awire/benchmark-resume-review-2026-09-19-7185eb28`
+- `com.a2awire/benchmark-resume-screen-2026-09-18-fcdc3b8f`
+- `com.a2awire/benchmark-return-review-2026-09-11-fb3b8adc`
+- `com.a2awire/benchmark-support-action-gate-v1`
+- `com.a2awire/benchmark-support-agent-trials`
+- `com.a2awire/benchmark-support-agent-trials-hard`
+- `com.a2awire/benchmark-ticket-triage-2026-09-15-64b68b3e`
+- `com.a2awire/benchmark-timesheet-audit-2026-09-15-301c061b`
+- `com.a2awire/benchmark-transcript-audit-2026-09-19-4f00a8c9`
+- `com.a2awire/benchmark-vendor-clearance-audit-v1`
+- `com.a2awire/benchmark-warranty-claim-review-2026-09-16-42175383`
+- `com.a2awire/data-agent-tool-release-tech-announcement-tracker`
+- `com.a2awire/data-ai-app-demo-huggingface-spaces-discovery`
+- `com.a2awire/data-ai-news-ai-industry-news-ml`
+- `com.a2awire/data-ai-paper-daily-paper-trending-research`
+- `com.a2awire/data-apple-news-apple-announcement-apple-release`
+- `com.a2awire/data-arstechnica-hardware-news-tech-it`
+- `com.a2awire/data-aws-news-cloud-service-update-announcement`
+- `com.a2awire/data-cert-fr-advisory-national-cert-alert`
+- `com.a2awire/data-cisa-advisory-ics-security-alert`
+- `com.a2awire/data-cisa-known-exploited-vulnerability-catalog`
+- `com.a2awire/data-consumer-tech-product-news-gadgets`
+- `com.a2awire/data-cve-security-advisory-vulnerability-database`
+- `com.a2awire/data-cybersecurity-news-breach-alert`
+- `com.a2awire/data-debian-security-advisory-dsa-linux`
+- `com.a2awire/data-deepmind-news-google-ai-model-release`
+- `com.a2awire/data-dependency-vulnerability-malicious-package-security`
+- `com.a2awire/data-developer-blog-programming-tutorial-community`
+- `com.a2awire/data-earthquake-alert-seismic-activity`
+- `com.a2awire/data-enterprise-it-news-sysadmin-tech-headlines`
+- `com.a2awire/data-exploit-db-exploit-database-proof-of-concept`
+- `com.a2awire/data-fda-recall-alert-food-product-safety`
+- `com.a2awire/data-fomc-cpi-fed-economic-releases`
+- `com.a2awire/data-github-changelog-platform-change-announcement`
+- `com.a2awire/data-go-vulnerability-golang-security`
+- `com.a2awire/data-google-product-announcement-release`
+- `com.a2awire/data-hacker-news-front-page-tech-news`
+- `com.a2awire/data-huggingface-trending-ai-model`
+- `com.a2awire/data-latest-science-news-research-discovery`
+- `com.a2awire/data-llm-release-model-availability-tracker`
+- `com.a2awire/data-marine-weather-buoy-observation-noaa`
+- `com.a2awire/data-medical-news-health-news-breakthrough`
+- `com.a2awire/data-medical-research-trial-results-tracker`
+- `com.a2awire/data-microsoft-research-ai-research-blog`
+- `com.a2awire/data-mit-research-news-university-science`
+- `com.a2awire/data-model-context-protocol-mcp-server-discovery`
+- `com.a2awire/data-nasa-mission-space-news`
+- `com.a2awire/data-nasa-photo-space-image-astronomy`
+- `com.a2awire/data-new-dataset-release-huggingface-tracker`
+- `com.a2awire/data-new-mcp-server-agent-tools-index`
+- `com.a2awire/data-new-model-release-tracker-huggingface-ai`
+- `com.a2awire/data-npm-release-node-package-javascript-dependency`
+- `com.a2awire/data-nvidia-news-gpu-release-ai-chip-announcement`
+- `com.a2awire/data-openai-announcement-model-release-news`
+- `com.a2awire/data-pharma-news-biotech-industry-drug-development`
+- `com.a2awire/data-physics-news-technology-news-science-headlines`
+- `com.a2awire/data-prediction-market-news`
+- `com.a2awire/data-product-launch-upcoming-product-tracker`
+- `com.a2awire/data-pubmed-biomedical-paper-research-article`
+- `com.a2awire/data-pypi-release-package-release-python-dependency`
+- `com.a2awire/data-quanta-magazine-math-news-deep-science`
+- `com.a2awire/data-river-level-stream-flow-flood-alert-gauge`
+- `com.a2awire/data-rocket-launch-schedule-spacex`
+- `com.a2awire/data-rust-crate-release-cargo-package`
+- `com.a2awire/data-rust-security-crate-vulnerability`
+- `com.a2awire/data-samsung-news-samsung-galaxy-release-android`
+- `com.a2awire/data-science-aaas-research-breakthrough-news`
+- `com.a2awire/data-science-breakthrough-new-research-papers`
+- `com.a2awire/data-science-magazine-science-journalism-articles`
+- `com.a2awire/data-science-paper-preprint-biotech-release`
+- `com.a2awire/data-show-hn-indie-launch-side-project`
+- `com.a2awire/data-space-weather-kp-index-solar-flare`
+- `com.a2awire/data-threat-research-unit42-malware-analysis`
+- `com.a2awire/data-trending-repository-new-github-repo-discovery`
+- `com.a2awire/data-ubuntu-security-linux-vulnerability`
+- `com.a2awire/data-us-weather-alerts-nws`
+- `com.a2awire/data-windows-security-update-microsoft-cvrf`
 - `com.ableandagent/able-and-agent`
 - `com.ableandagent/sandbox`
+- `com.abutly/site`
+- `com.accountancyvaluation/site`
+- `com.accountingfirmvalue/site`
+- `com.acuiq/acuiq`
+- `com.advocatemcp/advocate`
+- `com.aeralas.maps/aerial-maps`
+- `com.afterns/earnings`
 - `com.agentalog/meta-agent-tools`
+- `com.agentcosthub/agent-cost-hub`
+- `com.agentdataapi/agentdata`
+- `com.agentgid/agentgid`
+- `com.agentshandbook/handbook`
+- `com.agentsynta/business-beacon`
+- `com.aiappsthatwork/tools`
+- `com.aibenchmarkindex/directory`
+- `com.aibuildermarketplace/software-pricing`
+- `com.aiimplementationcost/site`
 - `com.aikizi/mcp`
+- `com.airport-pickups-london/london-airport-transfers`
+- `com.aisandboxenvironments/site`
+- `com.aiseocrew.www/ai-seo-crew`
+- `com.aisetupsthatwork/setups`
+- `com.aivshire/site`
 - `com.alertasubastas/alertasubastas`
 - `com.alexandrecaramaschi/public-content`
+- `com.algotrada.cubicle/cubicle`
+- `com.algotrips/algotrips`
+- `com.amortlane/site`
+- `com.anchorterminal/anchor-terminal`
+- `com.animatedwebs/animatedwebs`
+- `com.answeringservicecompare/site`
+- `com.answeringservicepicker/site`
+- `com.answeringservicequotes/site`
+- `com.apexcharts/mcp`
 - `com.apidefects/errata`
-- `com.astralread/astrology`
+- `com.arcandledger/tax-tools`
+- `com.ariadnenexus/ariadne-nexus-quantitative-engine`
+- `com.ariadnenexus/cusip-bond-trace-finance`
+- `com.ariadnenexus/ofac-sanctions-escrow`
+- `com.ariadnenexus/sec-forensics-whistleblower`
+- `com.arizonaroofreplacementcost/site`
+- `com.arizonasolarcostcalculator/site`
+- `com.atcspaces/atc`
+- `com.atkvn/security-checks`
+- `com.attestroom/site`
+- `com.attestvio/site`
+- `com.aura-historia/mcp`
+- `com.aurelianflo/core`
+- `com.automateamerica/automate-america`
+- `com.autoridaddigital.www/geo`
+- `com.autoview/mcp`
+- `com.awesomeindie/mcp`
+- `com.backgroundcheckquotes/site`
+- `com.bagsthatpay/site`
+- `com.bankcodelookup/site`
+- `com.basketwatchireland/basketwatch`
+- `com.batesio/site`
+- `com.beatandraise/sec-filings`
+- `com.beautifiedyou/store`
+- `com.besidka/mcp`
+- `com.binstockly/site`
+- `com.bitcoincreditstack/mcp`
+- `com.bizworthcalculator/site`
+- `com.bkkradar/condos`
+- `com.blitzreels/blitzreels`
+- `com.blockreq/rpc`
+- `com.boatvaluecalculator/site`
+- `com.bondterminal/bondterminal`
+- `com.bormeapi/borme-mcp`
 - `com.bota-chat/bota`
 - `com.botsrated/botsrated`
-- `com.brofindai/brofindai`
+- `com.bottleyourbrand/print-shop`
+- `com.breakerdesk/site`
+- `com.brelsfordsoftware/agent-bounty-jobs`
+- `com.brentburgess/site`
+- `com.brokervsadvisor/site`
+- `com.budgetpixel/mcp`
+- `com.buffrota/site`
+- `com.burdenrateledger/site`
+- `com.buscalc/calculations`
+- `com.businessvaluenow/site`
+- `com.cafmlane/site`
 - `com.calcbright/calcbright`
+- `com.calibvo/site`
+- `com.californiahvacreplacementcost/site`
+- `com.californiasolarcostcalculator/site`
+- `com.campiamo/campsites`
+- `com.canadapayrollcalculator/site`
+- `com.capanix/site`
+- `com.capitalgainstaxhq/site`
+- `com.carbikly/site`
+- `com.carrentalbrain/car-rental-brain`
+- `com.carsmultiverse/recall-record`
 - `com.carvoltlab/carvoltlab`
+- `com.caspchecklist/site`
+- `com.cev-os/data`
+- `com.chaink9/chaink9`
+- `com.chartervsown/site`
+- `com.cheap409a/site`
+- `com.chef-bear/chefbear`
+- `com.chejefe.www/jefe`
+- `com.cielstay/cielstay`
+- `com.citizenshipdescentchecker/site`
+- `com.clauselane/site`
+- `com.clawhard/studio`
+- `com.clickd/clickd`
+- `com.clientvo/site`
+- `com.clipboardo/site`
+- `com.clypmint/clypmint`
+- `com.cmmsly/site`
+- `com.coildesk/site`
+- `com.coloradoroofreplacementcost/site`
+- `com.commercialrefinancequotes/site`
 - `com.commsharbor/commsharbor`
-- `com.cooperemail/cooper-email`
+- `com.compareanswering/site`
+- `com.comparecallanswering/site`
+- `com.comparehvacsoftware/site`
+- `com.comparetradesoftware/site`
+- `com.comparevetsoftware/site`
+- `com.complyonsite/tools`
+- `com.compraventa360/marketplace`
+- `com.conqueia/conqueia`
+- `com.consentvia/site`
+- `com.contractorleadquotes/site`
+- `com.conveyancingfeesaustralia/site`
+- `com.conveyancingfeesireland/site`
+- `com.cookievo/site`
+- `com.coordinalo/mcp-server`
+- `com.coshhvo/site`
+- `com.craftquantities/engine`
 - `com.crm-connector/crm-connector`
-- `com.dataroia/data-trust`
+- `com.cryptoamlpolicy/site`
+- `com.cryptoexchangecomparehq/site`
+- `com.cryptolicencecosts/site`
+- `com.csatzo/site`
+- `com.ctrlworx/ask-the-clock`
+- `com.cultmath/decision-briefs`
+- `com.currencyguard/guard-pricing`
+- `com.curtilo/site`
+- `com.cycle-platform/cycle-intelligence`
+- `com.cypruscompanycost/site`
+- `com.cyprusgrosstonet/site`
+- `com.cyprusnondomcalculator/site`
+- `com.dailylogdesk/site`
+- `com.damagerestorehq/site`
+- `com.danerolne/dane-rolne`
+- `com.dataroompicker/site`
+- `com.datasheetvend/datasheet-contracts`
+- `com.davelalande/camps`
+- `com.dcblueprint/data-centres`
+- `com.decisionscalc/calculators`
+- `com.defectbird/site`
+- `com.deflectvo/site`
+- `com.dentalsoftwarecompare/site`
+- `com.depreo/site`
 - `com.devexpress/docs`
+- `com.diamonds-expert/diamond-sourcing`
+- `com.difcvsadgm/site`
 - `com.difficat/difficat`
+- `com.dimhour/catalog`
+- `com.disclovo/site`
+- `com.discoverseniorbenefits/benefits`
+- `com.dishdirectory/dishdirectory`
+- `com.dispatchzo/site`
+- `com.dividvo/site`
 - `com.doesitworkin/doesitworkin`
+- `com.domdomjobs/jobs`
+- `com.doorsetbook/site`
 - `com.doseedo/doseedo`
 - `com.doseedo/film-score`
+- `com.draftkingsapi/server`
+- `com.drawscheduleworks/site`
+- `com.drivings/driving-test-study`
+- `com.dsarvo/site`
+- `com.duesvo/site`
+- `com.easyappsecom/ea-ecommerce-apps`
+- `com.easyparser/easyparser`
+- `com.ecuafact.docsapi/documentacion`
+- `com.ediscoverydecoder/mcp`
 - `com.editalmd/editalmd`
-- `com.emailmovers/mydatahub`
-- `com.essentras/placements`
-- `com.fillprompt/fillprompt`
+- `com.eduavenues/eduavenues`
+- `com.eligiblebydescent/site`
+- `com.eliteagenticsolutions/chatbot`
+- `com.eliteaiempire/cloudcostai`
+- `com.eliteaiempire/cloudhostai`
+- `com.eliteaiempire/cloudshiftai`
+- `com.eliteaiempire/cosmeticpreview-app`
+- `com.eliteaiempire/empiregit`
+- `com.eliteaiempire/empirepages`
+- `com.eliteaiempire/holdthewheel`
+- `com.eliteaiempire/launchpadai`
+- `com.eliteaiempire/lifestrategist`
+- `com.eliteaiempire/links`
+- `com.eliteaiempire/lumen`
+- `com.eliteaiempire/ourtools`
+- `com.eliteaiempire/soccer`
+- `com.eliteaiempire/th-api`
+- `com.eliteaiempire/th-backtest`
+- `com.eliteaiempire/th-datasets`
+- `com.emailchaser/emailchaser`
+- `com.employeecostaustralia/site`
+- `com.employeedeskhq/site`
+- `com.endpointo/site`
+- `com.enhancedint/enhanced-intelligence`
+- `com.enhancedint/es-luxury`
+- `com.enhancedint/shesmydoglady`
+- `com.enpso/site`
+- `com.enrolvo/site`
+- `com.entitysearchhq/site`
+- `com.eobify/site`
+- `com.eorcompass/site`
+- `com.eposvo/site`
+- `com.equipmentrentalcompare/site`
+- `com.etfiq/etfiq`
+- `com.excurvo/site`
+- `com.exepal/exepal`
+- `com.exittaxestimator/site`
+- `com.exitvaluecalculator/site`
+- `com.exitvo/site`
+- `com.expatriationtaxcalculator/site`
+- `com.extinvo/site`
+- `com.factstable/factstable`
+- `com.fairoddscalculator/site`
+- `com.fairsqft/dubai-property`
+- `com.fanduelapi/server`
+- `com.faxlineindex/site`
+- `com.fbaforwarders/site`
+- `com.fedsalary/official-pay`
+- `com.ferntool/ip`
+- `com.findagencyhq/site`
+- `com.findbroadbanddeals/broadband-outages`
+- `com.fitouto/site`
+- `com.flatratebook/site`
+- `com.flightdelayhq/site`
+- `com.floridahvacreplacementcost/site`
+- `com.floridaroofreplacementcost/site`
+- `com.floridasolarcostcalculator/site`
+- `com.floridawaterdamagecost/site`
+- `com.fmlane/site`
+- `com.focusvo/site`
+- `com.folionomiq/folionomiq`
+- `com.folsn.mcp/own-store-products`
+- `com.footballagentindex/site`
+- `com.footfally/site`
+- `com.form5500data/plan-data`
+- `com.frapea/editor`
+- `com.freightforwarderfinder/site`
+- `com.freightinsurancecost/site`
+- `com.funnelvo/site`
 - `com.gaduin/gaduin`
-- `com.galacticbridge/radar-exit-check`
+- `com.gameshopenter/shop`
+- `com.gangwaze/cruise`
+- `com.geonode/mcp`
+- `com.georgiaroofreplacementcost/site`
+- `com.get409avaluation/site`
 - `com.getagentdepot/agent-provider-depot`
-- `com.getcloseknit/close-knit`
+- `com.getcleed/linkedin-buying-signals`
+- `com.getmattered/getmattered`
+- `com.getpriorivo/website-check`
+- `com.gitshine/gitshine`
+- `com.glpwinner/glp-winner`
+- `com.go-voltic/site-scan`
+- `com.gofrantic/frantic`
+- `com.goldenvisacalculator/site`
 - `com.googleapis.datastream/mcp`
-- `com.growvib/growvib`
-- `com.howtoreadthefuture/podcast`
+- `com.gotcashback/gotcashback`
+- `com.gpagradecompare/site`
+- `com.grain64.clearbar/verdicts`
+- `com.grain64.friction/friction`
+- `com.grantcue/grantcue`
+- `com.greenerahead/reporting-rules`
+- `com.halaltrip/prayer-tools`
+- `com.handovra/site`
+- `com.hardenvo/site`
+- `com.hardfmly/site`
+- `com.hardscapedesk/site`
+- `com.hashn/hashn`
+- `com.headcountdesk/site`
+- `com.headcountlabs/jobs`
+- `com.headedin/florida`
+- `com.heatpumpcosteurope/site`
+- `com.hemmabo/hemmabo-mcp-server`
+- `com.heynutcracker/nutcracker`
+- `com.hindiaitrainerjobs/site`
+- `com.historiapojazduvin/site`
+- `com.holidayready/travel-insurance-quotes`
+- `com.homecoverhq/site`
+- `com.hostingbystack/site`
+- `com.hotyata/mcp`
+- `com.hovercode/mcp`
+- `com.hreflangly/site`
+- `com.huddlevo/site`
+- `com.hustlegotreal/mcp`
+- `com.hvacsoftwarepicker/site`
+- `com.hydrantly/site`
 - `com.i2dev/snap`
+- `com.idosgames/platform`
+- `com.iinventedlight/library`
+- `com.immigrationadviserfinder/site`
+- `com.incorporatewhere/site`
+- `com.inductvo/site`
+- `com.industry-lens/mcp-public`
+- `com.infxl/angle`
+- `com.injectionmoldingcostchecker/site`
+- `com.insurancebyprofession/site`
+- `com.intakez/site`
+- `com.interfacedelta/atlas`
+- `com.issafu/site`
+- `com.jabbertoon/cartoon-studio`
+- `com.jenriks/photo-archive`
+- `com.jetoperatingcost/site`
+- `com.jobandstay/jobandstay`
+- `com.jobcardo/site`
+- `com.joeygeorgeplumbing/joey-george-plumbing`
+- `com.jointextkit/textkit`
+- `com.jojapi/sms-verify`
 - `com.kairossignal/kairos-signal`
-- `com.kareverse/kareverse`
-- `com.keelstats/keel-stats`
+- `com.kbasevo/site`
+- `com.kevinbravo.cinve/mcp`
+- `com.keysvo/site`
+- `com.kickoffo/site`
+- `com.knownvehicle/site`
+- `com.kollus/kollus`
+- `com.krosos/krosos`
 - `com.kulicadvisory/aictionbot-werkbank`
 - `com.kurodyne/catalog`
+- `com.kushbitx/agentproof`
 - `com.kyde/score`
-- `com.leonidalab/gta6-facts`
-- `com.lordevo/agent-directory`
-- `com.md2sign/md2sign`
+- `com.lanerouter/lanerouter`
+- `com.lanyardo/site`
+- `com.laptoppartfinder/laptop-part-finder`
+- `com.lasermaterialscompare/site`
+- `com.lastscanned/lastscanned`
+- `com.leadmerlin/leadmerlin`
+- `com.leaveloadingcalculator/site`
+- `com.legis-link/legis-link`
+- `com.lessonvo/site`
+- `com.lettza/site`
+- `com.lexifina/global-law`
+- `com.limslane/site`
+- `com.lineupatlas/lineup-atlas`
+- `com.llclane/site`
+- `com.lobbyvo/site`
+- `com.logimu/shopping-mcp`
+- `com.longserviceleavecalc/site`
+- `com.lookmybio/public`
+- `com.loopgantt/mcp-server`
+- `com.lordevo/shop`
+- `com.lpreportly/site`
+- `com.lugtorq/site`
+- `com.lunaterminal/lunaterminal`
+- `com.lvl2player/sandbox`
+- `com.madeinmexicosuppliers/site`
+- `com.madvisorfees/site`
+- `com.mailmergepdf/site`
+- `com.makeitsay/makeitsay`
+- `com.maltacompanycost/site`
+- `com.maltacryptolicence/site`
+- `com.maltapayrollcalculator/site`
+- `com.maltapropertytax/site`
+- `com.maltastampduty/site`
+- `com.maltataxrefundcalculator/site`
+- `com.maltavatregistration/site`
+- `com.maltaworkpermitchecker/site`
+- `com.mandatzo/site`
+- `com.mapltours/booking`
+- `com.marineinsurancecost/site`
+- `com.marketinque/launch-plan`
+- `com.markupbird/site`
+- `com.mashzo/site`
+- `com.medbillanalyzer/medbillanalyzer`
+- `com.medcontra/site`
+- `com.medicareplancomparison/site`
+- `com.medspacostchecker/site`
+- `com.mekktup/letters`
+- `com.metalroofcostcalculator/site`
+- `com.micarequirements/site`
 - `com.midasiteurope/civil-nx`
-- `com.msg91.mcp/mcp`
+- `com.mikereams/site`
+- `com.miniaturepaintscompare/site`
+- `com.mintlify/searchmcp`
+- `com.missourifoundationrepaircost/site`
+- `com.mokxi/mcp`
+- `com.moneydeals/us-tech-deals`
+- `com.monthendly/site`
+- `com.mosadd/mosadd-mcp`
+- `com.mosaisley/cantina`
+- `com.mowrouteworks/site`
+- `com.multicinesortega/cartelera`
+- `com.multiplayeragent/multiplayer-agent`
+- `com.multiplesbook/site`
+- `com.muretai/catalog`
+- `com.mustvo/site`
+- `com.mydailyjourneys.app/trip-planning`
+- `com.myecommerceai/myecommerceai`
+- `com.mylatinlife/data`
+- `com.nabarfinder/nabarfinder`
+- `com.narrowhighway/concordance`
+- `com.nashouse.articles/mcp`
 - `com.ncstatutes/ncgs`
+- `com.nearfine/books`
+- `com.nearshorefinder/site`
+- `com.neoavis/constats`
+- `com.nestdaddy/nestdaddy`
+- `com.netsheetly/site`
+- `com.neuroencoder/eeg-embeddings`
 - `com.neuronto/agents-tools-search-discovery-ard-registry`
 - `com.newvsts/newvsts`
+- `com.ninebix/site`
+- `com.nlnllabs/results`
 - `com.nocthost/mcp`
-- `com.nomnaviet/han-nom`
+- `com.nodecraft/mcp`
+- `com.nofovo/site`
+- `com.nomyparts/open-data`
+- `com.normapi/mcp`
+- `com.noticeperiodaustralia/site`
+- `com.noticeperiodireland/site`
+- `com.nuzzodevstudio/quasar-guide`
+- `com.obriym-crm/mcp`
+- `com.ocklu/hypermarket`
+- `com.offdayly/site`
+- `com.ohioroofreplacementcost/site`
 - `com.okfindex/okfindex`
-- `com.opafex/business-automation`
+- `com.oklahomafoundationrepaircost/site`
+- `com.okstays/okstays`
+- `com.oma-kase/icons`
+- `com.oneuedu.mcp/oneu-education`
+- `com.onlyfakefacts/facts`
+- `com.onlyworlds/mcp`
+- `com.oods-foundry/foundry`
+- `com.opedd/opedd-mcp`
+- `com.opexvo/site`
+- `com.orabrain/prax-data-services`
+- `com.orderpadledger/site`
+- `com.orgbix/site`
+- `com.orgplanly/site`
 - `com.ortexo/mcp`
+- `com.outsourceditsupportquotes/site`
 - `com.owlchart/owlchart`
+- `com.ownvscharter/site`
+- `com.ownyouragent/agentvoordeur`
+- `com.palimpalem/website-drafts`
+- `com.papyrascoupons/coupons`
+- `com.parkgraph/mcp`
+- `com.partnro/site`
+- `com.partstable/partstable`
+- `com.pasteapply/mcp`
+- `com.patientvo/site`
+- `com.payrollservicesquotes/site`
+- `com.paywallcompass/site`
+- `com.pdoccalculator/site`
+- `com.peptul/peptul`
+- `com.perceptlayer/web-data`
+- `com.perdiemdesk/site`
+- `com.perdiemo/site`
+- `com.pickpathly/site`
+- `com.pirateskills/pirateskills`
+- `com.plainerror/plainerror`
+- `com.plainquant/plainquant`
+- `com.plutus-cloud/plutus-cost-data`
+- `com.plyparts/ply`
 - `com.pontofato/pontofato`
-- `com.praxikon/praxikon`
+- `com.postalref/postalref`
+- `com.potterysupplieshq/site`
+- `com.powerplatformtip/mcp`
+- `com.ppmly/site`
 - `com.prilago/lp-intelligence`
+- `com.printags/shop`
+- `com.probativegrowth/legal-marketing-data`
+- `com.probeledger/site`
+- `com.procedurecostchecker/site`
+- `com.professorotter/activities`
 - `com.progrss/plates`
+- `com.prometiam/risk-mcp`
+- `com.proofestry/proofestry`
+- `com.proofprice/pricepaid`
+- `com.proofzo/site`
+- `com.propfirmpicker/site`
+- `com.proservicesprices/site`
+- `com.prsicalculator/site`
+- `com.ptoroom/site`
+- `com.punchlistworks/site`
+- `com.qrcodedinosaur/qr-codes`
+- `com.quanttogo/quanttogo-mcp`
 - `com.radar-cnpj/radar-cnpj`
-- `com.redpanda/docs-mcp`
+- `com.radveo/radveo`
+- `com.rapportvo/site`
+- `com.realworldapis/realworldapis`
+- `com.rebadgo/site`
+- `com.recallvia/site`
+- `com.receivableledger/site`
+- `com.reconzy/site`
+- `com.redocly/mcp`
+- `com.redundancycalculatorireland/site`
 - `com.reflowpdf/reflowpdf`
-- `com.registryverify/florida-sunbiz-business-kyb`
-- `com.shipmyform/shipmyform`
-- `com.siemens.mcp/siemens`
-- `com.sienasociety/siena`
-- `com.skiplagged/mcp`
+- `com.reglyze/mcp`
+- `com.remitdeck/site`
+- `com.remotenomadjobs/jobs`
+- `com.rentrolldesk/site`
+- `com.reputemap/reputemap`
+- `com.reputend/reputend`
+- `com.reputzo/site`
+- `com.reqnix/site`
+- `com.requly/site`
+- `com.retirementvisacalculator/site`
+- `com.ringkit/ringkit`
+- `com.rmmcompare/site`
+- `com.roofingquotesuk/site`
+- `com.runbookdesk/site`
+- `com.runheed/runheed`
+- `com.runsheetly/site`
+- `com.runwayze/site`
+- `com.rushordertees/rushordertees`
+- `com.rxrooster/anesthesia-discovery`
+- `com.sacristo/site`
+- `com.sapiensolutions/site`
+- `com.sarabalawson/afromorphism`
+- `com.saudicompanysetupcost/site`
+- `com.saunacoldplungecompare/site`
+- `com.sbarvo/site`
+- `com.scaffoldingcostcalculator/site`
+- `com.scanmalware.mcp/scanmalware-mcp`
+- `com.scenef/showtimes`
+- `com.scopedly/site`
+- `com.scriptmasterlabs/hive402`
+- `com.searchfragments/search-fragments`
+- `com.sellablescore/site`
+- `com.sellmybusinessquotes/site`
+- `com.sendameal/storefront`
+- `com.sendaparcelcompare/site`
+- `com.seoulstart/seoulstart`
+- `com.seqbench/workbench`
+- `com.session-exchange/sessions`
+- `com.sfxmint/sounds`
 
-_Last run: 2026-11-12T13:10:52.006Z. First run: 2026-11-11T12:05:24.564Z._
+_Last run: 2026-11-13T12:34:10.916Z. First run: 2026-11-11T12:05:24.564Z._

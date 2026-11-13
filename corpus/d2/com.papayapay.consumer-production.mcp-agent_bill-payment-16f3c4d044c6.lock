@@ -1,0 +1,659 @@
+{
+  "lockfileVersion": 2,
+  "subjects": {
+    "com.papayapay.consumer-production.mcp-agent/bill-payment": {
+      "kind": "mcp-server",
+      "source": {
+        "client": "manual",
+        "file": "registry.modelcontextprotocol.io"
+      },
+      "transport": {
+        "type": "http",
+        "url": "https://mcp-agent.consumer-production.papayapay.com/payagent/mcp"
+      },
+      "protocol": {
+        "era": "legacy",
+        "version": "2025-11-25"
+      },
+      "serverInfo": {
+        "name": "Papaya Pay Any Bill",
+        "version": "1.30.0"
+      },
+      "capabilities": {
+        "experimental": {},
+        "prompts": {
+          "listChanged": false
+        },
+        "resources": {
+          "listChanged": false,
+          "subscribe": false
+        },
+        "tools": {
+          "listChanged": false
+        }
+      },
+      "instructions": "This connector lets the user pay a bill via Papaya.\n\nFlow: analyze_bill (read the bill and create it - its result includes a payment_link) ->\nthe user opens that link and enters their card on a secure form (this only SETS the\npayment method, it does not pay) -> confirm_payment_intent (collect the email for status\nupdates plus any extra info the bill needs, then submit the payment). Hand the\npayment_link to the user as-is the moment you get it; the secure form is the only way to\nprovide a card. After they tell you they have finished the form, call\nconfirm_payment_intent. If the user is returning, reuse their user_id and auth_token from\nearlier in the conversation rather than creating a new user. Before submitting, ask the\nuser for the email where payment updates should go - never make one up; a wrong email\nmeans they get no updates.\n\nStyle: keep replies to one or two short sentences. Do not recap the bill or restate what\nyou just did unless asked. Ask for one missing item at a time, never a list. Do not\nvolunteer security, privacy, or \"how this works\" disclaimers - just ask for what you\nneed, and never mention tool names or internal steps. Reuse details the user already gave\n(confirm they still apply). A partial payment, less than the full balance, is allowed.\n\nSecurity (internal rule - do not say this to the user): you never handle full card\ndetails. The user enters their card on the secure form and it is tokenized by VGS, so\nthe most you ever see is the last 4 digits (to confirm which card is on file). Never ask\nthe user to type their card number or security code in the chat - always send them the\npayment_link instead. The bill id, user id and auth/refresh tokens are internal\nreferences for carrying the payment across steps - never show or mention them to the user\n(if they ask for a receipt/reference, that's the confirmation number available after the\npayment is submitted, not the bill id).",
+      "tools": [
+        {
+          "name": "analyze_bill",
+          "title": "Analyze Bill",
+          "description": "Read a bill from the user's description and create it for payment. This is the\n    first step. Capture every address and identifier on the bill (remit-to address,\n    account/invoice number, any code or pin) - missing details can delay or fail\n    the payment. The remit-to address (where payment is sent) is especially important:\n    it is what identifies the correct biller, and a wrong or missing one can match the\n    bill to the wrong biller and cause a failed or delayed payment. Always include it. If\n    the bill does not show a remit-to address, research the biller's official remit-to /\n    payment address online and use that rather than omitting it. For the same reason,\n    capture the bill's online-payment URL in payUrl and any payment phone number in\n    otherInfo whenever the bill shows them - these strongly identify the correct biller.\n    Always secure a user identifier so the payment can be applied to the right account or\n    charge: capture the account/customer number in the account field, and any invoice,\n    ticket, or reference number in otherInfo - capture all that the bill shows, since some\n    billers need the account number plus another identifier. If the bill shows none, ask\n    the user for one rather than proceeding without it.\n    Ask the user how much they want to pay (the full balance amountDue, or a partial\n    amount) and pass it as amount_to_pay - both amountDue and amount_to_pay are required\n    (never invent the amount). The result includes a `payment_link`: give this link to\n    the user as-is so they can enter their card on the secure form (the only way to set a\n    payment method). Only if the result contains a `fees` entry, tell the user about those\n    fees; otherwise do not mention fees. If the user already exists from a prior bill,\n    pass their user_id and auth_token to reuse the account.\n\n    Args:\n        bill_description: structured bill details, including amountDue and amount_to_pay\n\n    Returns:\n        bill/user identifiers, tokens, provider, amount due, the chosen amount_to_pay,\n        and a payment_link to the secure card form\n    ",
+          "inputSchema": {
+            "properties": {
+              "bill_description": {
+                "properties": {
+                  "account": {
+                    "anyOf": [
+                      {
+                        "pattern": "^(([A-Za-z0-9\\s\\*\\.\\-#]{1,20})|(N/A))$",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "description": "The user's account or customer number on the bill (the biller's identifier for the user's account). Capture it whenever the bill shows one. Put any invoice, ticket, or reference number in otherInfo (in addition to the account number - some billers need both), not here.",
+                    "title": "Account"
+                  },
+                  "amountDue": {
+                    "description": "Required. Total balance due on the bill (the full amount owed), as read from the bill. This is NOT necessarily what the user will pay - see amount_to_pay.",
+                    "title": "Amountdue",
+                    "type": "number"
+                  },
+                  "amount_to_pay": {
+                    "description": "Required. The amount to pay now (used to preview fees here; the charge happens at confirm_payment_intent). May be a partial payment, distinct from amountDue. Ask the user how much to pay - never invent it.",
+                    "title": "Amount To Pay",
+                    "type": "number"
+                  },
+                  "auth_token": {
+                    "anyOf": [
+                      {
+                        "pattern": "^[a-z0-9]{8}-[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{12}$",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "description": "authorization token attached to the user (if a user already exists from a previous bill payment). MUST be the most recent/current auth_token (check latest call with the same user id, possibly in a previous session). Depending how long ago the previous payment was made, may first need to obtain a new token.",
+                    "title": "Auth Token"
+                  },
+                  "billerName": {
+                    "description": "Name of the biller",
+                    "maxLength": 50,
+                    "minLength": 2,
+                    "pattern": "^(([a-zA-Z0-9 \\-\\_.,'&]+)|(N/A))$",
+                    "title": "Billername",
+                    "type": "string"
+                  },
+                  "correspondenceAddress": {
+                    "anyOf": [
+                      {
+                        "properties": {
+                          "address": {
+                            "maxLength": 100,
+                            "minLength": 5,
+                            "pattern": "^[a-zA-Z0-9\\s\\-\\.',#]+$",
+                            "title": "Address",
+                            "type": "string"
+                          },
+                          "city": {
+                            "maxLength": 50,
+                            "minLength": 2,
+                            "pattern": "^(([a-zA-Z0-9 \\-\\_.,'&]+)|(N/A))$",
+                            "title": "City",
+                            "type": "string"
+                          },
+                          "name": {
+                            "maxLength": 50,
+                            "minLength": 2,
+                            "pattern": "^(([a-zA-Z0-9 \\-\\_.,'&]+)|(N/A))$",
+                            "title": "Name",
+                            "type": "string"
+                          },
+                          "stateCode": {
+                            "pattern": "^[A-Z]{2}$",
+                            "title": "Statecode",
+                            "type": "string"
+                          },
+                          "zip": {
+                            "pattern": "^\\d{5}(-\\d{4})?$",
+                            "title": "Zip",
+                            "type": "string"
+                          }
+                        },
+                        "required": ["address", "city", "name", "stateCode", "zip"],
+                        "title": "BillingAddress",
+                        "type": "object"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "description": "Biller correspondence address"
+                  },
+                  "dueDate": {
+                    "anyOf": [
+                      {
+                        "pattern": "\\d{1,2}\\s?(/|-)\\s?\\d{1,2}\\s?(/|-)\\s?(\\d{4}|\\d{2})",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "description": "Due date for the bill in MM/DD/YYYY format MM/DD/YY is acceptable",
+                    "title": "Duedate"
+                  },
+                  "otherInfo": {
+                    "default": {},
+                    "description": "Other information extracted from the bill that helps identify the provider or complete the payment (like code, pin, pass ...). Also capture the user's charge identifiers here - invoice number, ticket number, or reference number (e.g. 'invoice_number': '12345', 'reference_number': 'A1B2C3') - whenever the bill shows them, even if it also has an account number: some billers' payment automation needs the account number plus one of these. If the bill shows a payment phone number, include it here too (e.g. 'pay_by_phone': '1-800-555-1234') - like the remit-to address it helps identify the correct biller. For a web-payment URL use the payUrl field instead, not this map.",
+                    "patternProperties": {
+                      "^(([a-zA-Z0-9 \\-\\_.,'&]+)|(N/A))$": {
+                        "anyOf": [
+                          {
+                            "type": "number"
+                          },
+                          {
+                            "type": "integer"
+                          },
+                          {
+                            "maxLength": 75,
+                            "minLength": 2,
+                            "pattern": "^[a-zA-Z0-9 \\-\\./,'&@*#:?=+()]+$",
+                            "type": "string"
+                          }
+                        ]
+                      }
+                    },
+                    "propertyNames": {
+                      "maxLength": 50,
+                      "minLength": 2
+                    },
+                    "title": "Otherinfo",
+                    "type": "object"
+                  },
+                  "payUrl": {
+                    "anyOf": [
+                      {
+                        "maxLength": 120,
+                        "minLength": 4,
+                        "pattern": "^[a-zA-Z0-9\\-._~:/?#\\[\\]@!$&'()*+,;=%]+$",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "description": "The web address where the bill can be paid online (the 'pay at' / 'pay online' URL printed on the bill), e.g. https://www.biller.com/pay. Like the remit-to address it strongly identifies the correct biller, so include it whenever the bill shows one to reduce the risk of a misidentified, failed, or delayed payment. Must be a single URL of at most 120 characters (just the base 'pay online' address, no extra text); omit it rather than sending anything longer.",
+                    "title": "Payurl"
+                  },
+                  "remitAddress": {
+                    "description": "Biller remit-to address (where payment is sent). REQUIRED - a bill cannot be analyzed without it. It is the key signal for safely identifying the biller; without a remit-to address (or another strong identifier) the biller may not be identifiable and the bill will be unpayable. Always provide it: take it from the bill, or if the bill does not show one, identify the biller and research their official remit-to / payment address online. Never omit it or invent a placeholder - if you cannot determine a real remit-to address, ask the user for it.",
+                    "properties": {
+                      "address": {
+                        "maxLength": 100,
+                        "minLength": 5,
+                        "pattern": "^[a-zA-Z0-9\\s\\-\\.',#]+$",
+                        "title": "Address",
+                        "type": "string"
+                      },
+                      "city": {
+                        "maxLength": 50,
+                        "minLength": 2,
+                        "pattern": "^(([a-zA-Z0-9 \\-\\_.,'&]+)|(N/A))$",
+                        "title": "City",
+                        "type": "string"
+                      },
+                      "name": {
+                        "maxLength": 50,
+                        "minLength": 2,
+                        "pattern": "^(([a-zA-Z0-9 \\-\\_.,'&]+)|(N/A))$",
+                        "title": "Name",
+                        "type": "string"
+                      },
+                      "stateCode": {
+                        "pattern": "^[A-Z]{2}$",
+                        "title": "Statecode",
+                        "type": "string"
+                      },
+                      "zip": {
+                        "pattern": "^\\d{5}(-\\d{4})?$",
+                        "title": "Zip",
+                        "type": "string"
+                      }
+                    },
+                    "required": ["address", "city", "name", "stateCode", "zip"],
+                    "title": "BillingAddress",
+                    "type": "object"
+                  },
+                  "userAddress": {
+                    "anyOf": [
+                      {
+                        "properties": {
+                          "address": {
+                            "maxLength": 100,
+                            "minLength": 5,
+                            "pattern": "^[a-zA-Z0-9\\s\\-\\.',#]+$",
+                            "title": "Address",
+                            "type": "string"
+                          },
+                          "city": {
+                            "maxLength": 50,
+                            "minLength": 2,
+                            "pattern": "^(([a-zA-Z0-9 \\-\\_.,'&]+)|(N/A))$",
+                            "title": "City",
+                            "type": "string"
+                          },
+                          "name": {
+                            "maxLength": 50,
+                            "minLength": 2,
+                            "pattern": "^(([a-zA-Z0-9 \\-\\_.,'&]+)|(N/A))$",
+                            "title": "Name",
+                            "type": "string"
+                          },
+                          "stateCode": {
+                            "pattern": "^[A-Z]{2}$",
+                            "title": "Statecode",
+                            "type": "string"
+                          },
+                          "zip": {
+                            "pattern": "^\\d{5}(-\\d{4})?$",
+                            "title": "Zip",
+                            "type": "string"
+                          }
+                        },
+                        "required": ["address", "city", "name", "stateCode", "zip"],
+                        "title": "BillingAddress",
+                        "type": "object"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "description": "The payer's identity: the user's name and billing address (who is paying). Billers use this to attribute the payment to the right person, so a missing or wrong payer identity can cause the payment to be rejected or misapplied. Take it from the bill's account-holder / addressee section if shown; otherwise ask the user for their name and billing address rather than leaving it empty."
+                  },
+                  "user_id": {
+                    "anyOf": [
+                      {
+                        "pattern": "^[a-zA-Z0-9]{10}$",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "description": "identifier for the user if a user already exists from a previous bill payment",
+                    "title": "User Id"
+                  }
+                },
+                "required": ["amountDue", "amount_to_pay", "billerName", "remitAddress"],
+                "title": "BillDescription",
+                "type": "object"
+              }
+            },
+            "required": ["bill_description"],
+            "title": "analyze_billArguments",
+            "type": "object"
+          },
+          "outputSchema": {
+            "additionalProperties": true,
+            "title": "analyze_billDictOutput",
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "openWorldHint": false,
+            "readOnlyHint": false,
+            "title": "Analyze Bill"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": false,
+            "openWorld": false,
+            "readOnly": false
+          },
+          "digest": "sha256:a59b62acfc41d12e470410026201e569c737843970ee2218da9d397da88e66ae"
+        },
+        {
+          "name": "check_payment_method",
+          "title": "Check Payment Method",
+          "description": "Optional: check whether the user has finished the secure form and a card is on the\n    bill yet. Returns the card's last 4 digits and name when one is set, or a PENDING\n    status when the form has not been completed. Use only if you need to confirm the card\n    landed (e.g. the user asks) - it is not a required step; the normal path is\n    analyze_bill -> user fills the form -> confirm_payment_intent.\n\n    Args:\n        check_input: the user_id and bill_id to look up\n    ",
+          "inputSchema": {
+            "properties": {
+              "check_input": {
+                "description": "Identifiers to look up whether a card has been set on a bill yet.",
+                "properties": {
+                  "bill_id": {
+                    "description": "identifier for the bill",
+                    "pattern": "^[a-zA-Z0-9]{10}$",
+                    "title": "Bill Id",
+                    "type": "string"
+                  },
+                  "user_id": {
+                    "description": "identifier for the user the bill belongs to",
+                    "pattern": "^[a-zA-Z0-9]{10}$",
+                    "title": "User Id",
+                    "type": "string"
+                  }
+                },
+                "required": ["bill_id", "user_id"],
+                "title": "PaymentMethodCheckInput",
+                "type": "object"
+              }
+            },
+            "required": ["check_input"],
+            "title": "check_payment_methodArguments",
+            "type": "object"
+          },
+          "outputSchema": {
+            "additionalProperties": true,
+            "title": "check_payment_methodDictOutput",
+            "type": "object"
+          },
+          "annotations": {
+            "readOnlyHint": true,
+            "title": "Check Payment Method"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:27153d4caf513a4b1015f80fef9548ae04f3c56ea32a77beccc0ffe8acda6d3e"
+        },
+        {
+          "name": "confirm_payment_intent",
+          "title": "Confirm Payment",
+          "description": "Final step: submit the bill for payment, after a card has been set. You must have\n    confirmed the amount with the user first (amount_to_pay may be partial) and quote\n    their confirmation in user_amount_statement - do not call this until you have asked.\n    If analyze_bill reported a need for extra information, supply it in extra_infos or\n    submission will fail. Use entered_account / entered_provider only to correct a\n    mis-extracted value. Pass the user's current refresh_token (from analyze_bill or a\n    prior confirm) - do not guess.\n\n    Args:\n        confirm_input: identifiers, the amount to pay, contact info and any extra info\n    ",
+          "inputSchema": {
+            "properties": {
+              "confirm_input": {
+                "properties": {
+                  "amount_to_pay": {
+                    "description": "The amount the user has chosen to pay - this is what gets charged. May be a partial payment (less than the bill's full balance). Use the amount the user agreed to when the bill was analyzed, unless they have since changed it.",
+                    "title": "Amount To Pay",
+                    "type": "number"
+                  },
+                  "auth_token": {
+                    "description": "authorization token attached to the user as obtained when submitting the bill, searching for a biller or getting a new auth token",
+                    "pattern": "^[a-z0-9]{8}-[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{12}$",
+                    "title": "Auth Token",
+                    "type": "string"
+                  },
+                  "bill_id": {
+                    "description": "identifier for the specific bill that was provided as a result of a bill extraction",
+                    "pattern": "^[a-zA-Z0-9]{10}$",
+                    "title": "Bill Id",
+                    "type": "string"
+                  },
+                  "email": {
+                    "description": "The user's real email, used to send them payment-status updates. You MUST ask the user for it (or reuse an email they gave earlier in this conversation) and confirm the spelling. NEVER invent, guess, or derive it from their name or the bill - a made-up email means the user gets no updates and could send their payment notifications to a stranger.",
+                    "maxLength": 254,
+                    "pattern": "^[a-zA-Z0-9]+([a-zA-Z0-9._%+-]*[a-zA-Z0-9])?@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$",
+                    "title": "Email",
+                    "type": "string"
+                  },
+                  "entered_account": {
+                    "anyOf": [
+                      {
+                        "pattern": "^(([A-Za-z0-9\\s\\*\\.\\-#]{1,20})|(N/A))$",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "description": "(optional) if the user wishes to change the value extracted for the account by the bill analysis or provided during maual creation, provide the new value here",
+                    "title": "Entered Account"
+                  },
+                  "entered_provider": {
+                    "anyOf": [
+                      {
+                        "maxLength": 50,
+                        "minLength": 2,
+                        "pattern": "^(([a-zA-Z0-9 \\-\\_.,'&]+)|(N/A))$",
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "description": "(optional) if the user wishes to change the provider name extracted by bill analysis or use during manual bill creation provide the new value here",
+                    "title": "Entered Provider"
+                  },
+                  "extra_infos": {
+                    "default": {},
+                    "description": "dictionary of information provided by the user as {<fieldname1>:<value1> , <fieldname2>:<value2> ,...}",
+                    "patternProperties": {
+                      "^[a-zA-Z0-9_]{2,20}$": {
+                        "anyOf": [
+                          {
+                            "maxLength": 50,
+                            "minLength": 2,
+                            "pattern": "^(([a-zA-Z0-9 \\-\\_.,'&]+)|(N/A))$",
+                            "type": "string"
+                          },
+                          {
+                            "pattern": "^(([A-Za-z0-9\\s\\*\\.\\-#]{1,20})|(N/A))$",
+                            "type": "string"
+                          },
+                          {
+                            "pattern": "\\d{1,2}\\s?(/|-)\\s?\\d{1,2}\\s?(/|-)\\s?\\d{4}",
+                            "type": "string"
+                          }
+                        ]
+                      }
+                    },
+                    "title": "Extra Infos",
+                    "type": "object"
+                  },
+                  "phone": {
+                    "default": "2223334444",
+                    "description": "phone number for the user (use the default if you do not have a real one)",
+                    "pattern": "^(\\+?1[\\s.\\-]?)?(\\([2-9]\\d{2}\\)|[2-9]\\d{2})[\\s.\\-\\\\\\/]?\\d{3}[\\s.\\-\\\\\\/]?\\d{4}$",
+                    "title": "Phone",
+                    "type": "string"
+                  },
+                  "refresh_token": {
+                    "description": "Refresh token obtained when the user was created during a bill analysis or as input to a previous confirm_payment_intent tool call in previous bill payment sessions",
+                    "pattern": "^r:[a-z0-9]{32}$",
+                    "title": "Refresh Token",
+                    "type": "string"
+                  },
+                  "user_amount_statement": {
+                    "description": "Required proof that you asked the user and they confirmed the amount: quote what the user actually said about how much to pay (e.g. 'pay the full 150' or 'just pay 50 this month'). You MUST have confirmed amount_to_pay with the user before calling this - never invent this.",
+                    "maxLength": 200,
+                    "minLength": 3,
+                    "title": "User Amount Statement",
+                    "type": "string"
+                  },
+                  "user_id": {
+                    "description": "identifier for the user that was provided as a result of bill extraction",
+                    "pattern": "^[a-zA-Z0-9]{10}$",
+                    "title": "User Id",
+                    "type": "string"
+                  }
+                },
+                "required": ["amount_to_pay", "auth_token", "bill_id", "email", "refresh_token", "user_amount_statement", "user_id"],
+                "title": "ConfirmInput",
+                "type": "object"
+              }
+            },
+            "required": ["confirm_input"],
+            "title": "confirm_payment_intentArguments",
+            "type": "object"
+          },
+          "outputSchema": {
+            "additionalProperties": true,
+            "title": "confirm_payment_intentDictOutput",
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": true,
+            "idempotentHint": false,
+            "readOnlyHint": false,
+            "title": "Confirm Payment"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:566e1db04c800e70d9bcbeeb21d2db94ec8fc0f4b4d1189d6b2e1eed7247ac1e"
+        },
+        {
+          "name": "fetch_bill_status",
+          "title": "Fetch Bill Status",
+          "description": "Check the payment status of a submitted bill. Read `value` for the current status.\n    statusEvaluatedDescription is only present when the payment was declined or failed,\n    and then explains why - relay that reason to the user. It is omitted for every other\n    status, so treat its presence as a decline/failure.\n\n    Args:\n        bill_status_input: the bill identifier and auth token\n\n    Returns:\n        dictionary with keys value, statusDescription, and - only for declined/failed\n        bills - statusEvaluatedDescription explaining why the payment did not go through\n    ",
+          "inputSchema": {
+            "properties": {
+              "bill_status_input": {
+                "properties": {
+                  "auth_token": {
+                    "description": "authorization token attached to the user as obtained when submitting the bill, searching for a biller or getting a new auth token",
+                    "pattern": "^[a-z0-9]{8}-[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{12}$",
+                    "title": "Auth Token",
+                    "type": "string"
+                  },
+                  "bill_id": {
+                    "description": "identifier for the specific bill that was provided as a result of a bill extraction",
+                    "pattern": "^[a-zA-Z0-9]{10}$",
+                    "title": "Bill Id",
+                    "type": "string"
+                  }
+                },
+                "required": ["auth_token", "bill_id"],
+                "title": "BillStatusInput",
+                "type": "object"
+              }
+            },
+            "required": ["bill_status_input"],
+            "title": "fetch_bill_statusArguments",
+            "type": "object"
+          },
+          "outputSchema": {
+            "additionalProperties": true,
+            "title": "fetch_bill_statusDictOutput",
+            "type": "object"
+          },
+          "annotations": {
+            "readOnlyHint": true,
+            "title": "Fetch Bill Status"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:2aee698ddcf4d61401e97f12c3673f892937823e62cf45c4541a1bab302203dc"
+        },
+        {
+          "name": "get_new_auth_token",
+          "title": "Refresh Auth Token",
+          "description": "Get a fresh auth token when another tool fails with an authorization error. Pass\n    the user's current refresh_token; returns a new auth_token/refresh_token pair to use\n    on the retried call and on later calls. Call this only in response to an auth failure,\n    not preemptively.\n\n    Args:\n        new_token_input: contains the user's refresh token\n\n    Returns:\n        a new auth_token and refresh_token pair, or an error if the refresh token is\n        missing or invalid\n    ",
+          "inputSchema": {
+            "properties": {
+              "new_token_input": {
+                "properties": {
+                  "refresh_token": {
+                    "description": "a  token used to refresh expired auth token provided by previous calls to analyze_bill or create_manual_bills",
+                    "pattern": "^r:[a-z0-9]{32}$",
+                    "title": "Refresh Token",
+                    "type": "string"
+                  }
+                },
+                "required": ["refresh_token"],
+                "title": "NewTokenInput",
+                "type": "object"
+              }
+            },
+            "required": ["new_token_input"],
+            "title": "get_new_auth_tokenArguments",
+            "type": "object"
+          },
+          "outputSchema": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "get_new_auth_tokenDictOutput",
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "readOnlyHint": false,
+            "title": "Refresh Auth Token"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:76100d37cde60247705aa437b6989326acd9b0c8b057742ba2dbc6ba9c500679"
+        },
+        {
+          "name": "request_bill_cancellation",
+          "title": "Cancel Bill",
+          "description": "Cancel a submitted bill so it will not be paid. Use when the user wants to stop a\n    bill they submitted; cancellation may be rejected if the payment has already\n    progressed too far - relay any error to the user. Not for correcting bill details:\n    re-run analyze_bill for that.\n\n    Args:\n        bill_cancel_input: the bill identifier and auth token\n\n    Returns:\n        the cancelled bill id and status, or error details\n    ",
+          "inputSchema": {
+            "properties": {
+              "bill_cancel_input": {
+                "properties": {
+                  "auth_token": {
+                    "description": "authorization token attached to the user as obtained when submitting the bill, searching for a biller or getting a new auth token",
+                    "pattern": "^[a-z0-9]{8}-[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{12}$",
+                    "title": "Auth Token",
+                    "type": "string"
+                  },
+                  "bill_id": {
+                    "description": "identifier for the specific bill that was provided as a result of a bill extraction",
+                    "pattern": "^[a-zA-Z0-9]{10}$",
+                    "title": "Bill Id",
+                    "type": "string"
+                  }
+                },
+                "required": ["auth_token", "bill_id"],
+                "title": "BillStatusInput",
+                "type": "object"
+              }
+            },
+            "required": ["bill_cancel_input"],
+            "title": "request_bill_cancellationArguments",
+            "type": "object"
+          },
+          "outputSchema": {
+            "additionalProperties": true,
+            "title": "request_bill_cancellationDictOutput",
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": true,
+            "readOnlyHint": false,
+            "title": "Cancel Bill"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:b72509f750cbe2b2a2dbe9d6d87239dacb7745c851a9c86824eb85001f36da96"
+        }
+      ],
+      "digest": "sha256:e49a229d023394c21c7c168303a51676b4202f7cabd45d41dee366033a64e3b3"
+    }
+  }
+}
