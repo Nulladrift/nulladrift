@@ -155,7 +155,7 @@
             "additionalProperties": false,
             "properties": {
               "csv": {
-                "description": "The Shopify or WooCommerce CSV text (header row plus product rows, up to 2 MB). A partial call or non-CSV product snippet is fine when the user asks to check readiness: pass the text as csv and the tool returns the gap summary or not_a_product_csv.",
+                "description": "The product CSV text from Shopify (product or Inventory CSV), WooCommerce or Etsy, header row plus product rows, up to 2 MB; commas, semicolons and tabs are read. A partial call or non-CSV product snippet is fine when the user asks to check readiness: pass the text as csv and the tool returns the gap summary or not_a_product_csv.",
                 "maxLength": 2000000,
                 "minLength": 1,
                 "type": "string"
@@ -245,7 +245,7 @@
             "openai/toolInvocation/invoked": "Done: Check a Shopify CSV for customs data gaps",
             "openai/toolInvocation/invoking": "Check a Shopify CSV for customs data gaps..."
           },
-          "digest": "sha256:f5ea2f85b390748676d54295b859e840ebba0085a31b1c9995a0095ea879f260"
+          "digest": "sha256:2008fda0c6bf53773d2a75d3795ff0530bb41941cbe2494856bcc6168712553d"
         },
         {
           "name": "eu_duty_estimate",
@@ -469,7 +469,7 @@
         {
           "name": "landed_cost_estimate",
           "title": "Estimate duty, VAT and landed cost",
-          "description": "Best for: \"what will import duty and VAT be on this?\" for one item shipped to the UK, US or EU from a known tariff line.\nReturns: duty (general rate plus, with origin, US chapter 99 or UK/EU anti-dumping and countervailing duties), VAT, US fees (MPF, HMF) and total (in the destination's currency; a given currency is converted at the ECB rate), plus trade_defence, chapter_99, chapter_99_skipped, complete, missing, sources and notes.\nInput tips: pass hs_code (full line: UK or EU 10 digits, US 8 or 10; for a 4 or 6 digit heading still call for its code_not_final lines), destination (\"UK\", \"US\" or \"EU\"), goods_value, shipping, and currency when the user gave one. Never guess origin, transport or country: omit what the user did not state; the answer says complete: false and what is missing.",
+          "description": "Best for: \"what will import duty and VAT be on this?\" for one item shipped to the UK, US or EU.\nReturns: duty, VAT, US fees and total, plus trade_defence, chapter_99, complete, missing, sources and notes. When hs_code is a heading with several final lines, line_range prices each rated line and names the lowest and the highest; the top-level fields are then the low line's.\nInput tips: hs_code (UK or EU 10 digits, US 8 or 10), destination, goods_value, shipping, and currency when given. Never guess origin, transport or country: omit what the user did not state.",
           "inputSchema": {
             "additionalProperties": false,
             "properties": {
@@ -494,7 +494,7 @@
                 "type": "number"
               },
               "hs_code": {
-                "description": "A full tariff line, UK or EU (TARIC) 10 digits or US 8 or 10 digits, dots allowed, such as \"6109100010\". Copy it from bulk_hs_candidates. A candidate, not binding.",
+                "description": "A tariff code, UK or EU (TARIC) 10 digits or US 8 or 10 digits, dots allowed, such as \"6109100010\". Copy it from bulk_hs_candidates. A candidate, not binding. A heading with several final lines (such as a 6-digit subheading) is answered as a range: every rated line under it is priced and the lowest and highest are named in line_range.",
                 "maxLength": 16,
                 "minLength": 6,
                 "type": "string"
@@ -670,6 +670,135 @@
                 "enum": ["candidate, not binding"],
                 "type": "string"
               },
+              "line_range": {
+                "description": "Set when hs_code was a heading with several final lines: the answer is a range, not one figure. Every rated line under the heading was priced on the same input. low and high name the two ends and are absent when no line's duty can be calculated as an amount. unpriced names every final line the range does not cover with the reason (cap, read_failed, no_rate, not_ad_valorem), and all_lines_priced is then false. All totals are in the answer's currency (currency.to when currency was given). The top-level hs_code, duty, vat and total are the low line's.",
+                "properties": {
+                  "all_lines_priced": {
+                    "description": "true only when every final line under the heading was priced with a calculated duty, so low and high bound the whole heading.",
+                    "type": "boolean"
+                  },
+                  "heading": {
+                    "description": "The heading that was sent, not a final line.",
+                    "type": "string"
+                  },
+                  "high": {
+                    "description": "The line with the highest total, present only when at least two lines have a calculated duty; with one such line it is the single low.",
+                    "properties": {
+                      "complete": {
+                        "description": "false when that line's total leaves out a part.",
+                        "type": "boolean"
+                      },
+                      "description": {
+                        "description": "Its description in the schedule.",
+                        "type": "string"
+                      },
+                      "duty": {
+                        "type": ["number", "null"]
+                      },
+                      "duty_rate": {
+                        "description": "The duty rate on that line, with chapter 99 or trade defence duties already combined, as duty.rate spells them out.",
+                        "type": "string"
+                      },
+                      "hs_code": {
+                        "description": "The final tariff line.",
+                        "type": "string"
+                      },
+                      "total": {
+                        "description": "Landed total for that line, on the same goods and shipping, in the answer's currency.",
+                        "type": "number"
+                      }
+                    },
+                    "required": ["complete", "description", "duty", "duty_rate", "hs_code", "total"],
+                    "type": "object"
+                  },
+                  "lines": {
+                    "description": "Every priced line, lowest total first.",
+                    "items": {
+                      "properties": {
+                        "complete": {
+                          "description": "false when that line's total leaves out a part.",
+                          "type": "boolean"
+                        },
+                        "description": {
+                          "description": "Its description in the schedule.",
+                          "type": "string"
+                        },
+                        "duty": {
+                          "type": ["number", "null"]
+                        },
+                        "duty_rate": {
+                          "description": "The duty rate on that line, with chapter 99 or trade defence duties already combined, as duty.rate spells them out.",
+                          "type": "string"
+                        },
+                        "hs_code": {
+                          "description": "The final tariff line.",
+                          "type": "string"
+                        },
+                        "total": {
+                          "description": "Landed total for that line, on the same goods and shipping, in the answer's currency.",
+                          "type": "number"
+                        }
+                      },
+                      "required": ["complete", "description", "duty", "duty_rate", "hs_code", "total"],
+                      "type": "object"
+                    },
+                    "type": "array"
+                  },
+                  "low": {
+                    "properties": {
+                      "complete": {
+                        "description": "false when that line's total leaves out a part.",
+                        "type": "boolean"
+                      },
+                      "description": {
+                        "description": "Its description in the schedule.",
+                        "type": "string"
+                      },
+                      "duty": {
+                        "type": ["number", "null"]
+                      },
+                      "duty_rate": {
+                        "description": "The duty rate on that line, with chapter 99 or trade defence duties already combined, as duty.rate spells them out.",
+                        "type": "string"
+                      },
+                      "hs_code": {
+                        "description": "The final tariff line.",
+                        "type": "string"
+                      },
+                      "total": {
+                        "description": "Landed total for that line, on the same goods and shipping, in the answer's currency.",
+                        "type": "number"
+                      }
+                    },
+                    "required": ["complete", "description", "duty", "duty_rate", "hs_code", "total"],
+                    "type": "object"
+                  },
+                  "priced_lines": {
+                    "description": "How many final lines under it carried a rate and were priced.",
+                    "type": "integer"
+                  },
+                  "unpriced": {
+                    "description": "Every final line the range does not cover, with the reason. Empty when all_lines_priced is true.",
+                    "items": {
+                      "properties": {
+                        "hs_code": {
+                          "type": "string"
+                        },
+                        "reason": {
+                          "description": "cap: past the number of lines priced per call. read_failed: its tariff read failed. no_rate: read, with no rate. not_ad_valorem: its duty is not a plain percentage, so no amount is calculated and it cannot be a bound.",
+                          "enum": ["cap", "read_failed", "no_rate", "not_ad_valorem"],
+                          "type": "string"
+                        }
+                      },
+                      "required": ["hs_code", "reason"],
+                      "type": "object"
+                    },
+                    "type": "array"
+                  }
+                },
+                "required": ["all_lines_priced", "heading", "lines", "priced_lines", "unpriced"],
+                "type": "object"
+              },
               "missing": {
                 "description": "What is missing when complete is false.",
                 "items": {
@@ -693,7 +822,7 @@
                 "type": "array"
               },
               "total": {
-                "description": "Goods, shipping, duty, fees and VAT, in currency.to when currency was given, else in the input currency. Leaves out parts that are null.",
+                "description": "Goods, shipping, duty, fees and VAT, in currency.to when currency was given, else in the input currency. Leaves out parts that are null. With line_range it is the low line's total.",
                 "type": "number"
               },
               "total_in_input_currency": {
@@ -796,7 +925,7 @@
             "openai/toolInvocation/invoked": "Done: Estimate duty, VAT and landed cost",
             "openai/toolInvocation/invoking": "Estimate duty, VAT and landed cost..."
           },
-          "digest": "sha256:2773e3c0272bc1615a7055507541c21970b9d3c15aa5bd6cdb2491a1a1b779d6"
+          "digest": "sha256:039f306244be915b6bba35d3fd04e7da2cd8ee416811f731f75c33b22340e93e"
         },
         {
           "name": "submit_feedback",
@@ -867,7 +996,7 @@
           "digest": "sha256:300cfb3a1fb2baab9b754950f89dda17edc99fd0329169119a792e9bfb89fc72"
         }
       ],
-      "digest": "sha256:bf6b827b9a039e0eee38c13639b8742f1ad19f2895a114e4cddb5dc1e40a2fc2"
+      "digest": "sha256:957ef369338aeb7a7034bc7af29a3dc019aa27e02dbab8cb64a67cfeab28b4b3"
     }
   }
 }

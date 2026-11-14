@@ -28,7 +28,7 @@
         {
           "name": "add_campaign_accounts",
           "title": "Add Campaign Accounts",
-          "description": "Add one or more target companies to a Constellation campaign. Each account is a company you want to reach; map_constellation is then run per-account. Free — costs 0 credits.",
+          "description": "Add one or more target companies to a Constellation campaign. Each account is a company you want to reach; map_constellation is then run per-account. Accounts already in the campaign (same linkedin_company_id, or same case-insensitive trimmed company_name) and repeats within the same call are not re-added; they are returned under `skipped`. Free — costs 0 credits.",
           "inputSchema": {
             "$schema": "http://json-schema.org/draft-07/schema#",
             "additionalProperties": false,
@@ -81,7 +81,7 @@
           "execution": {
             "taskSupport": "forbidden"
           },
-          "digest": "sha256:c87a0173999b0583eba2140bcd1ebac9943c2d2ea3fa02365826afa545052dda"
+          "digest": "sha256:26b833c55d97bdd6c69eb3ce7adeccb8d03c8a1b09dfdd0f409a8249f7b5b5ce"
         },
         {
           "name": "add_to_collection",
@@ -124,7 +124,7 @@
         {
           "name": "add_to_segment",
           "title": "Add People to Audience Segment",
-          "description": "Add one or more people (by person_id) to an audience segment. Existing members are silently ignored. Free — costs 0 credits.",
+          "description": "Add one or more people (by person_id) to a manual audience segment. Existing members are silently ignored. Smart segments are rejected: their membership is computed from `config` by resolve_segment. Unknown person_ids are rejected as a whole (nothing is added). Free — costs 0 credits.",
           "inputSchema": {
             "$schema": "http://json-schema.org/draft-07/schema#",
             "additionalProperties": false,
@@ -157,7 +157,7 @@
           "execution": {
             "taskSupport": "forbidden"
           },
-          "digest": "sha256:7de6dc2fdcdee35c73a5321be883ec851d00db635070388b235e407ac1a04826"
+          "digest": "sha256:746a1af02f1388d35f01d97f2c1a3965dc73984cb6b0e4591a6d8dcd3fead213"
         },
         {
           "name": "claim_preview",
@@ -267,14 +267,14 @@
         {
           "name": "create_segment",
           "title": "Create Audience Segment",
-          "description": "Create a new audience segment (named group of people) for the authenticated user. Set type='manual' for a hand-curated list (use add_to_segment to populate it), type='smart' with a `config` predicate (e.g. {title_contains:'VP'}) to define a dynamic segment resolved on-demand by resolve_segment, or pass `template` to pre-fill `config` from a built-in template (type defaults to 'smart'). Free — costs 0 credits.",
+          "description": "Create a new audience segment (named group of people) for the authenticated user. Set type='manual' for a hand-curated list (use add_to_segment to populate it), type='smart' with a `config` predicate (e.g. {title_contains:['VP','Chief']}) to define a dynamic segment resolved on-demand by resolve_segment, or pass `template` to pre-fill `config` from a built-in template (type defaults to 'smart'). Smart segments only match people connected to you: people who engaged with posts you can see in Flux (your own profile, tracked/monitored profiles, and posts you collected) and people in your campaigns' constellations. Smart segment membership is computed, so add_to_segment / remove_from_segment do not apply to it. Free — costs 0 credits.",
           "inputSchema": {
             "$schema": "http://json-schema.org/draft-07/schema#",
             "additionalProperties": false,
             "properties": {
               "config": {
                 "additionalProperties": {},
-                "description": "Predicate object for smart segments. Supported keys: title_contains, company_contains, company_industry, engaged_with_topics. Required when type='smart' and no template is supplied.",
+                "description": "Predicate object for smart segments. Supported keys: title_contains, company_contains. Each takes a non-empty string or an array of 1-20 non-empty strings (case-insensitive substring match; an array matches if ANY term matches, e.g. {title_contains:['procurement','logistics','supply chain']}). Different keys are AND-combined. Any other key is rejected. Required when type='smart' and no template is supplied.",
                 "type": "object"
               },
               "description": {
@@ -315,7 +315,7 @@
           "execution": {
             "taskSupport": "forbidden"
           },
-          "digest": "sha256:1031c351c4b2e4ff11e8cfc43b3a40578d3d83aac1507f6328156f8c9895944b"
+          "digest": "sha256:0cd7ad1420f4aecd7d250d6153ed5fa08ef2ec4a83c8415b382dc70c696ffa49"
         },
         {
           "name": "create_stream",
@@ -403,6 +403,57 @@
           "digest": "sha256:eb1b7f935f8b6afb2dd6ed2a56aab0976f0fdc7ae61cf6d04453e392f4594ba2"
         },
         {
+          "name": "enrich_people",
+          "title": "Enrich People (job history)",
+          "description": "Look up full LinkedIn profiles for up to 100 people and store their current title, company, headline and job history (every position). Job history is what get_outreach_path (coworker / alumni paths) and get_alumni_engagers search, and engagers collected from reactions/comments have none until enriched — when those tools report missing coverage they return a _meta.next_step with the exact person_ids to pass here. Pass person_ids (people.id from any engager / path tool) and/or linkedin_urls. Costs 3 credits per person successfully enriched. People enriched in the last 90 days are skipped for free unless refresh=true; failed or not-found lookups are free. The balance must cover 3 × the people to be looked up (after skips and max_credits) before anything runs; you are charged only for successes.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "linkedin_urls": {
+                "description": "LinkedIn profile URLs to enrich; people not yet in the graph are added",
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 100,
+                "minItems": 1,
+                "type": "array"
+              },
+              "max_credits": {
+                "description": "Spend cap. At most floor(max_credits / 3) people are looked up; the rest come back skipped_budget.",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "person_ids": {
+                "description": "people.id UUIDs to enrich (1-100)",
+                "items": {
+                  "format": "uuid",
+                  "type": "string"
+                },
+                "maxItems": 100,
+                "minItems": 1,
+                "type": "array"
+              },
+              "refresh": {
+                "default": false,
+                "description": "Re-enrich people enriched within the last 90 days (bypasses the cache)",
+                "type": "boolean"
+              }
+            },
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "execution": {
+            "taskSupport": "forbidden"
+          },
+          "digest": "sha256:df0233ae53c2b863f55e877951865a13e3934f79485cb137cd9a959be0426162"
+        },
+        {
           "name": "find_similar_posts",
           "title": "Find Similar Posts",
           "description": "Find persisted posts whose embeddings are nearest to a free-text query — pgvector cosine over the local post library, no LinkedIn pull, free. Use when you have a *block of text* (a draft, a paragraph, a competitor's post) and want similar posts you've already collected. For keyword search prefer `search_posts`; for fresh LinkedIn keyword pulls use `linkedin_post_search`. Pass `profile_id` to scope to a tracked profile, `collection_id` to scope to a collection, or neither to search the entire library.",
@@ -482,7 +533,7 @@
         {
           "name": "get_alumni_engagers",
           "title": "Alumni / Coworker Engagers for a Company",
-          "description": "Given a company URL or id, return engagers (across your collected posts) who have a position at that company. Relation filter: 'coworker' = current employees, 'alumni' = any past or current position (most useful for page_type='SCHOOL' companies), 'any' = both. Pure DB read — no LinkedIn pull, no credits charged.",
+          "description": "Given a company (company_url, LinkedIn's numeric linkedin_company_id as linkedin_company_info returns it, an exact company_name, or a companies.id UUID), return engagers (across your collected posts) who have a position at that company. Relation filter: 'coworker' = current employees, 'alumni' = any past or current position (most useful for page_type='SCHOOL' companies), 'any' = both. Matches need job history on file, and engagers collected from reactions/comments usually have none: `coverage` counts candidates (engagers whose headline or current company names the company) with and without job history, and when missing data may hide matches `_meta.next_step` names enrich_people with the exact person_ids to pass and its credit cost. The company must be saved in Flux: if it is not, the error's `_meta.next_step` names linkedin_company_info (1 credit) with the arguments that save it; a company_name that matches several saved companies returns `candidates` to pick from instead of guessing. Pure DB read — no LinkedIn pull, no credits charged.",
           "inputSchema": {
             "$schema": "http://json-schema.org/draft-07/schema#",
             "additionalProperties": false,
@@ -490,6 +541,10 @@
               "company_id": {
                 "description": "companies.id UUID",
                 "format": "uuid",
+                "type": "string"
+              },
+              "company_name": {
+                "description": "Exact company name, case-insensitive. Several matches return candidates.",
                 "type": "string"
               },
               "company_url": {
@@ -502,6 +557,10 @@
                 "maximum": 100,
                 "minimum": 1,
                 "type": "integer"
+              },
+              "linkedin_company_id": {
+                "description": "LinkedIn's numeric company id (the `id` linkedin_company_info returns)",
+                "type": ["string", "number"]
               },
               "relation": {
                 "default": "any",
@@ -521,12 +580,12 @@
           "execution": {
             "taskSupport": "forbidden"
           },
-          "digest": "sha256:9b3106695d6f9915058c1ecd69d925709a78f042a542c710a84212f120f97cdd"
+          "digest": "sha256:53b1c56b6372b955583e7a4bf843e44ea355ed0e833828c5781043f966da25e7"
         },
         {
           "name": "get_campaign_stats",
           "title": "Get Campaign Stats",
-          "description": "Summary stats for a Constellation campaign: target count, entry count, outreach volume, and acceptance / reply rates broken down by pool (coworker / engager / mutual) and composite-score tier. Free — costs 0 credits.",
+          "description": "Summary stats for a Constellation campaign: target count, entry count, outreach volume, and acceptance / reply rates broken down by pool (coworker / engager / mutual) and composite-score tier. Outcomes logged for people who are not campaign entries are counted under an `unattributed` bucket in both by_pool and by_tier, so breakdowns always sum to the totals. Free — costs 0 credits.",
           "inputSchema": {
             "$schema": "http://json-schema.org/draft-07/schema#",
             "additionalProperties": false,
@@ -549,12 +608,12 @@
           "execution": {
             "taskSupport": "forbidden"
           },
-          "digest": "sha256:92fdc79223a9e1e240c277c7d18d4c41b51542b3a03ef9b21a69d6e052ec1c1f"
+          "digest": "sha256:bf246c8cf16c3ebfb4f03cc83852ac39c8b05f669e69c2bbd8adb05dfe169220"
         },
         {
           "name": "get_company_engagement_overlap",
           "title": "Company Engagement Overlap",
-          "description": "Given two companies, return engagers across your collected posts who engaged with BOTH companies' posts. Cross-account intelligence — finds people interested in multiple targets simultaneously. Pure DB read — no LinkedIn pull, no credits charged.",
+          "description": "Given two companies, return the people who engaged (reacted or commented) with posts published by BOTH companies' own LinkedIn pages, counting only company-page posts and engagers already collected in your library. Use it to find people interested in two target accounts at once. It does NOT compare which employees of each company engage with you (for that, use get_post_engagers_by_company). It needs data collected first: each company's page posts (a company stream, or linkedin_company_posts) and their engagers (get_post_set_engagers on those posts, or linkedin_post_reactions / linkedin_post_comments); when a company has no page posts in your library the response says so. Identify each company by company_x_url, company_x_linkedin_id (LinkedIn's numeric id, as linkedin_company_info returns it), company_x_name (exact, case-insensitive; several matches return candidates instead of a guess) or company_x_id (companies.id UUID). A company not saved in Flux returns `_meta.next_step` naming linkedin_company_info (1 credit). Pure DB read — no LinkedIn pull, no credits charged.",
           "inputSchema": {
             "$schema": "http://json-schema.org/draft-07/schema#",
             "additionalProperties": false,
@@ -564,6 +623,14 @@
                 "format": "uuid",
                 "type": "string"
               },
+              "company_a_linkedin_id": {
+                "description": "Company A — LinkedIn's numeric company id (from linkedin_company_info)",
+                "type": ["string", "number"]
+              },
+              "company_a_name": {
+                "description": "Company A — exact company name, case-insensitive",
+                "type": "string"
+              },
               "company_a_url": {
                 "description": "Company A — LinkedIn URL",
                 "type": "string"
@@ -571,6 +638,14 @@
               "company_b_id": {
                 "description": "Company B — companies.id UUID",
                 "format": "uuid",
+                "type": "string"
+              },
+              "company_b_linkedin_id": {
+                "description": "Company B — LinkedIn's numeric company id (from linkedin_company_info)",
+                "type": ["string", "number"]
+              },
+              "company_b_name": {
+                "description": "Company B — exact company name, case-insensitive",
                 "type": "string"
               },
               "company_b_url": {
@@ -596,23 +671,23 @@
           "execution": {
             "taskSupport": "forbidden"
           },
-          "digest": "sha256:bab4365a05b5696d29078caa4a83c56e02c4e2f5b8a7cfc7f3d34faad9d4a30d"
+          "digest": "sha256:cd0b47acaaabb4377430fd044a160c58899efe2d966190eb05de8f03a580d4c7"
         },
         {
           "name": "get_cost_estimate",
           "title": "Get Cost Estimate",
-          "description": "Given an MCP tool name, return its credit cost so you can preview an action before running it. Also accepts a stream type (external_profile, company, topic, person_interests, hiring_signals, ad_watch) to preview the per-page cost create_stream / run_stream_now will charge. Returns { tool_name, cost, balance, sufficient, stream_cost? }. Tools not in the registry are assumed to cost 0. Free.",
+          "description": "Preview what a tool call will cost before running it. Pass tool_name plus the params you intend to call it with: variable-cost tools (get_post_set_engagers, map_constellation, enrich_people, linkedin_profile_posts, linkedin_company_posts, linkedin_post_reactions, linkedin_post_comments, run_stream_now) are priced from those params with the same formula the tool's balance pre-check uses. Returns { tool_name, cost_max, cost_typical?, unit, explanation, cost (= cost_max), balance, sufficient, known_tool }. cost_max is the worst case the balance must cover; cost_typical is what such a call usually costs (you are charged only for what is actually fetched). Also accepts a stream type (external_profile, company, topic, person_interests, hiring_signals, ad_watch) to preview its per-page run price (stream_cost). Free.",
           "inputSchema": {
             "$schema": "http://json-schema.org/draft-07/schema#",
             "additionalProperties": false,
             "properties": {
               "params": {
                 "additionalProperties": {},
-                "description": "Reserved for future per-call estimation",
+                "description": "The params you plan to call the tool with. Examples: get_post_set_engagers { profile_id | collection_id, max_posts, max_pages_per_post, max_enrich, freshness_days } (with a scope it counts the posts that actually need a sync); map_constellation { max_targets }; enrich_people { person_ids, linkedin_urls, max_credits }; linkedin_profile_posts / linkedin_company_posts { max_posts }; linkedin_post_reactions / linkedin_post_comments { max_pages }; run_stream_now { stream_id, max_pages }.",
                 "type": "object"
               },
               "tool_name": {
-                "description": "MCP tool name (e.g. 'get_posts') or stream type (e.g. 'external_profile')",
+                "description": "MCP tool name (e.g. 'get_post_set_engagers') or stream type (e.g. 'external_profile')",
                 "type": "string"
               }
             },
@@ -628,12 +703,12 @@
           "execution": {
             "taskSupport": "forbidden"
           },
-          "digest": "sha256:ac331d42728614da7d6aa2b56eb5b0c17a9d51dc1da8c31e94b5508ee0ce86a4"
+          "digest": "sha256:c0a69b91818668c7091e6d9b381f16da59e8b7de87d64912d55b2ddf7e95954c"
         },
         {
           "name": "get_credit_balance",
           "title": "Get Credit Balance",
-          "description": "Return the authenticated user's current credit balance, this period's monthly allocation, and credits used since the period started. Free.",
+          "description": "Return the authenticated user's current credit balance, the current calendar month's credit period (UTC), that month's allocation if one was granted (null otherwise), credits used since the period started, and the most recent allocation. Free.",
           "inputSchema": {
             "$schema": "http://json-schema.org/draft-07/schema#",
             "properties": {},
@@ -648,7 +723,7 @@
           "execution": {
             "taskSupport": "forbidden"
           },
-          "digest": "sha256:36049a2499d3e7a73663f6ff4f6fd4898e0897277281c87437a7c10d94b6f679"
+          "digest": "sha256:dd6c3c515a777cd46840d448f1574245d25fa16c97cf31943f97a75633b6da16"
         },
         {
           "name": "get_engagement_brief",
@@ -689,7 +764,7 @@
         {
           "name": "get_engagement_industry_breakdown",
           "title": "Engagement Industry Breakdown",
-          "description": "Histogram of engagers' companies grouped by industry. Pivots on companies.industry_hierarchy (e.g. 'Tech > Software Development'). Depth=1 buckets by top-level, =2 by top+mid, =3 by full hierarchy. Engagers with no current company / no industry hierarchy bucket as `_unknown`. Pure DB read — no LinkedIn pull, no credits charged. Needs engagers synced first: if the post(s) have no recorded engagements, run `get_post_set_engagers` (1 credit per page, works on a collection or profile) as the usual first step; `linkedin_post_reactions` / `linkedin_post_comments` (5 credits each) pull a single post.",
+          "description": "Histogram of engagers' companies grouped by industry. Pivots on companies.industry_hierarchy (e.g. 'Tech > Software Development'). Depth=1 buckets by top-level, =2 by top+mid, =3 by full hierarchy. Engagers with no current company / no industry hierarchy bucket as `_unknown`. Pure DB read — no LinkedIn pull, no credits charged. Needs engagers synced first: if the post(s) have no recorded engagements, run `get_post_set_engagers` (1 credit per page, works on a collection or profile) as the usual first step; `linkedin_post_reactions` / `linkedin_post_comments` (1 credit per page of up to 100 people, so usually 1 credit each) pull a single post.",
           "inputSchema": {
             "$schema": "http://json-schema.org/draft-07/schema#",
             "additionalProperties": false,
@@ -729,7 +804,7 @@
           "execution": {
             "taskSupport": "forbidden"
           },
-          "digest": "sha256:23f99afe7aee85ae94bbd7914cb54495120cc58adc7eff803cf475bb078b9889"
+          "digest": "sha256:32d67c92091136a944bff2a82a462a8c58e14f653396d1818b8d645616085631"
         },
         {
           "name": "get_engagement_trends",
@@ -816,7 +891,7 @@
         {
           "name": "get_outreach_path",
           "title": "Outreach Path to Target",
-          "description": "Given a target person, find the shortest warm-intro path through your engager network. Walks coworker (shared current company) + alumni (shared past company / school) edges. Up to 3 hops. Pure DB read — no LinkedIn pull, no credits charged.",
+          "description": "Given a target person, find the shortest warm-intro path through your engager network. Walks coworker (shared current company) + alumni (shared past company / school) edges. Up to 3 hops. Paths only exist where job history is on file, and engagers collected from reactions/comments usually have none: the response's `coverage` says how many candidates (the target, and engagers tied to the target's companies) have job history, and when missing data may hide paths `_meta.next_step` names enrich_people with the exact person_ids to pass and its credit cost. Pure DB read — no LinkedIn pull, no credits charged.",
           "inputSchema": {
             "$schema": "http://json-schema.org/draft-07/schema#",
             "additionalProperties": false,
@@ -856,12 +931,12 @@
           "execution": {
             "taskSupport": "forbidden"
           },
-          "digest": "sha256:1bce0a4ed3124adef45a2b5d2b5c62d6ef628cc286dcc702ed243e5b4dac8ad2"
+          "digest": "sha256:a51274afdd8e0ac1131db5d5d12d078705ac8a726bb878f6f31287bdc98ef0e6"
         },
         {
           "name": "get_outreach_queue",
           "title": "Get Outreach Queue",
-          "description": "Return a prioritized outreach queue. Provide *exactly one* of three scopes:\n• `campaign_id` — full Constellation queue with composite_score, pool, recommended_action, and prior outreach_log entries (the original campaign-scoped behavior).\n• `segment_id` — people in a saved audience segment, ranked by their engagement count against your tracked profiles' posts. No composite_score.\n• `linkedin_urls` — an ad-hoc list of LinkedIn URLs, same engagement-count ranking as segments.\nFree — costs 0 credits.",
+          "description": "Return a prioritized outreach queue. Provide *exactly one* of three scopes:\n• `campaign_id` — full Constellation queue, one row per person (their best entry's composite_score, pool, recommended_action), with `targets[]` listing every target they connect to ({target_id, entry_id, composite_score, pool, recommended_action, target_person: {person_id, full_name, current_title}}) and prior outreach_log entries. Pools: coworker = same company as the target (no relationship implied), engager = someone the target engages with, mutual = someone several targets engage with. Pass a target_person.person_id to get_outreach_path to check warm paths.\n• `segment_id` — people in a saved audience segment, ranked by their engagement count against your tracked profiles' posts. No composite_score.\n• `linkedin_urls` — an ad-hoc list of LinkedIn URLs, same engagement-count ranking as segments.\nFree — costs 0 credits.",
           "inputSchema": {
             "$schema": "http://json-schema.org/draft-07/schema#",
             "additionalProperties": false,
@@ -908,7 +983,7 @@
           "execution": {
             "taskSupport": "forbidden"
           },
-          "digest": "sha256:a3764d3ecb8ddd129e7c0b2555205505ff172e523b772d741baf120aa9b3a7b5"
+          "digest": "sha256:2b252c2958d6b389e92264ad58e24ba105840e5f0415d2c7aefc0bc339a2642a"
         },
         {
           "name": "get_post_engagers_by_company",
@@ -962,7 +1037,7 @@
         {
           "name": "get_post_set_engagers",
           "title": "Get Post-Set Engagers",
-          "description": "Return the consolidated, deduped people who reacted to or commented on a SET of posts — one tracked profile's posts (profile_id) or a post collection (collection_id). Fetches only posts not synced within freshness_days, walks up to max_pages_per_post pages (100 people/page) of reactions and of comments per post, includes comment replies, and enriches (title/company via a profile lookup) only never-seen people, up to max_enrich. Costs 1 credit per page fetched (a page is up to 100 people; a post with under 100 reactions and under 100 comments = 2 credits; the most a post can cost is 2 × max_pages_per_post) + 3 per person enriched; cached posts and cached pages are free. The balance must cover the worst case (posts × 2 × max_pages_per_post + max_enrich × 3) before anything runs; you are charged only for pages actually fetched. Per-post reactions_fetched / reactions_total / comments_total / truncated tell you when a post had more engagers than were fetched.",
+          "description": "Return the consolidated, deduped people who reacted to or commented on a SET of posts — one tracked profile's posts (profile_id) or a post collection (collection_id). Fetches only posts not synced within freshness_days, walks up to max_pages_per_post pages (100 people/page) of reactions and of comments per post, includes comment replies, and enriches (title/company via a profile lookup) only never-seen people, up to max_enrich. Costs 1 credit per page fetched (a page is up to 100 people; a post with under 100 reactions and under 100 comments = 2 credits; the most a post can cost is 2 × max_pages_per_post) + 3 per person enriched; cached posts and cached pages are free. The balance must cover the worst case (posts × 2 × max_pages_per_post + max_enrich × 3) before anything runs (get_cost_estimate with these params returns the same number); you are charged only for pages actually fetched. When the balance is short, the insufficient_credits error spells out what the worst case assumed and lists `suggestions` (smaller max_pages_per_post / max_posts / max_enrich, each with its resulting max) that fit the balance. Per-post reactions_fetched / reactions_total / comments_total / truncated tell you when a post had more engagers than were fetched.",
           "inputSchema": {
             "$schema": "http://json-schema.org/draft-07/schema#",
             "additionalProperties": false,
@@ -1020,7 +1095,7 @@
           "execution": {
             "taskSupport": "forbidden"
           },
-          "digest": "sha256:b61fb456b278dd5d79cdc036dbcda8d705bf9b06d0fcd4347a8eebd03c5065a6"
+          "digest": "sha256:86c02f22a51a135b013ba0115c7dda42c9187fada448138d7e69eb0ca9fde5a2"
         },
         {
           "name": "get_posting_insights",
@@ -1366,6 +1441,44 @@
           "digest": "sha256:6a21e5c6d6d35e59187648034bf56cb586f852ac0e0cc1c8028a2da9d1dcdf1f"
         },
         {
+          "name": "linkedin_company_info",
+          "title": "LinkedIn Company Info",
+          "description": "Fetch one LinkedIn company (numeric id, name, industry, size, location, website, description). Costs 1 credit per call. Use it to resolve a company to its numeric LinkedIn `id`, which linkedin_people_search (`company`) and linkedin_job_search (`companyId`) take for an exact company match. Look up by `linkedin_url` when you have it: a lookup by `name` returns the best match, which can be a different company with a similar name. The company is saved to `companies`.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "linkedin_url": {
+                "description": "LinkedIn company URL (e.g. https://www.linkedin.com/company/acme). Most reliable.",
+                "type": "string"
+              },
+              "name": {
+                "description": "Company name (e.g. 'Acme Analytics'). Returns the best match; check the returned name and URL.",
+                "type": "string"
+              },
+              "refresh": {
+                "description": "Bypass the cache and fetch a fresh copy from LinkedIn (costs 1 credit). Default false: a previously-fetched result is returned free, with how long ago it was retrieved.",
+                "type": "boolean"
+              },
+              "universal_name": {
+                "description": "The slug from the company URL (e.g. 'acme' for linkedin.com/company/acme).",
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "execution": {
+            "taskSupport": "forbidden"
+          },
+          "digest": "sha256:ef142cee2fd08105254919e3cd70384b82fc44bea8c2fce3375a0c27eb2a77a5"
+        },
+        {
           "name": "linkedin_company_posts",
           "title": "LinkedIn Company Posts",
           "description": "Fetch recent posts from a LinkedIn company page. 5 credits per page of 50, up to 250 posts, charged only for pages actually fetched. Results are stored in the post library (source_type='external') and linked to a linkedin_profiles row (profile_type='company').",
@@ -1406,7 +1519,7 @@
         {
           "name": "linkedin_company_search",
           "title": "LinkedIn Company Search",
-          "description": "Search LinkedIn companies. Filter by keywords, industryId, or location. Costs 5 credits per call. Returns a single page of matching companies.",
+          "description": "Search LinkedIn companies. Filter by keywords, industryId, or location. Costs 5 credits per page of 50. Each company comes back with its numeric LinkedIn `id`, which is what linkedin_people_search (`company`) and linkedin_job_search (`companyId`) take for an exact company match.",
           "inputSchema": {
             "$schema": "http://json-schema.org/draft-07/schema#",
             "additionalProperties": false,
@@ -1422,6 +1535,12 @@
               "location": {
                 "description": "Location filter (e.g. 'San Francisco Bay Area')",
                 "type": "string"
+              },
+              "page": {
+                "description": "Results page, 50 companies per page (default 1). 5 credits per page not already cached.",
+                "maximum": 100,
+                "minimum": 1,
+                "type": "integer"
               },
               "refresh": {
                 "description": "Bypass the cache and re-run the search live (costs 5 credits). Default false: a previously-fetched result is returned free, with how long ago it was retrieved.",
@@ -1439,7 +1558,7 @@
           "execution": {
             "taskSupport": "forbidden"
           },
-          "digest": "sha256:52a363ffaa9682bd2c03ba78931a639fb325a51ff0dd8fd7c34f74a88713e3c9"
+          "digest": "sha256:7790768ae2a697e6ba2ebc4c2b0f89beee8f18bfc9da96cb592253b7c74e2a0c"
         },
         {
           "name": "linkedin_job_search",
@@ -1450,7 +1569,7 @@
             "additionalProperties": false,
             "properties": {
               "companyId": {
-                "description": "Restrict to a LinkedIn company ID (numeric, e.g. '1441'). Not a name or slug — resolve one first with linkedin_company_search, which returns each company's id.",
+                "description": "Restrict to a LinkedIn company ID (numeric, e.g. '1441'). Not a name or slug — resolve one first with linkedin_company_info (1 credit) or linkedin_company_search, both of which return the company's id.",
                 "type": "string"
               },
               "keywords": {
@@ -1488,18 +1607,18 @@
           "execution": {
             "taskSupport": "forbidden"
           },
-          "digest": "sha256:e60344484987e17a80944695ca8e40886360d8dc45ce819832e17f16cf712841"
+          "digest": "sha256:a79893539ce83b6f8cc326dacbb0b4c4f3c94e8bf7bef8723ca48e5f63206031"
         },
         {
           "name": "linkedin_people_search",
           "title": "LinkedIn People Search",
-          "description": "Search LinkedIn people. Filter by company, title, location, or free-text keywords. Costs 5 credits per call. Returns a single page of matching profiles.",
+          "description": "Search LinkedIn people. Filter by company, title, location, or free-text keywords. Costs 5 credits per page of 25. Each person comes back with current title, company, company id, start date and location. To list the people at one company, pass its LinkedIn company URL or numeric id as `company` and walk `page` while `truncated` is true. Results are saved to `people` with their current position, so get_outreach_path can route to them (pass a result's `person_id` as `target_person_id`).",
           "inputSchema": {
             "$schema": "http://json-schema.org/draft-07/schema#",
             "additionalProperties": false,
             "properties": {
               "company": {
-                "description": "Current company name or LinkedIn slug",
+                "description": "Current company. Pass a LinkedIn company URL (https://www.linkedin.com/company/acme) or a numeric LinkedIn company ID (e.g. '1441', the `id` linkedin_company_info and linkedin_company_search return) for an exact match; comma-separate several. A plain name is matched loosely and can return people from other companies, so prefer the URL or ID.",
                 "type": "string"
               },
               "keywords": {
@@ -1510,12 +1629,18 @@
                 "description": "Location filter (e.g. 'New York')",
                 "type": "string"
               },
+              "page": {
+                "description": "Results page, 25 people per page (default 1). 5 credits per page not already cached.",
+                "maximum": 100,
+                "minimum": 1,
+                "type": "integer"
+              },
               "refresh": {
                 "description": "Bypass the cache and re-run the search live (costs 5 credits). Default false: a previously-fetched result is returned free, with how long ago it was retrieved.",
                 "type": "boolean"
               },
               "title": {
-                "description": "Current title filter (e.g. 'Director')",
+                "description": "Current title filter (e.g. 'Director'). Comma-separate several (e.g. 'SDR,Account Executive').",
                 "type": "string"
               }
             },
@@ -1530,7 +1655,7 @@
           "execution": {
             "taskSupport": "forbidden"
           },
-          "digest": "sha256:39159c084191cabd83be588147bb6ce80cd90a00a56272eb3de26f511e28bb36"
+          "digest": "sha256:6d3e8fb3d0f65cce85b1672b1ce404d2a71179d406bdf5697eaae9e5d1b4192d"
         },
         {
           "name": "linkedin_post_comments",
@@ -1841,7 +1966,7 @@
         {
           "name": "list_segment_templates",
           "title": "List Segment Templates",
-          "description": "List available smart-segment templates. Pass a template id to create_segment to pre-fill its `config` predicate without crafting one from scratch. Free — costs 0 credits.",
+          "description": "List available smart-segment templates. Pass a template id to create_segment to pre-fill its `config` predicate without crafting one from scratch. Each template's description states exactly what its config matches; like every smart segment, it only matches people connected to you (engagers on your visible posts and people in your campaigns). Free — costs 0 credits.",
           "inputSchema": {
             "$schema": "http://json-schema.org/draft-07/schema#",
             "properties": {},
@@ -1856,7 +1981,7 @@
           "execution": {
             "taskSupport": "forbidden"
           },
-          "digest": "sha256:ce9c0f64257df431f69657b43c665300b42797ef5042107c93e88648b2943a3f"
+          "digest": "sha256:5c664270db8903d08770092cc55d3409c1a2c75c6fcc3edf4f73fe9f4144ed13"
         },
         {
           "name": "list_segments",
@@ -1920,7 +2045,7 @@
         {
           "name": "log_outcome",
           "title": "Log Outreach Outcome",
-          "description": "Append an entry to the outreach log for a Constellation campaign. Use to record connection requests, acceptances, replies, or no-responses so get_campaign_stats can compute acceptance / reply rates over time. Free — costs 0 credits.",
+          "description": "Append an entry to the outreach log for a Constellation campaign. Use to record connection requests, acceptances, replies, or no-responses so get_campaign_stats can compute acceptance / reply rates over time. The person may be outside the campaign's mapped constellation; such outcomes are still logged (with a `warning`) and get_campaign_stats reports them under the `unattributed` pool/tier bucket. Free — costs 0 credits.",
           "inputSchema": {
             "$schema": "http://json-schema.org/draft-07/schema#",
             "additionalProperties": false,
@@ -1958,12 +2083,12 @@
           "execution": {
             "taskSupport": "forbidden"
           },
-          "digest": "sha256:b56242d0bd355b97c290cd75193736b4f97849adf00584bf57a9f6ea07b09573"
+          "digest": "sha256:70df0ba190d01a4440ec53e398ab5d68da0f2f683f75ce29628218be34837dc3"
         },
         {
           "name": "map_constellation",
           "title": "Map Constellation",
-          "description": "Map the professional graph around a target company. Finds senior decision-makers at the account, pulls each target's recent posts/reactions/comments to identify engagers, then scores every connection and produces a prioritized outreach queue. Credit cost scales with targets — bounded by `max_targets`. Max spend per call is ~175 credits; actual cost is reported in the response.",
+          "description": "Map the professional graph around a target company. Finds senior decision-makers at the account, pulls each target's recent posts/reactions/comments to identify engagers, then scores every connection and produces a prioritized outreach queue. The response lists the selected `targets` (target_id, person_id, full_name, current_title, linkedin_url) and `_meta.next_step(s)`: get_outreach_queue for the scored queue, then get_outreach_path (free) to check warm paths to the top targets. Pools: coworker = other senior people at the same account from the lead search (no relationship with you is implied); engager = someone a target engages with; mutual = someone several targets engage with. Costs at most 1 + 3 × max_targets credits (7 at max_targets=2, 16 at the default 5, 61 at 20); the balance must cover that worst case, and only what is actually spent is charged and reported in the response.",
           "inputSchema": {
             "$schema": "http://json-schema.org/draft-07/schema#",
             "additionalProperties": false,
@@ -1975,7 +2100,7 @@
               },
               "max_targets": {
                 "default": 5,
-                "description": "Max targets to deep-map per account (1-20, default 5). Each target adds ~3 credits.",
+                "description": "Max targets to deep-map per account (1-20, default 5). Each target adds up to 3 credits.",
                 "maximum": 20,
                 "minimum": 1,
                 "type": "integer"
@@ -2001,7 +2126,7 @@
           "execution": {
             "taskSupport": "forbidden"
           },
-          "digest": "sha256:aaec0bddf32f6e3b84ad15dfd6e2c0644e2272bed81cd194da2ae82c7579955e"
+          "digest": "sha256:7e1f85a13ec1f195eec56ffa1043e050482f909040afe127434aa52471230eef"
         },
         {
           "name": "pause_stream",
@@ -2157,7 +2282,7 @@
         {
           "name": "remove_from_segment",
           "title": "Remove People from Audience Segment",
-          "description": "Remove one or more people (by person_id) from an audience segment. Missing members are silently ignored. Free — costs 0 credits.",
+          "description": "Remove one or more people (by person_id) from a manual audience segment. Missing members are silently ignored. Smart segments are rejected: their membership is computed from `config` by resolve_segment. Free — costs 0 credits.",
           "inputSchema": {
             "$schema": "http://json-schema.org/draft-07/schema#",
             "additionalProperties": false,
@@ -2190,7 +2315,7 @@
           "execution": {
             "taskSupport": "forbidden"
           },
-          "digest": "sha256:3da78e9d189b16da7343bc83854a45480e89905d5e1b14ef8568d75eabc77836"
+          "digest": "sha256:445520edeaa61868814da8dd3d3ae5aa166184c4fb75f110a50be8d866280dca"
         },
         {
           "name": "resolve_collection",
@@ -2230,7 +2355,7 @@
         {
           "name": "resolve_segment",
           "title": "Resolve Audience Segment",
-          "description": "Resolve an audience segment into a concrete list of person_ids. For manual / auto_stream segments, returns stored members. For smart segments, evaluates the segment's `config` predicate against the people table and returns matches. Free — costs 0 credits.",
+          "description": "Resolve an audience segment into a concrete list of person_ids. For manual / auto_stream segments, returns stored members. For smart segments, evaluates the segment's `config` predicate (title_contains / company_contains) and returns matches ordered by engagement with your posts. Smart segments only match people connected to you: people who engaged with posts you can see in Flux (your own profile, tracked/monitored profiles, and posts you collected) and people in your campaigns' constellations. Free — costs 0 credits.",
           "inputSchema": {
             "$schema": "http://json-schema.org/draft-07/schema#",
             "additionalProperties": false,
@@ -2260,7 +2385,7 @@
           "execution": {
             "taskSupport": "forbidden"
           },
-          "digest": "sha256:8372d04c1e21c35182f5349646660b0645fa94f81a58f02498f5c1f7e17868cd"
+          "digest": "sha256:f38757cf70261fb1d89d7c2bf469a9879bcad89b7fff1ad3df8cd6e35bd5a061"
         },
         {
           "name": "resume_stream",
@@ -2579,7 +2704,7 @@
           "digest": "sha256:ba437e95d16caf3619761591fab323fec2429b4804ef3c8df8f1bf44177d88ed"
         }
       ],
-      "digest": "sha256:8303d0c2808132c67c4e4255d10cc11d907924eb5a3f62bbeb9efdad65aa801e"
+      "digest": "sha256:7d5106f579b875813a6f1d5deb01fa80412c3b42e299162c5010023f22f190b1"
     }
   }
 }
