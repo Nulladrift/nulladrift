@@ -27,6 +27,69 @@
       "instructions": "# Brainz — shared product knowledge graph\n\nThis server is one Brainz vault: a product's features, specs, decisions, constraints and tasks, stored as linked markdown concepts.\n\n- `search_concepts`, `list_concepts`, `get_concept` and `get_related` find and read concepts; `get_context` assembles a token-budgeted briefing on a topic; `vault_stats` summarizes the vault.\n- `upsert_concept`, `link_concepts` and `delete_concept` edit the graph.\n- `list_tasks`, `create_task`, `take_task` and `complete_task` manage the vault's task pile.\n- `onboard` and `sync` return playbooks for indexing a codebase into the vault; `dream` runs or configures the consolidation sweep.",
       "tools": [
         {
+          "name": "burndown",
+          "title": "Task burndown",
+          "description": "Burndown and flow metrics for the vault's tasks, computed from their recorded history. `scope` is a concept id (an iteration, milestone, feature, domain or any concept tasks are part_of / realize, including nested containers) or `tag:<tag>`; omit it for every task. Returns, for the window: open vs done over time with an ideal line when the scope has start/end dates, scope changes, velocity per iteration or week, a projected completion date with an optimistic/pessimistic range, lead and cycle time per agent label, and claims held longer than `staleAfterHours`. `metrics` limits the sections returned. Read-only.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "bucket": {
+                "description": "Series granularity. Default: day for windows up to 120 days, else week.",
+                "enum": ["day", "week"],
+                "type": "string"
+              },
+              "from": {
+                "description": "Window start (YYYY-MM-DD or ISO). Default: the scope's startDate, else 8 weeks ago.",
+                "type": "string"
+              },
+              "metrics": {
+                "description": "Sections to include: series, scopeChanges, velocity, projection, cycle, agents, stale (default all).",
+                "items": {
+                  "enum": ["series", "scopeChanges", "velocity", "projection", "cycle", "agents", "stale"],
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "scope": {
+                "description": "A concept id (iteration, milestone, feature, domain, …) or `tag:<tag>`. Omit for every task in the vault.",
+                "type": "string"
+              },
+              "staleAfterHours": {
+                "description": "A claim held longer than this is stale (default 24).",
+                "exclusiveMinimum": 0,
+                "type": "number"
+              },
+              "to": {
+                "$ref": "#/properties/from",
+                "description": "Window end (YYYY-MM-DD or ISO). Default: the later of the scope's endDate and now."
+              },
+              "unit": {
+                "description": "Count tasks (default) or sum their `estimate` points.",
+                "enum": ["tasks", "points"],
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Task burndown"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "execution": {
+            "taskSupport": "forbidden"
+          },
+          "digest": "sha256:7135d7c777459508c531afc7019341f670378527ce12f01a7068480bf381b6f0"
+        },
+        {
           "name": "complete_task",
           "title": "Complete a task",
           "description": "Mark a task done. Sets taskStatus=done + doneAt and appends `outcome` to the task body as an Outcome section. The result carries a one-line `reminder` that the rest of the graph is not updated automatically.",
@@ -594,7 +657,7 @@
               },
               "type": {
                 "description": "Only concepts of this type.",
-                "enum": ["concept", "domain", "feature", "story", "spec", "workflow", "task", "decision", "constraint", "pattern", "glossary"],
+                "enum": ["concept", "domain", "feature", "story", "spec", "workflow", "task", "decision", "constraint", "pattern", "glossary", "iteration", "milestone"],
                 "type": "string"
               }
             },
@@ -615,7 +678,7 @@
           "execution": {
             "taskSupport": "forbidden"
           },
-          "digest": "sha256:f9e9b0e2e03d8fd58d7f9a984ea00b088057d779342ff9f9073d591b387f3b5a"
+          "digest": "sha256:72c717dc08092f0be28b87ce034b57728408707354af66d1348743f0e25aa867"
         },
         {
           "name": "list_tasks",
@@ -745,7 +808,7 @@
               },
               "type": {
                 "description": "Only return concepts of this type.",
-                "enum": ["concept", "domain", "feature", "story", "spec", "workflow", "task", "decision", "constraint", "pattern", "glossary"],
+                "enum": ["concept", "domain", "feature", "story", "spec", "workflow", "task", "decision", "constraint", "pattern", "glossary", "iteration", "milestone"],
                 "type": "string"
               }
             },
@@ -767,7 +830,7 @@
           "execution": {
             "taskSupport": "forbidden"
           },
-          "digest": "sha256:7125595cb1f512525e94b6a6cf05dd49602bf718d4537215d6b2949883aed6d0"
+          "digest": "sha256:92e4d44dea8099f94506dec21f050df2f720284fe0970babb8d700266e84854a"
         },
         {
           "name": "sync",
@@ -884,6 +947,30 @@
                 "description": "For tasks: ISO timestamp when completed.",
                 "type": "string"
               },
+              "endDate": {
+                "anyOf": [
+                  {
+                    "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "For iterations/milestones: end or target day YYYY-MM-DD (null clears it)."
+              },
+              "estimate": {
+                "anyOf": [
+                  {
+                    "minimum": 0,
+                    "type": "number"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "For tasks: story points (null clears it)."
+              },
               "id": {
                 "description": "Concept id (slug). Omit to derive from title; pass an existing id to update.",
                 "type": "string"
@@ -901,6 +988,18 @@
                 },
                 "description": "Typed edges, e.g. {\"depends_on\": [\"auth-system\"]}. Conventions: part_of (feature/story/task → domain), realized_by (story → features), realizes (task → stories/features), governs (spec → what it constrains), governed_by (task → specs), depends_on, constrains, supersedes, related_to. For domain concepts, prefer linking to OTHER domains (related_to / depends_on) wherever they share a boundary or hand off responsibility — connected domains reveal how the product's areas overlap instead of floating as isolated islands.",
                 "type": "object"
+              },
+              "startDate": {
+                "anyOf": [
+                  {
+                    "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "For iterations/milestones: start day YYYY-MM-DD (null clears it)."
               },
               "status": {
                 "description": "Lifecycle status (default \"active\").",
@@ -932,7 +1031,7 @@
                 "type": "string"
               },
               "type": {
-                "description": "Concept type (default \"concept\"). The 11 built-in types are concept, domain, feature, story, spec, workflow, task, decision, constraint, pattern, glossary; a vault may also define custom types. An unknown type falls back to \"concept\".",
+                "description": "Concept type (default \"concept\"). The 13 built-in types are concept, domain, feature, story, spec, workflow, task, decision, constraint, pattern, glossary, iteration (a time-box such as a sprint) and milestone (a scoped deliverable with a target date); a vault may also define custom types. An unknown type falls back to \"concept\".",
                 "type": "string"
               }
             },
@@ -954,7 +1053,7 @@
           "execution": {
             "taskSupport": "forbidden"
           },
-          "digest": "sha256:2e38fac9410bb12d57c8fea579176a89e2eb33d9c74b08b95ad8453d87eeca34"
+          "digest": "sha256:6d39336ddf84c464e42fb73346e8c0d36888e4558d7a7e4404e8c06e816bdf52"
         },
         {
           "name": "vault_stats",
@@ -983,7 +1082,7 @@
           "digest": "sha256:613610fceb6d6f64a7c4f5a47fc5e228c9074d639fbe8115960b516d6d9061f3"
         }
       ],
-      "digest": "sha256:10f080e2dc7479dd1be2d18c6c9c7a88088e222edfa8489f66848be534f6e3d4"
+      "digest": "sha256:a27184fde123d1806875370edc9a5395528dbced531f0a8c7c357111be121e0d"
     }
   }
 }

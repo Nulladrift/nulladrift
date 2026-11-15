@@ -19,8 +19,8 @@
       "serverInfo": {
         "name": "recall-canary",
         "title": "Recall Canary",
-        "version": "1.5.0",
-        "description": "U.S. federal product recalls from FDA, FSIS, CPSC, and NHTSA, in one schema.",
+        "version": "1.5.1",
+        "description": "U.S. federal product recalls and safety notices from FDA, FSIS, CPSC, and NHTSA, in one schema.",
         "websiteUrl": "https://recallcanary.com"
       },
       "capabilities": {
@@ -28,12 +28,12 @@
           "listChanged": false
         }
       },
-      "instructions": "Recall Canary indexes U.S. product recalls from FDA (openFDA, iRES, press releases), FSIS, CPSC, and NHTSA. Start with search_recalls, then get_recall for the full record. Records marked `record_type: \"preliminary\"` are agency press releases: they carry no severity and no product list. In search results none has a canonical record linked yet. Once linked, the URL usually returns the recall (another id), else get_recall lists it in `linked_recalls`; key on record_type and id. Fields named in each record's `ai_generated` object were written by a language model from agency text; treat the agency page at `source_url` as authoritative and cite it. Never present absence of a match as confirmation that a product is safe.",
+      "instructions": "Recall Canary indexes U.S. product recalls from FDA (openFDA, iRES, press releases), FSIS, CPSC, and NHTSA. Start with search_recalls, then get_recall for the full record. Records marked `record_type: \"preliminary\"` are agency press releases: they carry no severity and no product list. In search results none has a canonical record linked yet. Once linked, the URL usually returns the recall (another id), else get_recall lists it in `linked_recalls`; key on record_type and id. `record_kind` says whether an agency record is a `recall`, an FSIS `public_health_alert` or a CPSC `safety_warning` (`record_type` does not; results mix all three and no filter selects one). Never call an alert or a warning a recall. CPSC issues a safety warning to tell people about a dangerous product, usually when the company has not agreed to a recall or has stopped carrying one out; most offer no refund, repair or replacement, and its `consumer_action` is CPSC's own instructions, not a remedy. CPSC rates neither its recalls nor its warnings: a null severity is never lower risk. Fields named in each record's `ai_generated` object were written by a language model from agency text; treat the agency page at `source_url` as authoritative and cite it. Never present absence of a match as confirmation that a product is safe.",
       "tools": [
         {
           "name": "get_recall",
           "title": "Get one recall by agency and slug",
-          "description": "Fetch the full Recall Canary record for a single U.S. federal recall, given the agency and slug returned by search_recalls. Includes the hazard description, the affected product list with lot codes and UPCs, the recommended consumer action, distribution, the agency source link, and the firm slug (`firm.slug`, with `firm.page_url` when the firm has a page) for search_recalls' `firm` filter. Also resolves preliminary agency press releases: an orphan, or a linked one that kept its own URL (its recalls in `linked_recalls`). Read-only.",
+          "description": "Fetch the full Recall Canary record for a single U.S. federal recall, FSIS public health alert or CPSC safety warning (`record_kind`), given the agency and slug returned by search_recalls. Includes the hazard description, the affected product list with lot codes and UPCs, the recommended consumer action, distribution, the agency source link, and the firm slug (`firm.slug`, with `firm.page_url` when the firm has a page) for search_recalls' `firm` filter. Also resolves preliminary agency press releases: an orphan, or a linked one that kept its own URL (its recalls in `linked_recalls`). Read-only.",
           "inputSchema": {
             "additionalProperties": false,
             "properties": {
@@ -52,7 +52,7 @@
             "type": "object"
           },
           "outputSchema": {
-            "description": "One record. `record_type` says which kind: a canonical `recall` (products, timeline, dates, related) or a `preliminary` agency press release (linked_recalls, company and agency dates).",
+            "description": "One record. `record_type` says which shape: a canonical agency record (products, timeline, dates, related; `record_kind` says whether it is a recall, alert or warning) or a `preliminary` agency press release (linked_recalls, company and agency dates).",
             "properties": {
               "advisory_url": {
                 "type": ["string", "null"]
@@ -118,7 +118,7 @@
                 "type": ["object", "null"]
               },
               "consumer_action": {
-                "description": "The \"What to do\" text. Null on a withdrawn alert.",
+                "description": "The \"What to do\" text. Null on a withdrawn alert. On a CPSC safety warning, CPSC's own Consumer Action (its instructions, not a remedy).",
                 "type": ["string", "null"]
               },
               "content_changed_at": {
@@ -534,6 +534,7 @@
                       "type": ["string", "null"]
                     },
                     "remedy_description": {
+                      "description": "The agency's remedy text; on a CPSC safety warning, CPSC's Consumer Action (instructions, not a remedy).",
                       "type": ["string", "null"]
                     },
                     "remedy_options": {
@@ -593,6 +594,10 @@
               "reason": {
                 "description": "The agency's own stated reason, not model-written.",
                 "type": ["string", "null"]
+              },
+              "record_kind": {
+                "description": "Since api 2.12.0. What kind of agency notice a recall record is: `recall`, an FSIS `public_health_alert` or a CPSC `safety_warning`; the last two are not recalls and are never rated. Null on a preliminary record. `record_type` is `recall` on all three; no filter selects by kind.",
+                "enum": ["recall", "public_health_alert", "safety_warning", null]
               },
               "record_type": {
                 "enum": ["recall", "preliminary"]
@@ -678,7 +683,15 @@
                             "citation": {
                               "type": "string"
                             },
+                            "quote": {
+                              "description": "Since api 2.13.0, notice_recall: the CPSC safety warning's sentence, verbatim.",
+                              "type": "string"
+                            },
                             "rule": {
+                              "type": "string"
+                            },
+                            "source": {
+                              "description": "Since api 2.13.0, notice_recall: cpsc_recalls_export, warning_body_link or operator_confirmed.",
                               "type": "string"
                             },
                             "words": {
@@ -698,7 +711,7 @@
                           "type": "string"
                         },
                         "kind": {
-                          "description": "Known values: other_agency, source_recall, ingredient_alert, named_supplier.",
+                          "description": "Known values: other_agency, source_recall, ingredient_alert, named_supplier, notice_recall.",
                           "type": "string"
                         },
                         "listed_at": {
@@ -834,6 +847,19 @@
                 "required": ["by_firm", "same_hazard", "same_product"],
                 "type": "object"
               },
+              "remedy_superseded": {
+                "description": "Since api 2.13.0. A later CPSC safety warning says this recall's remedy is no longer being provided: its page and its sentence that says so (verbatim, or null). `consumer_action` is then that warning's Consumer Action unless an operator pinned one. Null otherwise.",
+                "properties": {
+                  "quote": {
+                    "type": ["string", "null"]
+                  },
+                  "warning_url": {
+                    "type": "string"
+                  }
+                },
+                "required": ["quote", "warning_url"],
+                "type": ["object", "null"]
+              },
               "risk": {
                 "description": "The agency rating as the page shows it (for example \"High risk\" for an FDA Class I recall). Null where the page shows no risk line.",
                 "properties": {
@@ -925,12 +951,12 @@
             "openWorld": false,
             "readOnly": true
           },
-          "digest": "sha256:376683ba42b61d506bb9277b0ce81456e5ce832fa24d0d52dcbf2d16d02abf05"
+          "digest": "sha256:f98ff0ade44f743b34d3fcab97746e3959bbeb8bb2a7edb414ad89481b2c6f53"
         },
         {
           "name": "search_recalls",
           "title": "Search U.S. federal product recalls",
-          "description": "Search the Recall Canary index of U.S. federal product recalls (FDA, FSIS, CPSC, NHTSA) by keyword, agency, severity, category, distribution state, hazard, firm, lifecycle (open or ended), or date window. Returns up to 50 matching records per page with abbreviated content (title, firm, severity, date, and the canonical URL of each); call get_recall to fetch the full record. With a keyword, the best matches come first unless `sort` says otherwise. Unknown agency, severity, category, state, status and date values are rejected with an error message describing the allowed values. An unknown `hazard` or `firm` is also an error. Read-only.",
+          "description": "Search the Recall Canary index of U.S. federal product recalls (FDA, FSIS, CPSC, NHTSA) by keyword, agency, severity, category, distribution state, hazard, firm, lifecycle (open or ended), or date window. Results also hold FSIS public health alerts and CPSC safety warnings, which are not recalls (`record_kind`). Returns up to 50 matching records per page with abbreviated content (title, firm, severity, date, and the canonical URL of each); call get_recall to fetch the full record. With a keyword, the best matches come first unless `sort` says otherwise. Unknown agency, severity, category, state, status and date values are rejected with an error message describing the allowed values. An unknown `hazard` or `firm` is also an error. Read-only.",
           "inputSchema": {
             "additionalProperties": false,
             "properties": {
@@ -975,7 +1001,7 @@
                 "type": "integer"
               },
               "q": {
-                "description": "Free-text query over one index of canonical recalls and preliminary press releases: titles, firm, product name/brand/description, agency reason text, AI summary, hazard tags, and identifiers (UPC, NDC, lot codes, recall and campaign numbers; codes match as printed or as bare digits, including typed in spaced or dashed groups). Every word must match, in any order; words of 3+ characters also match as prefixes (a 2-letter word matches itself and its plural), a plural also matches its singular, and a double-quoted run is an exact phrase. The one operator is an uppercase OR between two words, binding tighter than the implicit AND (`salmonella OR listeria cheese` = (salmonella OR listeria) AND cheese); NOT and NEAR are ordinary words. If no record matches every word, the results fall back to records matching SOME of them and the response says `relaxed: true` (with a notice): those are not confirmed matches. A `q` with more than 10 distinct words or codes is refused with a tool error, not searched in part. Results are ranked by relevance by default. A `q` with no searchable word (only symbols, punctuation or the operators OR / AND) is refused with a tool error, not browsed: omit `q` to browse by filters. Zero results is never evidence a product is unaffected: agencies print codes inconsistently, so also search the brand or product name and compare codes on the record.",
+                "description": "Free-text query over one index of canonical agency records and preliminary press releases: titles, firm, product name/brand/description, agency reason text, AI summary, hazard tags, and identifiers (UPC, NDC, lot codes, recall and campaign numbers; codes match as printed or as bare digits, including typed in spaced or dashed groups). Every word must match, in any order; words of 3+ characters also match as prefixes (a 2-letter word matches itself and its plural), a plural also matches its singular, and a double-quoted run is an exact phrase. The one operator is an uppercase OR between two words, binding tighter than the implicit AND (`salmonella OR listeria cheese` = (salmonella OR listeria) AND cheese); NOT and NEAR are ordinary words. If no record matches every word, the results fall back to records matching SOME of them and the response says `relaxed: true` (with a notice): those are not confirmed matches. A `q` with more than 10 distinct words or codes is refused with a tool error, not searched in part. Results are ranked by relevance by default. A `q` with no searchable word (only symbols, punctuation or the operators OR / AND) is refused with a tool error, not browsed: omit `q` to browse by filters. Zero results is never evidence a product is unaffected: agencies print codes inconsistently, so also search the brand or product name and compare codes on the record.",
                 "maxLength": 200,
                 "type": "string"
               },
@@ -999,7 +1025,7 @@
                 "type": "string"
               },
               "status": {
-                "description": "Lifecycle, the same filter as `/data/recalls?status=` (api 2.8.0): `open` excludes ended recalls and FSIS public health alerts and keeps preliminary press releases; `ended` lists ended recalls only. Case-insensitive; values are lowercase. Anything else is an error.",
+                "description": "Lifecycle, the same filter as `/data/recalls?status=` (api 2.8.0): `open` excludes ended recalls, FSIS public health alerts and CPSC safety warnings, and keeps preliminary press releases; `ended` lists ended recalls only. Case-insensitive; values are lowercase. Anything else is an error.",
                 "enum": ["open", "ended"],
                 "type": "string"
               },
@@ -1218,6 +1244,10 @@
                     "product_count": {
                       "type": "integer"
                     },
+                    "record_kind": {
+                      "description": "Since api 2.12.0. What kind of agency notice a recall record is: `recall`, an FSIS `public_health_alert` or a CPSC `safety_warning`; the last two are not recalls and are never rated. Absent on a preliminary record. `record_type` is `recall` on all three; no filter selects by kind.",
+                      "enum": ["recall", "public_health_alert", "safety_warning"]
+                    },
                     "record_type": {
                       "description": "`preliminary` is an agency press release with no canonical record yet: no severity, status or products.",
                       "enum": ["recall", "preliminary"]
@@ -1285,10 +1315,10 @@
             "openWorld": false,
             "readOnly": true
           },
-          "digest": "sha256:58b5987d2bb05f76ddab7c2ff61347e9075e4356996f4948484123beae6fa40b"
+          "digest": "sha256:cfe971e3e62f2e91545a221a92687fcf7ee581ecb2fe51612e5457cf10f4ced8"
         }
       ],
-      "digest": "sha256:4209e0899f985f46ff2e602ddb40c3ef9639ca9d5c9e09a0cb38af153d8a8a5a"
+      "digest": "sha256:f43fe53f28a0ca4cb3be8688c6059940a3fbe11c2e58755cac50bd7bb789f2f8"
     }
   }
 }

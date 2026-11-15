@@ -19,15 +19,87 @@
       "serverInfo": {
         "name": "logpulse",
         "title": "LogPulse",
-        "version": "1.1.0"
+        "version": "1.3.0"
       },
       "capabilities": {
         "tools": {
           "listChanged": false
         }
       },
-      "instructions": "LogPulse hosts machine-readable changelogs and public roadmaps for software products. Reading needs no sign-in and only returns what changelog owners have published publicly. To answer “what changed between X and Y, and what do I need to change?”, find the slug with search_changelogs, then call compare_versions and apply its migration steps. Use list_releases and get_release for details and get_roadmap for what's planned. For a project that isn't on LogPulse, convert_changelog turns its CHANGELOG.md text or a GitHub release URL into the same structured shape. Free tools for any public GitHub repository, no account needed: generate_release_notes writes release notes (Markdown or a Keep a Changelog section) from commits since the last tag, between two tags or between two dates; validate_changelog checks a CHANGELOG.md against Keep a Changelog 2.0.0 and returns line-by-line fixes and a corrected copy. publish_release and post_roadmap_update write to the caller's own changelog and need a LogPulse API key sent as the HTTP header 'Authorization: Bearer lp_…' in the MCP client settings — never ask the user to paste a key into the chat.",
+      "instructions": "LogPulse hosts machine-readable changelogs and public roadmaps for software products. Reading needs no sign-in and only returns what changelog owners have published publicly. To answer “what changed between X and Y, and what do I need to change?”, find the slug with search_changelogs, then call compare_versions and apply its migration steps. Use list_releases and get_release for details and get_roadmap for what's planned. For a project that isn't on LogPulse, convert_changelog turns its CHANGELOG.md text or a GitHub release URL into the same structured shape. Free tools for any public GitHub repository, no account needed: github_release_notes writes the notes for one release (default: the latest vs the one before) as a Keep a Changelog section plus plain-language release notes, with the merged pull requests and contributors; generate_release_notes writes release notes from commits since the last tag, between two refs or between two dates; validate_changelog checks a CHANGELOG.md against Keep a Changelog 2.0.0 and returns line-by-line fixes and a corrected copy. For a local repository, run `git log <last-tag>..HEAD --no-merges` and pass the output to commits_to_changelog: it returns a Keep a Changelog section with breaking changes flagged, plain release notes and the suggested next version, without calling GitHub. publish_release and post_roadmap_update write to the caller's own changelog and need a LogPulse API key sent as the HTTP header 'Authorization: Bearer lp_…' in the MCP client settings — never ask the user to paste a key into the chat.",
       "tools": [
+        {
+          "name": "commits_to_changelog",
+          "title": "Write a changelog from git commits",
+          "description": "Turn git log output or commit messages into a Keep a Changelog 2.0.0 section (Added, Changed, Deprecated, Removed, Fixed, Security) with breaking changes flagged and their migration steps, plus plain-language release notes. Reads Conventional Commits (feat:, fix:, ! and BREAKING CHANGE: footers) and plain subjects; leaves out merges, release commits and chores; stops at the previous release's tag and suggests the next version. Deterministic, nothing stored. Run `git log <last-tag>..HEAD --no-merges` and pass its output as log.",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "additionalProperties": false,
+            "properties": {
+              "commits": {
+                "description": "Commit messages, newest first; each is the subject, optionally followed by a blank line and the body. Use this or log.",
+                "items": {
+                  "maxLength": 20000,
+                  "type": "string"
+                },
+                "maxItems": 1000,
+                "type": "array"
+              },
+              "date": {
+                "description": "Release date as YYYY-MM-DD. Default: the tagged commit's date, else today (UTC).",
+                "maxLength": 20,
+                "type": "string"
+              },
+              "include_chores": {
+                "description": "Keep chore, ci, build, test and style commits (listed under Changed). Default false.",
+                "type": "boolean"
+              },
+              "log": {
+                "description": "git log output in any format: full (best, keeps BREAKING CHANGE: footers), --oneline (with --decorate to show tags) or one subject per line. Use this or commits.",
+                "maxLength": 500000,
+                "type": "string"
+              },
+              "output": {
+                "description": "What the text answer contains: \"markdown\" (the changelog section), \"notes\" (release notes) or \"both\" (default).",
+                "enum": ["markdown", "notes", "both"],
+                "type": "string"
+              },
+              "previous_version": {
+                "description": "The last released version, when the log shows no tag: used for the compare link and the suggested next version.",
+                "maxLength": 60,
+                "type": "string"
+              },
+              "repository_url": {
+                "description": "github.com or gitlab.com repository (or owner/repo for GitHub), for the version compare link and pull request links.",
+                "maxLength": 300,
+                "type": "string"
+              },
+              "unsorted": {
+                "description": "Entries without a type of change (docs:, deps:): \"omit\" (default) or \"changed\" to list them under Changed.",
+                "enum": ["omit", "changed"],
+                "type": "string"
+              },
+              "version": {
+                "description": "The version being released, e.g. \"1.5.0\". Leave out for an [Unreleased] section, or to use a tag on the newest commit.",
+                "maxLength": 60,
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "annotations": {
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:b0c948390081a76af7c2a44c2d36ccdf655bf5977b66c3b69f86a938b355ac9c"
+        },
         {
           "name": "compare_versions",
           "title": "Compare versions",
@@ -276,6 +348,61 @@
             "readOnly": true
           },
           "digest": "sha256:6057dc5afd64cb18e820f1e89a03b7b2ce102738a5ed512b59e2e3b254a52a76"
+        },
+        {
+          "name": "github_release_notes",
+          "title": "GitHub release notes generator",
+          "description": "Write the release notes for a release or tag of a public GitHub repository: compares two of its releases or plain Git tags (default: the latest release vs the one before) and turns the commits and merged pull requests between them into a Keep a Changelog 2.0.0 section with breaking changes flagged and their migration steps, plus plain-language release notes that thank the contributors. With mode \"backfill\" it writes the notes for each tag in a run of consecutive version tags (up to 10; by default the newest tags that were never published as GitHub releases) and returns a ready-to-run `gh release create <tag> --notes-file …` script that publishes them. Also returns the merged pull requests, the releases and tags to pick from (each labelled release or tag) and how each commit was sorted. Deterministic, no AI, no sign-in.",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "additionalProperties": false,
+            "properties": {
+              "from": {
+                "description": "The earlier release or tag (not included). Default: the release before `to` (the tag before it for a plain tag). In backfill mode: the tag the run starts after; default: the nearest release before `to`.",
+                "maxLength": 200,
+                "type": "string"
+              },
+              "include_prereleases": {
+                "description": "Backfill only: include pre-release tags such as v2.0.0-rc.1 in the run. Default false, so each stable release covers everything since the stable one before it.",
+                "type": "boolean"
+              },
+              "mode": {
+                "description": "\"single\" (default): one release. \"backfill\": every tag after `from` up to `to`, each compared with the tag before it, plus a script that creates the missing GitHub releases.",
+                "enum": ["single", "backfill"],
+                "type": "string"
+              },
+              "output": {
+                "description": "What the text answer contains: \"both\" (default: release notes and Keep a Changelog; in backfill mode also the script), \"keep-a-changelog\" (CHANGELOG.md sections), \"release-notes\" (for GitHub releases or an announcement) or \"script\" (backfill only: the gh script).",
+                "enum": ["both", "keep-a-changelog", "release-notes", "script"],
+                "type": "string"
+              },
+              "repository": {
+                "description": "Public github.com repository: \"owner/repo\" or its URL. A release URL (…/releases/tag/v1.2.0) or compare URL sets the range too.",
+                "maxLength": 300,
+                "minLength": 1,
+                "type": "string"
+              },
+              "to": {
+                "description": "The release or plain tag to write notes for. Default: the latest release. A branch name gives what's merged since `from`. In backfill mode: the newest tag of the run; default: the newest tag without a GitHub release.",
+                "maxLength": 200,
+                "type": "string"
+              }
+            },
+            "required": ["repository"],
+            "type": "object"
+          },
+          "annotations": {
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:de70a1166b4db7107660f18bb6b2c10905cd87eecab0652d9c2fec87ec6dd8eb"
         },
         {
           "name": "list_releases",
@@ -646,7 +773,7 @@
           "digest": "sha256:6f146742b1bd92b6ab8e186453743d6342ac459e50bccfd6ee54202ad2482453"
         }
       ],
-      "digest": "sha256:e63b2d4d4bb386f0185f3d7b75100333ae5e99118a8a07487f477360a4c44860"
+      "digest": "sha256:a6cbcc16e7af7f6a0b071801cb6cf3af3fbc9a99378c79444dece62a5b0a16b8"
     }
   }
 }
