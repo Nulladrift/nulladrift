@@ -1,0 +1,709 @@
+{
+  "lockfileVersion": 2,
+  "subjects": {
+    "app.verifaied/verifaied": {
+      "kind": "mcp-server",
+      "source": {
+        "client": "manual",
+        "file": "registry.modelcontextprotocol.io"
+      },
+      "transport": {
+        "type": "http",
+        "url": "https://verifaied.app/mcp/"
+      },
+      "protocol": {
+        "era": "legacy",
+        "version": "2025-11-25"
+      },
+      "serverInfo": {
+        "name": "verifaied",
+        "version": "1.27.0"
+      },
+      "capabilities": {
+        "experimental": {},
+        "prompts": {
+          "listChanged": false
+        },
+        "resources": {
+          "listChanged": false,
+          "subscribe": false
+        },
+        "tools": {
+          "listChanged": false
+        }
+      },
+      "instructions": "verifAIed checks the work a coding agent says it finished: that the code it changed is tested, and that the feature works in a real browser. Call `setup` first for a repository that is new to verifAIed. After changing code, upload coverage and call `check_done`; close the gaps it lists and call it again, and stop only when it answers done. For any question about how verifAIed works or how to use a feature — from the user or your own — call `docs` and answer from what it returns.",
+      "tools": [
+        {
+          "name": "check_done",
+          "description": "Am I done? The stop condition for a coding loop. **Free — no\nsubscription, no token budget, no rate limit.**\n\nComposes what verifAIed already knows about a branch — failing tests\nplus the coverage of the functions you changed — into a single verdict\nyou can gate on:\n\n  - ``done`` (bool): ``true`` only when there are no gaps at all. This\n    is the strict signal to stop.\n  - ``status``: ``\"done\"`` | ``\"done-with-warnings\"`` | ``\"not-done\"``.\n    ``done-with-warnings`` means the only remaining gaps are ones the\n    repo owner marked non-blocking — read this yourself if you want to\n    stop early.\n  - ``scope``: ``\"changed-functions\"`` when a default-branch base\n    exists (only added/modified functions are judged), else\n    ``\"all-functions\"``.\n  - ``gaps``: each remaining problem with a ``ref``, the id to act on\n    (``function_id``/``test_id``), and a ``next_action`` pointing at\n    ``get_baseline_prompt`` (free) or ``fix_branch`` (paid). Gap kinds:\n\n      - ``failing_test`` — a test that failed or errored.\n      - ``untested_function`` / ``partial_function`` — a changed\n        function with no coverage, or only some.\n      - ``unexercised_browser`` — a changed function that no browser\n        reached, in either the browser-coverage or the manual\n        dimension. Only judged once one of them exists.\n      - ``visually_unreviewed`` — a changed component nobody has\n        looked at. ``intent_mismatch`` — somebody looked and it\n        didn't do what the change claimed. Both only judged once the\n        branch has at least one ``verify_ui`` verdict.\n      - ``unverified_recorded_test`` — a recorded test this branch\n        has never run, or whose last run failed. Re-run it with\n        ``verifaied test run \"<feature path>/<name>\"`` — the feature\n        path is optional and may nest. Branch-wide, not\n        diff-scoped. Absent entirely for a repo with no recorded\n        tests.\n      - ``visual_defect`` — something ``verifaied audit`` measured in\n        the rendered page (overflow, contrast, a broken image, a\n        console error), from the most recent audit of the branch.\n        **The one kind that is a warning by default**, so it routes to\n        ``done-with-warnings`` rather than blocking unless the repo\n        owner turned it on. Only judged once the branch has been\n        audited at least once.\n\n    Gaps are ordered so a component's own\n    gaps are immediately followed by its handlers' and render\n    branches'; a sub-unit gap carries ``parent_ref`` (the parent's\n    ``file::Name``) so you can group or indent them without parsing\n    refs. The clustering is presentation only — every gap is still\n    individually actionable by its own ``ref`` / ``function_id``.\n  - ``not_checked``: signals that couldn't be evaluated (e.g. failing\n    tests when no junit.xml was uploaded, or ``unexercised_browser``\n    when functions exist but no browser coverage was uploaded) —\n    surfaced so a green verdict is never silently green.\n\nPagination: ``gaps`` is capped at ``max_gaps`` per call (default 50) to\nstay within tool-result limits — a low-coverage branch can have hundreds.\n``done``, ``status``, ``scope`` and ``gaps_total`` ALWAYS reflect the full\ngap set, never just the returned page, so a truncated page is never\nmistaken for a clean branch. When more gaps remain, ``has_more`` is\n``true``, ``next_offset`` is the offset to pass next, and ``note`` spells\nout how to fetch the rest — call again with that ``offset`` until\n``has_more`` is ``false``.\n\nThe intended loop: run your tests with coverage (pytest → coverage.json,\nor ``vitest run --coverage --coverage.provider=istanbul`` →\ncoverage/coverage-final.json) → ``upload_local_coverage`` →\n``check_done`` → fix each gap (``get_baseline_prompt`` / ``fix_branch``)\n→ re-upload → repeat until ``done`` is ``true``.\n\n``repository`` is the GitHub 'owner/repo' (a repo UUID also works);\n``branch`` defaults to the repository's default branch. Errors with an\nactionable message when no analysis exists for the branch yet — upload\ncoverage first.",
+          "inputSchema": {
+            "properties": {
+              "branch": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Branch"
+              },
+              "max_gaps": {
+                "default": 50,
+                "title": "Max Gaps",
+                "type": "integer"
+              },
+              "offset": {
+                "default": 0,
+                "title": "Offset",
+                "type": "integer"
+              },
+              "repository": {
+                "title": "Repository",
+                "type": "string"
+              }
+            },
+            "required": ["repository"],
+            "title": "check_doneArguments",
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:175637f10e6eed1a45553d6e133ca36a994e4f0daddd8f5e14113deb406c4d9a"
+        },
+        {
+          "name": "clear_manual_coverage",
+          "description": "Reset the accumulated **manual-recording** dimension for a branch.\n\nManual uploads are **additive**: each ``upload_local_coverage`` with\n``coverage_kind=\"manual\"`` unions that hand-driven session into the\nbranch's manual dimension, so you can build a pass up one flow at a\ntime. Call this to wipe that accumulation and start over — every\nfunction goes back to Unexercised. The branch's ``manual_languages`` are\nkept, so the Manual Recording view stays visible; only the per-function\ncoverage is cleared.\n\nThis does **not** touch browser coverage (``coverage_kind=\"browser\"``),\nwhich has no clear at all: every producer there replaces its own\ncontribution on its next run, so nothing accumulates to be reset.\n\n``repository`` is the GitHub 'owner/repo' (a repo UUID also works);\n``branch`` defaults to the repository's default branch. Errors when the\nbranch has no local analysis to clear. Returns ``cleared_functions`` —\nthe number of function rows reset.",
+          "inputSchema": {
+            "properties": {
+              "branch": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Branch"
+              },
+              "repository": {
+                "title": "Repository",
+                "type": "string"
+              }
+            },
+            "required": ["repository"],
+            "title": "clear_manual_coverageArguments",
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:90cdae0188b6fe70eba164c5ce6c811cb38df52661e1c21a3f438acaa7a78d4c"
+        },
+        {
+          "name": "docs",
+          "description": "The verifAIed documentation, for you and for the user's questions.\n**Free.** Call this whenever the user asks how something in verifAIed\nworks or how to do something with it, and whenever you are unsure what\na tool, a command, a gap or an error means.\n\nThree ways to call it:\n\n  - no arguments: the table of contents — every page with a one-line\n    summary — and how to use the rest.\n  - ``query``: the question, or a few words of it. Returns the\n    sections that match best, each with its own text, so one call is\n    usually enough to answer from. A hit marked ``truncated`` was cut\n    short: read its page for the rest. Start here when you do not\n    know which page holds the answer.\n  - ``page``: one whole page as Markdown. Pass a name from the contents\n    (the first page is ``overview``); a title or a documentation URL\n    also works.\n\nPass ``page`` or ``query``, not both.\n\nAnswer from the returned text rather than from memory, and give the\nuser the page's ``url`` so they can read it themselves. A page with no\n``url`` is one of the notes for agents: tell the user what it says,\nthere is no link to give. When nothing\nmatches, the documentation does not cover it: tell the user that, and\ndo not infer an answer from what is missing. Pages in the\ngroup \"For agents\" are reference written for you and are not on the\nwebsite: ``agents/gaps`` (what every check_done gap means and what\ncloses it), ``agents/errors`` (what an error or refusal means and the\nfix) and ``agents/formats`` (exact file and JSON formats, exit codes).\n\nEvery answer carries ``account``: the user's plan, and on the free\nplan a note on what is refused, so you do not suggest a feature this\naccount cannot use. The table of contents has the full list of paid\ntools.\n\nThis is the one tool that works with no account: a connection without\ncredentials can read the documentation, and its ``account`` is null.\nEvery other tool needs the user to sign in first.",
+          "inputSchema": {
+            "properties": {
+              "page": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Page"
+              },
+              "query": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Query"
+              }
+            },
+            "title": "docsArguments",
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:0f87d846765d079957d01048272c06d674d8a5ef95afd3af5d0f528349552fc1"
+        },
+        {
+          "name": "fix_branch",
+          "description": "Return the fix-it prompt the web UI's 'Generate prompt for\neverything wrong' button produces for a branch — the common-case\none-shot for \"fix everything broken here\". Resolves the repo +\nbranch, finds the latest analysis, generates (or fetches a cached)\nbulk prompt, and waits up to ``wait_seconds`` for completion.\n\n``repository`` is required — pass the GitHub 'owner/repo' for the\nproject the user is working in. You (the MCP client) almost always\nknow this from the working directory's git remote, the open\nworkspace, or the conversation; pass it explicitly rather than\ncalling ``list_repositories`` first. A repo UUID is also accepted\nfor callers that already have one.\n\n``branch`` defaults to the repository's default branch.\n\n``scope`` selects what to aggregate (default ``\"everything\"``):\n  - ``untested`` — all functions with no tests yet\n  - ``partial`` — all functions only partially covered\n  - ``failing`` — all failing tests\n  - ``everything`` — failing tests + all untested + partial functions\n  - ``frontend`` — TypeScript components grouped with the handlers and\n    render branches inside them that nothing exercises yet;\n    Playwright/React-Testing-Library oriented rather than a flat\n    function list\n\nReturns the same shape as ``get_bulk_prompt`` — on cache hit /\ncompleted generation, ``{status: \"completed\", prompt_text, ...}``;\non timeout, ``{status: \"pending\", generation_id}`` so you can\nresume via ``wait_for_prompt``.",
+          "inputSchema": {
+            "properties": {
+              "branch": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Branch"
+              },
+              "force": {
+                "default": false,
+                "title": "Force",
+                "type": "boolean"
+              },
+              "repository": {
+                "title": "Repository",
+                "type": "string"
+              },
+              "scope": {
+                "default": "everything",
+                "title": "Scope",
+                "type": "string"
+              },
+              "wait_seconds": {
+                "default": 120,
+                "title": "Wait Seconds",
+                "type": "integer"
+              }
+            },
+            "required": ["repository"],
+            "title": "fix_branchArguments",
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:ca29ed69ee1966d3902ad7bc8e6717b51abf80203676054bb5f62ee75bf146e8"
+        },
+        {
+          "name": "get_baseline_prompt",
+          "description": "Get a ready-to-use test prompt for one function. **Free — no\nsubscription, no token budget, no rate limit.**\n\nRendered deterministically from the function's AST plus its coverage\nrows: the signature, what to call, which exact lines never execute,\nwhich branches only go one way, what it raises, and which tests\nalready touch it. Use this as the default way to turn \"this function\nis untested\" into \"here is what to write\".\n\n``get_generated_prompt`` is the paid, LLM-polished counterpart — it\nadds repo conventions and richer context, but this one is free and\nalways available, and for most functions it is enough to write the\ntest from.\n\nAlso accepts a React sub-unit id. The prompt then matches what the\nunit is: fire this handler on this element and assert the effect, or\nrender the component in the state that takes this branch. ``kind``\nand ``display_label`` come back alongside the prompt.\n\nErrors if the function is already fully covered — there is nothing to\nprompt for. The exception is a covered function that no browser test and\nno recorded manual session has reached: that still has a real ask (drive\nit in a browser), so it returns a prompt saying exactly that.",
+          "inputSchema": {
+            "properties": {
+              "function_id": {
+                "title": "Function Id",
+                "type": "string"
+              }
+            },
+            "required": ["function_id"],
+            "title": "get_baseline_promptArguments",
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:6d1688b6083c5068a301b7213ced56363230add3a5017a03735fee6f13827f80"
+        },
+        {
+          "name": "get_bulk_prompt",
+          "description": "Return a single meta-prompt covering many items in an analysis.\n\n``scope`` selects which slice to aggregate:\n  - ``untested`` — all functions with no tests yet\n  - ``partial`` — all functions only partially covered\n  - ``failing`` — all failing tests\n  - ``everything`` — failing tests plus all untested + partial functions\n  - ``frontend`` — TypeScript components grouped with the handlers and\n    render branches inside them that nothing exercises yet;\n    Playwright/React-Testing-Library oriented rather than a flat\n    function list\n\nCache hits return immediately; cache misses enqueue a fresh\ngeneration and poll for up to ``wait_seconds``. On timeout the\ncaller gets the ``generation_id`` and can call ``wait_for_prompt``\nto keep waiting.\n\nFor the common 'fix everything wrong on a branch' workflow, prefer\n``fix_branch`` — it takes 'owner/repo' directly and saves the\nlist_repositories → list_analyses chain.",
+          "inputSchema": {
+            "properties": {
+              "analysis_id": {
+                "title": "Analysis Id",
+                "type": "string"
+              },
+              "force": {
+                "default": false,
+                "title": "Force",
+                "type": "boolean"
+              },
+              "scope": {
+                "title": "Scope",
+                "type": "string"
+              },
+              "wait_seconds": {
+                "default": 30,
+                "title": "Wait Seconds",
+                "type": "integer"
+              }
+            },
+            "required": ["analysis_id", "scope"],
+            "title": "get_bulk_promptArguments",
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:b35efa966205a3b76cab296029a6b0bcf16e0d3d0e8f8fba5057e69bc6fca965"
+        },
+        {
+          "name": "get_function_detail",
+          "description": "Source + uncovered lines for one function. The agent typically\ncalls this after ``list_untested_functions`` to pick a target and\nwrite tests for it directly without going through the prompt\ngenerator.",
+          "inputSchema": {
+            "properties": {
+              "function_id": {
+                "title": "Function Id",
+                "type": "string"
+              }
+            },
+            "required": ["function_id"],
+            "title": "get_function_detailArguments",
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:7c10843711b0eab31487f8a48418a211af8b3e5261772264a5e62679775eebd8"
+        },
+        {
+          "name": "get_generated_prompt",
+          "description": "Return a meta-prompt for writing tests for the function.\n\nCache hits return immediately. Cache misses enqueue a fresh\ngeneration and poll the row for up to ``wait_seconds``. On\ntimeout the agent gets the ``generation_id`` and can call\n``wait_for_prompt`` to keep waiting.",
+          "inputSchema": {
+            "properties": {
+              "force": {
+                "default": false,
+                "title": "Force",
+                "type": "boolean"
+              },
+              "function_id": {
+                "title": "Function Id",
+                "type": "string"
+              },
+              "wait_seconds": {
+                "default": 30,
+                "title": "Wait Seconds",
+                "type": "integer"
+              }
+            },
+            "required": ["function_id"],
+            "title": "get_generated_promptArguments",
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:fda50a87be329d98952709eccc8a5c25118b9b07edd976ad704f6ef274ebb916"
+        },
+        {
+          "name": "list_analyses",
+          "description": "List analyses for the given repository, newest first.\n\n``repository_id`` is the GitHub ``owner/repo`` (a repo UUID also\nworks). Mirrors the BranchView's per-branch state. ``commit_sha`` is\nthe commit the analysis was refreshed against.\n\nFor the common 'fix everything wrong on a branch' workflow, prefer\n``fix_branch`` — it resolves the latest analysis for you.",
+          "inputSchema": {
+            "properties": {
+              "repository_id": {
+                "title": "Repository Id",
+                "type": "string"
+              }
+            },
+            "required": ["repository_id"],
+            "title": "list_analysesArguments",
+            "type": "object"
+          },
+          "outputSchema": {
+            "properties": {
+              "result": {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "title": "Result",
+                "type": "array"
+              }
+            },
+            "required": ["result"],
+            "title": "list_analysesOutput",
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:dfd71a60c1c74ea90c945f4a0ae772fe41a1f93dffda2686b32e2a9b156f8f0f"
+        },
+        {
+          "name": "list_repositories",
+          "description": "List the caller's repositories. Wraps the same data the web\nUI's repo list shows.\n\nFor the common 'fix everything wrong on a branch' workflow, prefer\n``fix_branch`` — it takes 'owner/repo' directly and you usually\nknow that from the working directory / git remote.",
+          "inputSchema": {
+            "properties": {},
+            "title": "list_repositoriesArguments",
+            "type": "object"
+          },
+          "outputSchema": {
+            "properties": {
+              "result": {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "title": "Result",
+                "type": "array"
+              }
+            },
+            "required": ["result"],
+            "title": "list_repositoriesOutput",
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:e4b604052d0fb5f2c515d76eb9f8804a6665a34c8eb177af906df5e02a8e6b00"
+        },
+        {
+          "name": "list_untested_functions",
+          "description": "List functions in an analysis, filtered by coverage state.\n\n``state_filter`` is a comma-separated subset of\n``untested,partial,covered``. Default skips fully-covered functions\n— those are typically what an agent looking for \"tests to write\"\ncares about.\n\nRows include React sub-units — an inline JSX handler\n(``Component.<onSubmit>``, ``kind=\"handler\"``) or a conditional render\nbranch (``Component.<branch#1>``, ``kind=\"render_branch\"``) — because\n\"this component's error state never rendered\" is usually the actionable\ngap, not \"this component is 80% covered\". Filter on ``kind`` in\n``(\"function\", \"component\")`` when you want whole functions only.",
+          "inputSchema": {
+            "properties": {
+              "analysis_id": {
+                "title": "Analysis Id",
+                "type": "string"
+              },
+              "state_filter": {
+                "default": "untested,partial",
+                "title": "State Filter",
+                "type": "string"
+              }
+            },
+            "required": ["analysis_id"],
+            "title": "list_untested_functionsArguments",
+            "type": "object"
+          },
+          "outputSchema": {
+            "properties": {
+              "result": {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "title": "Result",
+                "type": "array"
+              }
+            },
+            "required": ["result"],
+            "title": "list_untested_functionsOutput",
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:164f4c50d4032bac117bd47b438c561b61a06b72244d393d7e35cc65f521c67b"
+        },
+        {
+          "name": "setup",
+          "description": "Set verifAIed up for a repository. **Free.** Call this first after\nthe verifAIed MCP is connected, and again after each step.\n\nPass the repository as ``owner/repo`` from the git remote (a repo UUID\nalso works) and the current git branch; the default branch is used\nwhen ``branch`` is omitted.\n\nReturns an ordered checklist. Each step has a ``status``:\n\n  - ``done``: the server saw the result (a committed file, an\n    analysis for the branch). No action.\n  - ``todo``: required and not done. ``commands`` and ``files`` say\n    exactly what to run and write.\n  - ``check_locally``: required, but only your machine can tell (the\n    CLI on PATH, the CLI's login). Run ``verify``; carry the step out\n    if it fails.\n  - ``recommended``: not required; verifAIed asks you to offer it to\n    the user rather than skip it.\n  - ``optional``: not required; mention it once.\n\n``next_step`` names the step to do now and ``complete`` is true when\nno required step is left. A step with ``needs_user`` true needs a\nperson — for ``cli_token``, to approve the ``verifaied login`` you run\nin the browser. This tool never mints or returns a token.\n\nThis tool reads the repository through the GitHub App and never\nchanges it. You write the files; the user commits them. ``facts``\nsays what was read, and ``facts.github_reachable`` is false when the\ntree could not be read, in which case every step the tree would have\nsettled is ``check_locally``.",
+          "inputSchema": {
+            "properties": {
+              "branch": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Branch"
+              },
+              "repository": {
+                "title": "Repository",
+                "type": "string"
+              }
+            },
+            "required": ["repository"],
+            "title": "setupArguments",
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:75ffcdaa4b4fd6e2544ab03eaa1824e6d4c125fc70cddb69d2e84428d29cab7c"
+        },
+        {
+          "name": "upload_local_coverage",
+          "description": "Upload local coverage + current source and get back what's still\nuntested — the core self-correction loop for writing tests without\nwaiting on CI. Works for Python (pytest-cov) and TypeScript/JavaScript\n(vitest + Istanbul).\n\n``coverage_kind`` selects the dimension: ``\"unit\"`` (default) is the\ntest-suite coverage flow described here; ``\"browser\"`` records an\nindependent per-function *browser-session* dimension from a real browser\nrun — any coverage format (Istanbul for a frontend harvest, pytest-cov\nfor a coverage-instrumented backend serving the browser's requests), no\njunit. A branch's browser coverage is the **union** of what each\nproducer last reached — its wrapped suite, and each recorded test's\nlatest replay — and this upload replaces only the contribution of the\nproducer it belongs to, per language (a TS-only browser upload never\nzeroes the Python dimension, and vice versa). It surfaces as\n``browser_state``\n(``exercised``/``partial``/``unexercised``) + ``browser_line_coverage_pct``\non each function and as the ``unexercised_browser`` gap in\n``check_done``, and never changes unit state.\n\nBrowser and manual uploads are also recorded in the branch's session\nledger, so the Tests page can say what produced them. Pass\n``session_id`` if you opened one; otherwise this upload becomes its own\nsession, attributed to ``agent`` — you.\n\nRun your tests with coverage locally first:\n  - Python:  ``pytest --cov --cov-branch --cov-context=test`` then\n    ``coverage json --show-contexts -o coverage.json`` (pytest-cov's\n    own ``--cov-report=json`` drops the per-test contexts)\n  - TS/JS:   ``vitest run --coverage --coverage.provider=istanbul\n    --coverage.reporter=json`` → ``coverage/coverage-final.json``\n\nPass a ``files`` map of {source_path: contents} for the files under\ntest, plus **exactly one** of:\n  - ``coverage_json`` — a single parsed report (pytest-cov or Istanbul).\n  - ``coverage_reports`` — a list of parsed reports, merged with\n    same-file-later-wins; use this to send both a pytest-cov and a\n    vitest report in one upload for a mixed-language repo.\n\nIMPORTANT: the keys of ``files`` must exactly match the file paths the\ncoverage report records (relative to the directory the tests ran from).\nIf they don't, nothing matches and ``functions_matched`` comes back 0.\n\nStored and returned paths are always repo-rooted. If your tests ran\nfrom a subdirectory of the repo (a monorepo package), pass\n``path_prefix`` — the repo-root-relative directory the tests ran from\n(e.g. ``\"backend\"``; ``\"\"`` if they ran at the repo root). Omit it and\nthe server resolves the prefix against the repo tree best-effort, else\nstores paths as sent. All reports in one call share one root — split a\nmulti-root upload into one call per root.\n\n``functions_matched`` and the untested/partial lists count whole\nfunctions only; React sub-units matched by the same upload are reported\nseparately as ``units_matched``, so those numbers stay comparable\nacross uploads and against a repo's own sense of its size.\n\nUploads are merged per language, so a TS upload never wipes a branch's\nPython coverage (``functions_preserved`` reports how many rows were\nkept). Upserts a single local analysis per branch, kept separate from\nany CI run. Returns the coverage summary plus the untested/partial\nfunctions and failing tests so you can fix them directly; the function\n``id``s work with ``get_function_detail`` and ``get_generated_prompt``.\n\n``repository_id`` is the GitHub ``owner/repo`` (a repo UUID also\nworks) — the same reference every other tool here takes.",
+          "inputSchema": {
+            "properties": {
+              "branch": {
+                "title": "Branch",
+                "type": "string"
+              },
+              "commit_sha": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Commit Sha"
+              },
+              "coverage_json": {
+                "anyOf": [
+                  {
+                    "additionalProperties": true,
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Coverage Json"
+              },
+              "coverage_kind": {
+                "default": "unit",
+                "title": "Coverage Kind",
+                "type": "string"
+              },
+              "coverage_reports": {
+                "anyOf": [
+                  {
+                    "items": {
+                      "additionalProperties": true,
+                      "type": "object"
+                    },
+                    "type": "array"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Coverage Reports"
+              },
+              "files": {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "title": "Files",
+                "type": "object"
+              },
+              "junit_xml": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Junit Xml"
+              },
+              "path_prefix": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Path Prefix"
+              },
+              "repository_id": {
+                "title": "Repository Id",
+                "type": "string"
+              },
+              "session_id": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Session Id"
+              }
+            },
+            "required": ["branch", "files", "repository_id"],
+            "title": "upload_local_coverageArguments",
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:954e1410bc855c8cd8e25d57c75ba8ea6c7df2b716406fff4935629418079bd7"
+        },
+        {
+          "name": "verify_ui",
+          "description": "Judge a screenshot of the running UI. **Paid.**\n\nYou drive the browser; verifAIed judges what you got. Take a\nscreenshot of the change you just made, say what it was supposed to\ndo, and this returns a verdict — plus records it, so ``check_done``\ncan hold the branch to it.\n\nTwo modes:\n\n- With ``intent`` (recommended): checks one claim. \"The error state now\n  shows a Retry button\" → ``pass`` / ``fail`` / ``unclear``, with a\n  confidence and the reasoning. ``unclear`` is a real answer, used when\n  the screenshot doesn't show the region the claim is about — treat it\n  as \"screenshot the right thing and ask again\", not as a pass.\n- Without ``intent``: a rubric review (layout, hierarchy, legibility,\n  consistency, obvious broken state) returning ``clean`` or ``issues``\n  with a defect list.\n\n``target`` attaches the verdict to one component as\n``path/to/File.tsx::ComponentName``, which is what clears that\ncomponent's ``visually_unreviewed`` gap. A target that doesn't resolve\nis not an error: the verdict is still recorded against the branch and\nthe response carries a ``warning`` saying so.\n\n``screenshot_base64`` is the raw image bytes, base64-encoded (a\n``data:`` URL prefix is fine). PNG, JPEG, GIF or WebP; a viewport-sized\ncapture is plenty and anything over ~1.5MB of base64 is rejected with a\nresize hint. Pass ``console_errors`` when you have them — a visual\ndefect and a console error are very often the same bug.\n\nThe screenshot **is stored** as session evidence: each call opens a\none-moment session in the branch's ledger and attaches the image to it,\nso the Tests page can show the frame the verdict was about. The\nreasoning text is still the record — the picture is the receipt.\n\nFailing an intent check creates an ``intent_mismatch`` gap; a changed\ncomponent with no verdict creates ``visually_unreviewed``. Both\nactivate only once this branch has at least one verdict, so a repo that\ndoesn't use this tool never sees them.",
+          "inputSchema": {
+            "properties": {
+              "branch": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Branch"
+              },
+              "console_errors": {
+                "anyOf": [
+                  {
+                    "items": {
+                      "type": "string"
+                    },
+                    "type": "array"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Console Errors"
+              },
+              "intent": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Intent"
+              },
+              "repository": {
+                "title": "Repository",
+                "type": "string"
+              },
+              "screenshot_base64": {
+                "title": "Screenshot Base64",
+                "type": "string"
+              },
+              "target": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Target"
+              },
+              "viewport": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "title": "Viewport"
+              }
+            },
+            "required": ["repository", "screenshot_base64"],
+            "title": "verify_uiArguments",
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:35c09d1d4ef619001c91581f9e43ba6a0637f6a5da09de73cb84bcc08f9c2efc"
+        },
+        {
+          "name": "wait_for_prompt",
+          "description": "Poll a prompt generation row until it transitions to completed\nor failed, or until the timeout. The companion to\n``get_generated_prompt`` — call this if the first call returned\n``status: pending``.",
+          "inputSchema": {
+            "properties": {
+              "generation_id": {
+                "title": "Generation Id",
+                "type": "string"
+              },
+              "timeout_seconds": {
+                "default": 30,
+                "title": "Timeout Seconds",
+                "type": "integer"
+              }
+            },
+            "required": ["generation_id"],
+            "title": "wait_for_promptArguments",
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:9436044d1d4e0f3dfb93e26261de8ccb5c8d3a211c594d1002fd0f0f99343b97"
+        }
+      ],
+      "prompts": [
+        {
+          "name": "setup",
+          "description": "Set up verifAIed for this repository with the ``setup`` tool.",
+          "arguments": [
+            {
+              "name": "repository",
+              "required": false
+            }
+          ],
+          "digest": "sha256:5c714d3e2f123d99ee37f6fc1c9ecee9b2a8db46c80465b812ae621f93e1dbf1"
+        }
+      ],
+      "digest": "sha256:63f5b60e298c07c7b7f5127d51048b8d6524c152c9cb72e2ee0e63d213dc7889"
+    }
+  }
+}

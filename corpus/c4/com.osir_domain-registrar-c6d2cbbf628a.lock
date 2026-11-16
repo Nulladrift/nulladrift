@@ -24,7 +24,7 @@
         },
         "tools": {}
       },
-      "instructions": "OSIR is an AI-native domain registrar: search/register domains, manage DNS, order VPS, host email, and deploy sites/apps. Rules: (1) Anonymous lookups work without login - availability, pricing, suggestions, catalog, getHostingBundle. (2) Account actions require login: call loginWithDevice, have the user approve in the browser, poll checkDeviceLoginStatus, then pass the returned sessionKey on EVERY subsequent tool call (OAuth-connected clients skip this - their Bearer token is used automatically). (3) Anything that moves money or destroys data is a two-step: the tool returns an actionId with an itemized summary; present it to the user and only call executeConfirmedAction after their explicit approval. (4) Displayed prices exclude ICANN and processing fees until quoted; the authoritative amount is always in the staged confirmation. (5) After registering a domain, DNS zone setup is automatic; getHostingBundle gives exact hosting prices for a just-checked or just-registered domain. (6) Apps are deployed and updated ONLY through the osirApp* tools - never over SSH, never with a provisioning script, never by configuring a VPS by hand. One loop covers the whole lifecycle: osirAppCreateUpload -> PUT the zip -> osirAppDeploy returns a live https://<name>.<region>.osir.app URL. osirAppDeployToVps then puts that same app on the user's own VPS - pass instanceId from listMyVpsInstances for a server they already have and it costs nothing and needs no confirmation. To update a live app, change it and redeploy under the SAME name: osirAppGetSource -> patch the files -> osirAppCreateUpload -> osirAppDeploy. The platform rebuilds it and ships it to the owned box over its own deploy key, keeping the domain. You never need shell access to the user's server. If you find yourself writing an install.sh, an nginx config or a systemd unit, or asking the user to paste commands, you are on the wrong path - look for the osirApp* tool instead. Docs: https://osir.com/en/developers/",
+      "instructions": "OSIR is an AI-native domain registrar: search/register domains, manage DNS, order VPS, host email, and deploy sites/apps. Rules: (1) Anonymous lookups work without login - availability, pricing, suggestions, catalog, getHostingBundle. (2) Account actions require login: call loginWithDevice, have the user approve in the browser, poll checkDeviceLoginStatus, then pass the returned sessionKey on EVERY subsequent tool call (OAuth-connected clients skip this - their Bearer token is used automatically). (3) Anything that moves money or destroys data is a two-step: the tool returns an actionId with an itemized summary; present it to the user and only call executeConfirmedAction after their explicit approval. (4) Displayed prices exclude ICANN and processing fees until quoted; the authoritative amount is always in the staged confirmation. (5) After registering a domain, DNS zone setup is automatic; getHostingBundle gives exact hosting prices for a just-checked or just-registered domain. (6) Apps are deployed and updated ONLY through the osirApp* tools - never over SSH, never with a provisioning script, never by configuring a VPS by hand. One loop covers the whole lifecycle: call osirAppDeploy with the project's files and it returns a live https://<name>.<region>.osir.app URL - you never zip anything, never upload anything and never make an HTTP request yourself; the platform builds it. (A client with a shell may instead use osirAppCreateUpload + PUT the zip, for projects over 6 MiB.) osirAppDeployToVps then puts that same app on the user's own VPS - pass instanceId from listMyVpsInstances for a server they already have and it costs nothing and needs no confirmation. To update a live app, change it and redeploy under the SAME name: osirAppGetSource with inline=true -> patch the files -> osirAppDeploy with files. The platform rebuilds it and ships it to the owned box over its own deploy key, keeping the domain. You never need shell access to the user's server. If you find yourself writing an install.sh, an nginx config or a systemd unit, or asking the user to paste commands, you are on the wrong path - look for the osirApp* tool instead. For a ready-made AI agent (Hermes), use osirAgentDeploy - never osirAppDeploy and never a hand-written Dockerfile; manage it afterwards only with the osirAgent* tools. Docs: https://osir.com/en/developers/",
       "tools": [
         {
           "name": "addPrefixToDomain",
@@ -2904,8 +2904,252 @@
           "digest": "sha256:0ea24ce63850f67dae81751b8ee45ab58a163002acc0cdcbcf8a7eb783f83d1f"
         },
         {
+          "name": "osirAgentConfigure",
+          "description": "osirAgentConfigure: Connect the user's AI agent (e.g. Hermes) to a model provider - 'connect my Hermes to DeepSeek'. Providers: deepseek, openai, openrouter, anthropic. The API key is stored as an encrypted secret, never written into a file or shown again, and the agent restarts on the user's VPS with it. Never paste the key anywhere else. Requires authentication.",
+          "inputSchema": {
+            "properties": {
+              "agentId": {
+                "description": "Agent id from osirAgentList or osirAgentDeploy.",
+                "type": "string"
+              },
+              "apiKey": {
+                "description": "The user's API key for that provider. Never logged or returned.",
+                "type": "string"
+              },
+              "provider": {
+                "description": "Model provider: 'deepseek', 'openai', 'openrouter' or 'anthropic'.",
+                "type": "string"
+              },
+              "sessionKey": {
+                "description": "Session key (osk_...) returned by checkDeviceLoginStatus. Pass it on every call when logged in via the in-chat device flow; omit when connected via OAuth.",
+                "type": "string"
+              }
+            },
+            "required": ["agentId", "apiKey", "provider"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": false,
+            "title": "Connect an AI agent to a model provider"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": false
+          },
+          "digest": "sha256:8e2abfc3fe8d3b2b8155cf5970b9eafa43a84ead127263fd841b28b824f0f704"
+        },
+        {
+          "name": "osirAgentDelete",
+          "description": "osirAgentDelete: Stage removal of the user's AI agent (e.g. Hermes). DESTRUCTIVE: stops and removes the agent from the user's VPS. Its data folder (conversations, memories) stays on the VPS, and the VPS itself is NOT cancelled (that is deleteVpsInstance). Returns an actionId; present the summary and call executeConfirmedAction only if the user approves. Requires authentication.",
+          "inputSchema": {
+            "properties": {
+              "agentId": {
+                "description": "Agent id from osirAgentList.",
+                "type": "string"
+              },
+              "sessionKey": {
+                "description": "Session key (osk_...) returned by checkDeviceLoginStatus. Pass it on every call when logged in via the in-chat device flow; omit when connected via OAuth.",
+                "type": "string"
+              }
+            },
+            "required": ["agentId"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": true,
+            "idempotentHint": false,
+            "openWorldHint": false,
+            "readOnlyHint": false,
+            "title": "Remove an AI agent"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": false,
+            "readOnly": false
+          },
+          "digest": "sha256:9bee7a5ba3bf69ffa28744b3aefc4d07c4f4460c9d4e2516e63d3b984a051204"
+        },
+        {
+          "name": "osirAgentDeploy",
+          "description": "osirAgentDeploy: Install a ready-made AI agent - Hermes (Hermes Agent by Nous Research, a self-hosted personal AI agent with a web dashboard) - on the user's OWN VPS, behind HTTPS with a password-protected dashboard. Use this for 'run/install Hermes on my server' INSTEAD of osirAppDeploy, a hand-written Dockerfile, SSH or an install script: the platform installs the vetted agent itself. Needs a VPS with at least 4 GB RAM. TWO WAYS IN, like osirAppDeployToVps: (1) the user already owns a VPS: pass instanceId (from listMyVpsInstances) - spends nothing, no confirmation; (2) no server yet: pass packageId (from listVpsPackages, 4 GB+ RAM) - stages a VPS order (COSTS MONEY): returns an actionId; present the price/summary and call executeConfirmedAction only if the user approves. The result carries the username and the PASSWORD: show the password to the user once, in that reply - it is never shown again (osirAgentResetPassword makes a new one). Then poll osirAgentStatus until installed - it gives the dashboard URL (without a domain, Osir assigns the address; never build it) - and connect a model provider with osirAgentConfigure. Calling this again resumes an install and never buys a second VPS. If the platform says the agent is not available yet, tell the user plainly. Requires authentication.",
+          "inputSchema": {
+            "properties": {
+              "agent": {
+                "description": "The agent to install. Currently only 'hermes'.",
+                "type": "string"
+              },
+              "domain": {
+                "description": "A domain the user owns to serve the dashboard on, e.g. 'agent.example.com'. Bound automatically if its DNS is hosted at Osir, otherwise the result says which A record to add. Omit it to get an Osir address automatically; never pass an osir.app name.",
+                "type": "string"
+              },
+              "instanceId": {
+                "description": "Id of a VPS the user ALREADY owns, from listMyVpsInstances. Nothing is ordered or charged. Never invent one.",
+                "type": "string"
+              },
+              "packageId": {
+                "description": "VPS package id from listVpsPackages (at least 4 GB RAM). Only when a server has to be ordered; omit it when passing instanceId.",
+                "type": "string"
+              },
+              "sessionKey": {
+                "description": "Session key (osk_...) returned by checkDeviceLoginStatus. Pass it on every call when logged in via the in-chat device flow; omit when connected via OAuth.",
+                "type": "string"
+              },
+              "username": {
+                "description": "Dashboard login name; default 'admin'.",
+                "type": "string"
+              }
+            },
+            "required": ["agent"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": false,
+            "openWorldHint": false,
+            "readOnlyHint": false,
+            "title": "Install an AI agent on the user's VPS"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": false,
+            "openWorld": false,
+            "readOnly": false
+          },
+          "digest": "sha256:0170fb4fe31a0ab09c5ace1512c1429b3c0b13cedf7d25be57d4c9425d35086f"
+        },
+        {
+          "name": "osirAgentList",
+          "description": "osirAgentList: List the AI agents (e.g. Hermes) the user has installed on their own VPS, with their ids and dashboard URLs. Requires authentication.",
+          "inputSchema": {
+            "properties": {
+              "sessionKey": {
+                "description": "Session key (osk_...) returned by checkDeviceLoginStatus. Pass it on every call when logged in via the in-chat device flow; omit when connected via OAuth.",
+                "type": "string"
+              }
+            },
+            "required": [],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "List installed AI agents"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:b6e710bd55a2c46415dda1fcba678df5069317da4bc90d519ea952887ef9b7a9"
+        },
+        {
+          "name": "osirAgentLogs",
+          "description": "osirAgentLogs: Logs of the user's AI agent (e.g. Hermes). Not available yet - the result says so; then use osirAgentStatus. Never invent log contents or ask the user for SSH access. Requires authentication.",
+          "inputSchema": {
+            "properties": {
+              "agentId": {
+                "description": "Agent id from osirAgentList or osirAgentDeploy.",
+                "type": "string"
+              },
+              "sessionKey": {
+                "description": "Session key (osk_...) returned by checkDeviceLoginStatus. Pass it on every call when logged in via the in-chat device flow; omit when connected via OAuth.",
+                "type": "string"
+              }
+            },
+            "required": ["agentId"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Get AI agent logs"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:942d7f8927cebad76847bed86fd17b1df5ee4905f636b5d346e275ece68e1406"
+        },
+        {
+          "name": "osirAgentResetPassword",
+          "description": "osirAgentResetPassword: Set a new dashboard password for the user's AI agent (e.g. Hermes) - 'I lost the password'. The old one stops working. The new password is in this result only: show it to the user once, in that reply. This is the ONLY way to change the agent's login. Requires authentication.",
+          "inputSchema": {
+            "properties": {
+              "agentId": {
+                "description": "Agent id from osirAgentList or osirAgentDeploy.",
+                "type": "string"
+              },
+              "sessionKey": {
+                "description": "Session key (osk_...) returned by checkDeviceLoginStatus. Pass it on every call when logged in via the in-chat device flow; omit when connected via OAuth.",
+                "type": "string"
+              }
+            },
+            "required": ["agentId"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": false,
+            "openWorldHint": false,
+            "readOnlyHint": false,
+            "title": "Reset AI agent dashboard password"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": false,
+            "openWorld": false,
+            "readOnly": false
+          },
+          "digest": "sha256:6f311577a18cba768ba5dcb5f86c1cec23e55a784fd6e9316580abea424fc844"
+        },
+        {
+          "name": "osirAgentStatus",
+          "description": "osirAgentStatus: Is the user's AI agent (e.g. Hermes) installed and working? Reports install progress, the dashboard URL, and whether the dashboard asks for a login (dashboardProtected - checked live). If an install failed, the message says why and what to do. Requires authentication.",
+          "inputSchema": {
+            "properties": {
+              "agentId": {
+                "description": "Agent id from osirAgentList or osirAgentDeploy.",
+                "type": "string"
+              },
+              "sessionKey": {
+                "description": "Session key (osk_...) returned by checkDeviceLoginStatus. Pass it on every call when logged in via the in-chat device flow; omit when connected via OAuth.",
+                "type": "string"
+              }
+            },
+            "required": ["agentId"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": true,
+            "title": "Get AI agent status"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:1b462c2ccd586ed1b812d9a97f819e29f081248a3d7928ae98dadf4413ccea9e"
+        },
+        {
           "name": "osirAppCreateUpload",
-          "description": "osirAppCreateUpload: Create an upload ticket for deploying app source code to Osir. Returns an uploadTicket, a putUrl, and instructions to zip the project and upload it. After uploading, call osirAppDeploy with the uploadTicket. Requires authentication.",
+          "description": "osirAppCreateUpload: ONLY for a client with a shell and a project too large to send inline (over 500 files or 6 MiB). Usually you do NOT need this: call osirAppDeploy with the project's files directly. Returns an uploadTicket, a putUrl, and instructions to zip the project and PUT it there; then call osirAppDeploy with the uploadTicket. Requires authentication.",
           "inputSchema": {
             "properties": {
               "sessionKey": {
@@ -2929,7 +3173,7 @@
             "openWorld": false,
             "readOnly": false
           },
-          "digest": "sha256:6a71a38e41f9f0d6e83869611f4cd12d7fe8c21815a80ea4f7f4c83647caed97"
+          "digest": "sha256:ec1b492ad98ab17da5ae96f1835511e38b488c1d71c007bda88e4adf19a43b8c"
         },
         {
           "name": "osirAppDelete",
@@ -2965,11 +3209,29 @@
         },
         {
           "name": "osirAppDeploy",
-          "description": "osirAppDeploy: Deploy an app to Osir (free tier) and get a live HTTPS URL; the app runs isolated in a microVM. Deploying an existing app name redeploys it (new version) and applies any secrets set via osirAppSetSecret. A plain static website (HTML/CSS/JS with no framework or build step) is also supported: it is auto-detected and served directly; pass language 'node' for it. To put the app on the user's OWN VPS, server or production box instead, deploy it here first and then call osirAppDeployToVps - never SSH into the box or write an install script. Once an app is on the user's own VPS, redeploying HERE under the same name is how you update it: the platform re-ships it to the box and keeps its domain. Requires authentication.",
+          "description": "osirAppDeploy: Deploy an app to Osir (free tier) and get a live HTTPS URL; the app runs isolated in a microVM. Send the project's source as 'files' (each {path, content}) - you never zip, upload or make an HTTP request yourself. Returns immediately with status BUILDING: poll osirAppStatus until READY (typically 1-2 min, up to ~7 for a first build) before telling the user the URL is live; if it ends BUILD_FAILED, fix the source and redeploy - never deploy around a failed build by hand. Deploying an existing app name redeploys it (new version) and applies any secrets set via osirAppSetSecret. A plain static website (HTML/CSS/JS with no framework or build step) is also supported: it is auto-detected and served directly; pass language 'node' for it. If the project has its own Dockerfile at the root, the platform builds exactly that: pass language 'node' for it; the container must listen on port 8080. Shared-tier apps get 256 MB / 0.5 CPU, so a big image-based app belongs on the user's own VPS (osirAppDeployToVps). For a ready-made AI agent (Hermes), use osirAgentDeploy - never this tool and never a hand-written Dockerfile. To put the app on the user's OWN VPS, server or production box instead, deploy it here first and then call osirAppDeployToVps - never SSH into the box or write an install script. Once an app is on the user's own VPS, redeploying HERE under the same name is how you update it: the platform re-ships it to the box and keeps its domain. Requires authentication.",
           "inputSchema": {
             "properties": {
+              "files": {
+                "description": "The project's source files: [{path, content, encoding?}]. path is relative and forward-slashed (e.g. 'src/index.js'); encoding is 'utf8' (default) or 'base64' for binaries such as images. Include every file the app needs - omitted files are not in the new version. Up to 500 files / 6 MiB. Use this OR uploadTicket.",
+                "items": {
+                  "properties": {
+                    "content": {
+                      "type": "string"
+                    },
+                    "encoding": {
+                      "type": "string"
+                    },
+                    "path": {
+                      "type": "string"
+                    }
+                  },
+                  "type": "object"
+                },
+                "type": "array"
+              },
               "language": {
-                "description": "Runtime language: 'node', 'python', 'php-laravel', or 'go'; use 'node' for a plain static site.",
+                "description": "Runtime language: 'node', 'python', 'php-laravel', or 'go'; use 'node' for a plain static site or a project with its own Dockerfile.",
                 "type": "string"
               },
               "name": {
@@ -2985,11 +3247,11 @@
                 "type": "string"
               },
               "uploadTicket": {
-                "description": "Upload ticket from osirAppCreateUpload, after uploading the zipped source to its putUrl.",
+                "description": "Only for the shell path: upload ticket from osirAppCreateUpload, after PUTting the zipped source to its putUrl. Leave out when sending files.",
                 "type": "string"
               }
             },
-            "required": ["language", "name", "uploadTicket"],
+            "required": ["language", "name"],
             "type": "object"
           },
           "annotations": {
@@ -3005,11 +3267,11 @@
             "openWorld": false,
             "readOnly": false
           },
-          "digest": "sha256:49a9c6212c2a98261857c5aeb95a9b77a62bdaa82673c0720a5ec7f311e708ee"
+          "digest": "sha256:033312aab79659480630e7594e1743cffa5b5e1dbbd4552f89464327e6859854"
         },
         {
           "name": "osirAppDeployToVps",
-          "description": "osirAppDeployToVps: Deploy a live Osir app onto the user's own VPS / server / production box, moving it off the shared free tier. Use this INSTEAD of SSH, a provisioning or install script, nginx/systemd/TLS configuration, or any manual server setup - the platform ships the app to the box itself over its own deploy key, so the assistant needs no shell access and no outbound SSH. This is the ONLY supported way to put an app on a user's own server or a custom domain. TWO WAYS IN. (1) The user already owns a VPS: pass instanceId (from listMyVpsInstances) and NO packageId - this ATTACHES the app to that server, SPENDS NOTHING and needs no confirmation. (2) No server yet: pass packageId (from listVpsPackages) and the call stages a VPS order (COSTS MONEY): returns an actionId; present the price/summary to the user and call executeConfirmedAction only if they approve. Before staging any order this tool checks whether the user ALREADY has a box for this app (its C2 binding, then their own VPS list) and attaches that instead - a retry after a failed move never buys a second server. After the move starts the platform ships the app onto the box server-side, which takes about two minutes; watch it with osirAppStatus ('ownedMove'). Calling this tool again while a move is still running just reports its progress, and calling it after one FAILED retries the ship - unless osirAppStatus says the VPS refused the Osir deploy key or its web ports are taken: then retry only after the user has made the changes that message lists. If the result status is BUILDING or BUILD_FAILED, follow its nextStep. Requires authentication.",
+          "description": "osirAppDeployToVps: Deploy a live Osir app onto the user's own VPS / server / production box, moving it off the shared free tier. Use this INSTEAD of SSH, a provisioning or install script, nginx/systemd/TLS configuration, or any manual server setup - the platform ships the app to the box itself over its own deploy key, so the assistant needs no shell access and no outbound SSH. This is the ONLY supported way to put an app on a user's own server or a custom domain. TWO WAYS IN. (1) The user already owns a VPS: pass instanceId (from listMyVpsInstances) and NO packageId - this ATTACHES the app to that server, SPENDS NOTHING and needs no confirmation. (2) No server yet: pass packageId (from listVpsPackages) and the call stages a VPS order (COSTS MONEY): returns an actionId; present the price/summary to the user and call executeConfirmedAction only if they approve. Before staging any order this tool checks whether the user ALREADY has a box for this app (its C2 binding, then their own VPS list) and attaches that instead - a retry after a failed move never buys a second server. After the move starts the platform ships the app onto the box server-side, which takes about two minutes; watch it with osirAppStatus ('ownedMove'). Calling this tool again while a move is still running just reports its progress, and calling it after one FAILED retries the ship - unless osirAppStatus says the VPS refused the Osir deploy key or its web ports are taken: then retry only after the user has made the changes that message lists. If the result status is BUILDING or BUILD_FAILED, follow its nextStep. After the move the app is served ONLY from the user's server: its earlier osir.app address stops working. Give the user the URL from osirAppStatus, and never tell them the old link still works. Requires authentication.",
           "inputSchema": {
             "properties": {
               "appName": {
@@ -3049,16 +3311,20 @@
             "openWorld": false,
             "readOnly": false
           },
-          "digest": "sha256:0e0e647b18686a70cc6f29645b9a135b32c19c3d4b678eb6f5b0e1a924740643"
+          "digest": "sha256:f9bf90918464918c96447df1f57dfa6e56d596246d64be5ffe5a20b6ea36c523"
         },
         {
           "name": "osirAppGetSource",
-          "description": "osirAppGetSource: Get a short-lived signed download URL for an Osir app's current source zip. Use this to make edits to a deployed app without the user re-attaching the project: download, patch the files, then osirAppCreateUpload (PUT the new zip) and osirAppDeploy under the SAME name; the platform rebuilds and, for owned-tier apps, auto-ships the new version to the user's box. Requires authentication.",
+          "description": "osirAppGetSource: Get a deployed Osir app's current source, to make edits without the user re-attaching the project. With inline=true it returns the files themselves: patch them and call osirAppDeploy with ALL the files under the SAME name; the platform rebuilds and, for owned-tier apps, auto-ships the new version to the user's box. If the result says truncated=true the files are only PART of the app - do NOT redeploy from them. Without inline it returns only a short-lived signed zip URL (getUrl), useful only to a client with a shell. Requires authentication.",
           "inputSchema": {
             "properties": {
               "appName": {
                 "description": "The deployed app's name, as shown by osirAppList.",
                 "type": "string"
+              },
+              "inline": {
+                "description": "true (recommended): return the files themselves (up to 300 files / 2 MiB). false/omitted: only a signed zip URL.",
+                "type": "boolean"
               },
               "sessionKey": {
                 "description": "Session key (osk_...) returned by checkDeviceLoginStatus. Pass it on every call when logged in via the in-chat device flow; omit when connected via OAuth.",
@@ -3081,11 +3347,11 @@
             "openWorld": false,
             "readOnly": true
           },
-          "digest": "sha256:28fce8381fce6287256084a95e2762a363ee3bf76c2f69dd46c10720d2d4953b"
+          "digest": "sha256:9e68015921064c4c2b69bdee1229b4080849bc1fd4f616b8a67c7c944787005c"
         },
         {
           "name": "osirAppList",
-          "description": "osirAppList: List the authenticated user's deployed Osir apps with their live URLs and status. Requires authentication.",
+          "description": "osirAppList: List the authenticated user's deployed Osir apps with their live URLs and status. An entry with kind 'agent' is a ready-made AI agent (e.g. Hermes): manage it with the osirAgent* tools, never the osirApp* ones. Requires authentication.",
           "inputSchema": {
             "properties": {
               "sessionKey": {
@@ -3109,11 +3375,11 @@
             "openWorld": false,
             "readOnly": true
           },
-          "digest": "sha256:ad978890495b3d3548bb204199d845322b9c4c82ae0d89d195772feaafe81772"
+          "digest": "sha256:bf1393aafa00fbfdd6a3ad5291666f60b3e0a50fbdbfd5a3ddeb5a52e76c08ce"
         },
         {
           "name": "osirAppLogs",
-          "description": "osirAppLogs: Get recent logs from an Osir app's microVM ('why is my app broken?'). Requires authentication.",
+          "description": "osirAppLogs: Get recent logs from an Osir app ('why is my app broken?'). Not available yet for an app on the user's own VPS - the result says so; then use osirAppStatus (qa.findings) instead, and never ask the user for SSH access. Requires authentication.",
           "inputSchema": {
             "properties": {
               "appId": {
@@ -3145,7 +3411,7 @@
             "openWorld": false,
             "readOnly": true
           },
-          "digest": "sha256:29fdabd5ac6fb456aaeefe67d4eefb6844ff972b647d0a4456e2de6b7338d5ff"
+          "digest": "sha256:1c1d9f1d8ede4de9b663c5f35e1436501c7a77c679c4a02b78369e1f604e6535"
         },
         {
           "name": "osirAppProvisionDatabase",
@@ -3225,7 +3491,7 @@
         },
         {
           "name": "osirAppStatus",
-          "description": "osirAppStatus: Get an Osir app's current status, live URL, and health ('is my app working?'). If the status is BUILD_FAILED, 'recentErrors' explains why so you can fix the source and redeploy. 'qa' is an independent black-box check of the LIVE app after deploy: qa.status PASSED means it loaded and worked; FAILED means it deployed but didn't actually work, and qa.findings lists the problems so you can fix and redeploy. 'ownedMove' tracks a move onto the user's own VPS, which leaves tier and status unchanged while it runs: state MOVING (in progress, stage says where, ~2 minutes in total), MOVED (done - tier reads 'owned'), FAILED or REFUSED (follow this result's message: usually call osirAppDeployToVps again to retry, which never orders a second server; but when the VPS refused the Osir deploy key or its web ports are taken, the user must fix the VPS first, and the message says how). Requires authentication.",
+          "description": "osirAppStatus: Get an Osir app's current status, live URL, and health ('is my app working?'). If the status is BUILD_FAILED, 'recentErrors' explains why so you can fix the source and redeploy. 'qa' is an independent black-box check of the LIVE app after deploy: qa.status PASSED means it loaded and worked; FAILED means it deployed but didn't actually work, and qa.findings lists the problems so you can fix and redeploy. 'ownedMove' tracks a move onto the user's own VPS, which leaves tier and status unchanged while it runs: state MOVING (in progress, stage says where, ~2 minutes in total), MOVED (done - tier reads 'owned'), FAILED or REFUSED (follow this result's message: usually call osirAppDeployToVps again to retry, which never orders a second server; but when the VPS refused the Osir deploy key or its web ports are taken, the user must fix the VPS first, and the message says how). For an app on the user's own VPS (tier 'owned'), health is always UNKNOWN: the platform does not probe the user's server. Use qa to tell whether it works; do not redeploy because of UNKNOWN. Requires authentication.",
           "inputSchema": {
             "properties": {
               "appId": {
@@ -3253,7 +3519,7 @@
             "openWorld": false,
             "readOnly": true
           },
-          "digest": "sha256:e56652b1da5fe7e1281d6cfae1f4324924260436177c9e5076fb88f523daf510"
+          "digest": "sha256:2f40d9d4cdd8cd2cce4e911e089a3381ef28284e0e807e6438a48f6f82c2237c"
         },
         {
           "name": "osirSiteDesignBrief",
@@ -3305,7 +3571,7 @@
         },
         {
           "name": "osirSitePublish",
-          "description": "osirSitePublish: Publish a single-page website to a live HTTPS URL on Osir (free tier). ANY complete HTML document works: the user's own site, a page designed in this chat, or one from the osirSiteDesignBrief flow. Calling again with the same name redeploys the new version. For MULTI-FILE sites (separate CSS/JS/images) use osirAppCreateUpload + osirAppDeploy with a zip instead. Then poll osirAppStatus until READY. If the app was moved to the user's own VPS, redeploying under the same name updates it there and keeps its domain. Requires authentication.",
+          "description": "osirSitePublish: Publish a single-page website to a live HTTPS URL on Osir (free tier). ANY complete HTML document works: the user's own site, a page designed in this chat, or one from the osirSiteDesignBrief flow. Calling again with the same name redeploys the new version. For MULTI-FILE sites (separate CSS/JS/images) use osirAppDeploy with all the site's files instead. Then poll osirAppStatus until READY. If the app was moved to the user's own VPS, redeploying under the same name updates it there and keeps its domain. Requires authentication.",
           "inputSchema": {
             "properties": {
               "designContract": {
@@ -3345,7 +3611,7 @@
             "openWorld": false,
             "readOnly": false
           },
-          "digest": "sha256:d7665ac953435319eb5142f54ae74122cdfddc22ad35ee2246a9a8cb3641f12a"
+          "digest": "sha256:44b492f9440e5d05a184e429ef4530bb95e0cb02d93f2e0a682f0f416bbeaaf6"
         },
         {
           "name": "payInvoice",
@@ -4243,7 +4509,7 @@
           "digest": "sha256:717a6e633c8f98444e2e5e58b1d0e0da618dbbedec66bd31022421a24fb7700a"
         }
       ],
-      "digest": "sha256:95b07517788b380d2f8c28f0e7b350c0065d88828da9e2be40016a5120b24839"
+      "digest": "sha256:0fdb417eac3334df474d16a92501d8a0253fe5929143d2d9d9250c2da637f1f2"
     }
   }
 }

@@ -23,8 +23,76 @@
         "prompts": {},
         "tools": {}
       },
-      "instructions": "Gaduin's tools return live flight status and on-time history, flights by route, airline on-time records, airport status, train-station departures and arrivals, ship traffic through maritime chokepoints, and prediction markets on flight, train and ship outcomes with their price history, with links to https://gaduin.com. The data is informational, not advice; the account tools (positions, balance) need an API key.",
+      "instructions": "Gaduin's tools return live flight status and on-time history, flights by route, disrupted flights, airline on-time records, airport status and day-long airport departures and arrivals boards, aircraft positions and flown tracks, takeoffs and landings observed from transponder positions, train runs by number, station boards and the station catalogue, rail punctuality, ship traffic through maritime chokepoints, port movement lists and vessel port calls, and prediction markets on flight, train and ship outcomes with their price history, with links to https://gaduin.com. The data is informational, not advice; the account tools (positions, balance) need an API key.",
       "tools": [
+        {
+          "name": "get_aircraft_position",
+          "title": "Aircraft position",
+          "description": "The latest position on record for the aircraft with this ICAO 24-bit address, however old: latitude, longitude, barometric altitude, ground speed, course, on-ground state and callsign (both null unless reported in the last 15 minutes), when it was reported and its age in seconds. live is true only when it is at most 180 seconds old, two of GADUIN's 90-second reading intervals; an older position is the latest on record, not where the aircraft is now. Not found when no position of the aircraft was recorded in the last 90 days. Positions are what the aircraft's own transponder broadcast, picked up by ground receivers and relayed to GADUIN with a delay, so reported_at_utc, not the time of the request, is when the aircraft was there; where no receiver hears the aircraft (over oceans and remote land) there is no position for that stretch.",
+          "inputSchema": {
+            "properties": {
+              "icao24": {
+                "description": "The aircraft's ICAO 24-bit address as six hex digits, e.g. 4ca7b2 (get_flight_status reports it under aircraft).",
+                "type": "string"
+              }
+            },
+            "required": ["icao24"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": true,
+            "title": "Aircraft position"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:d00eaad6df8c4244fa726e81bc502b9217a20d4063f6022d51eb3dbe26b91254"
+        },
+        {
+          "name": "get_aircraft_track",
+          "title": "Aircraft recorded track",
+          "description": "Every position recorded for an aircraft from from to to, both inclusive, oldest first; nothing is cut. The window may span at most 6 hours and must start within the last 90 days; a longer or older window is refused, so read a longer stretch window by window. GADUIN reads every aircraft's position once every 90 seconds and keeps a point only when the reported position time moved, so points are typically 90 seconds apart, with gaps where no receiver heard the aircraft; aircraft of flights GADUIN follows are read every 5 seconds for about 40 minutes either side of their scheduled arrival, so their points are denser there. Nothing is thinned. Positions are what the aircraft's own transponder broadcast, picked up by ground receivers and relayed to GADUIN with a delay, so reported_at_utc, not the time of the request, is when the aircraft was there; where no receiver hears the aircraft (over oceans and remote land) there is no position for that stretch.",
+          "inputSchema": {
+            "properties": {
+              "from": {
+                "description": "Start of the window: an ISO-8601 time with a UTC offset, e.g. 2026-11-13T12:00:00Z; within the last 90 days.",
+                "format": "date-time",
+                "type": "string"
+              },
+              "icao24": {
+                "description": "The aircraft's ICAO 24-bit address as six hex digits, e.g. 4ca7b2 (get_flight_status reports it under aircraft).",
+                "type": "string"
+              },
+              "to": {
+                "description": "End of the window, after from and at most 6 hours later, in the same form.",
+                "format": "date-time",
+                "type": "string"
+              }
+            },
+            "required": ["from", "icao24", "to"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": true,
+            "title": "Aircraft recorded track"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:01345ab6efb9519e1ca9d544e3573124e24da1b380ebe10ed7dc3e41f367f349"
+        },
         {
           "name": "get_airline_stats",
           "title": "Airline on-time record",
@@ -53,6 +121,94 @@
             "readOnly": true
           },
           "digest": "sha256:beb268e00037a862202ab7c9c6281c285c2f58e26d15a00156124e04ff8e8837"
+        },
+        {
+          "name": "get_airport_arrivals",
+          "title": "Airport arrivals board",
+          "description": "One page of an airport's arrivals on record for one airport-local day, landed and cancelled flights included (coverage on_record: the flights GADUIN has a record of, not the airport's full schedule). Each physical flight appears once with its codeshares, ordered by scheduled arrival (unknown schedules last), with origin, scheduled departure, scheduled, estimated and recorded arrival in UTC, status and a link to its flight page. The recorded arrival is a landing as the airport shows it, never an estimate. Each flight belongs to exactly one date: the airport-local date of its scheduled arrival, whenever it actually landed (with no scheduled arrival, the date of its recorded landing), so days add up without double counting. While next_cursor is not null, call again with the same airport and cursor set to it to read the rest of the day.",
+          "inputSchema": {
+            "properties": {
+              "airport": {
+                "description": "Airport IATA code (e.g. LHR) or ICAO code (e.g. EGLL). An IATA code works for airports with a page on gaduin.com; otherwise give the ICAO code.",
+                "type": "string"
+              },
+              "cursor": {
+                "description": "next_cursor from the previous answer, to read the next page; give the same airport (and date, if given) with it. Omit for the first page.",
+                "type": "string"
+              },
+              "date": {
+                "description": "Airport-local date YYYY-MM-DD, within the last 400 days. Defaults to the airport's today.",
+                "format": "date",
+                "type": "string"
+              },
+              "limit": {
+                "description": "Max flights per page (1-500). Defaults to 100.",
+                "maximum": 500,
+                "minimum": 1,
+                "type": "integer"
+              }
+            },
+            "required": ["airport"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": true,
+            "title": "Airport arrivals board"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:a977cde0a75acd377a28de434f4a4db6e7e435518bfb01a33e2ea7e0d0b493c9"
+        },
+        {
+          "name": "get_airport_departures",
+          "title": "Airport departures board",
+          "description": "One page of an airport's departures on record for one airport-local day, departed and cancelled flights included (coverage on_record: the flights GADUIN has a record of, not the airport's full schedule). Each physical flight appears once with its codeshares, ordered by scheduled departure (unknown schedules last), with destination, scheduled, estimated and recorded departure in UTC, status, delay in minutes, verdict (delayed means more than late_threshold_minutes plus the airport's taxi_allowance_minutes) and a link to its flight page. Each flight belongs to exactly one date: the airport-local date of its scheduled departure, whenever it actually left (with no scheduled time, the date of its recorded departure), so days add up without double counting; for the airport's current day only, a flight that left before local midnight ahead of a schedule after it is listed once that day has ended. While next_cursor is not null, call again with the same airport and cursor set to it to read the rest of the day. total counts the day's flights at each read, so a flight added between pages can change it.",
+          "inputSchema": {
+            "properties": {
+              "airport": {
+                "description": "Airport IATA code (e.g. LHR) or ICAO code (e.g. EGLL). An IATA code works for airports with a page on gaduin.com; otherwise give the ICAO code.",
+                "type": "string"
+              },
+              "cursor": {
+                "description": "next_cursor from the previous answer, to read the next page; give the same airport (and date, if given) with it. Omit for the first page.",
+                "type": "string"
+              },
+              "date": {
+                "description": "Airport-local date YYYY-MM-DD, within the last 400 days. Defaults to the airport's today.",
+                "format": "date",
+                "type": "string"
+              },
+              "limit": {
+                "description": "Max flights per page (1-500). Defaults to 100.",
+                "maximum": 500,
+                "minimum": 1,
+                "type": "integer"
+              }
+            },
+            "required": ["airport"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": true,
+            "title": "Airport departures board"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:d038e9edb79977761929e38d43fb23d5810ec0227e26a6b9036f94dd7d4f816e"
         },
         {
           "name": "get_airport_status",
@@ -86,9 +242,15 @@
         {
           "name": "get_chokepoint_status",
           "title": "Chokepoint ship traffic",
-          "description": "Ship traffic through one maritime chokepoint as of its latest published count: status, the mean of the last 7 calendar days to latest_date against normal and how many of those days are published, the newest daily count, how many final weeks it has been under 85% of normal, since when and against which normal, the last 8 weeks with their share of normal (figures only once a week is final), the last 14 published daily counts, the rule behind the status, and a link to its page on gaduin.com. Counts are published in batches several days in arrears (weekly; Panama monthly): latest_date is the newest day counted, not today.",
+          "description": "Ship traffic through one maritime chokepoint as of its latest published count: status, the mean of the last 7 calendar days to latest_date against normal and how many of those days are published, the newest daily count, how many final weeks it has been under 85% of normal, since when and against which normal, the last 8 weeks with their share of normal (figures only once a week is final), the last 14 published daily counts, the rule behind the status, and a link to its page on gaduin.com; with days, also every published daily count of that window (history). Counts are published in batches several days in arrears (weekly; Panama monthly): latest_date is the newest day counted, not today.",
           "inputSchema": {
             "properties": {
+              "days": {
+                "description": "Also return history: every published daily count in this many calendar days ending on latest_date, with the weeks holding them (1-1130, the depth of the record kept). Omit for the reading alone.",
+                "maximum": 1130,
+                "minimum": 1,
+                "type": "integer"
+              },
               "slug": {
                 "description": "Chokepoint slug from list_chokepoints, e.g. suez or panama.",
                 "type": "string"
@@ -110,14 +272,20 @@
             "openWorld": true,
             "readOnly": true
           },
-          "digest": "sha256:23d0a32bc7ffbd1641983c36691b710e2a36f463f85f218e1f0b915fbdde7306"
+          "digest": "sha256:3fae31807a2eb144e7b5cb829c6fa87b7cb8710787d89fe84afea1e8d67e79a1"
         },
         {
           "name": "get_flight_history",
           "title": "Flight on-time history",
-          "description": "How often a flight has been late over the last 30 days. Returns n (arrivals graded against a published arrival schedule) with its on-time and late counts, ungraded_arrivals (landings with no published schedule to grade), cancelled and diverted counts, operations (n + cancelled + diverted, the base for shares), unconfirmed legs left out, the window (shorter when the record limit cut it), the late rule with its minute threshold, and a link to the flight page on gaduin.com.",
+          "description": "How often a flight has been late over the last 30 days, or the last days days (up to 400, the record's reach). Returns n (arrivals graded against a published arrival schedule) with its on-time and late counts, ungraded_arrivals (landings with no published schedule to grade), cancelled and diverted counts, operations (n + cancelled + diverted, the base for shares), unconfirmed legs left out, the window (shorter when the record limit cut it), the late rule with its minute threshold, and a link to the flight page on gaduin.com.",
           "inputSchema": {
             "properties": {
+              "days": {
+                "description": "History window in days (1-400); defaults to 30. window reports the span actually covered.",
+                "maximum": 400,
+                "minimum": 1,
+                "type": "integer"
+              },
               "number": {
                 "description": "Flight number: airline IATA or ICAO code plus number, e.g. AA1.",
                 "type": "string"
@@ -139,14 +307,48 @@
             "openWorld": true,
             "readOnly": true
           },
-          "digest": "sha256:85b36e19416a26bd76a60ce9f5c80a9eae3eb150658d27fbab7ffc746478bd22"
+          "digest": "sha256:ea256d5ec29422710e36948a70608b8616b74de4d299cfc4bc6a9980be73a1f0"
+        },
+        {
+          "name": "get_flight_position",
+          "title": "Flight position now",
+          "description": "Where a flight is now: finds the aircraft broadcasting the flight number's callsign (the operating airline's ICAO code followed by the number) and returns its latest reported position: latitude, longitude, barometric altitude, ground speed, course, whether it reported being on the ground, its callsign, its ICAO 24-bit address, when it was reported and its age in seconds. The aircraft is named only when exactly one aircraft's latest report (received in the last 15 minutes) carries the callsign; otherwise position is null with a reason (callsign_unknown, not_broadcasting or ambiguous_callsign), never a guess. live is false for a position more than 180 seconds old. Positions are what the aircraft's own transponder broadcast, picked up by ground receivers and relayed to GADUIN with a delay, so reported_at_utc, not the time of the request, is when the aircraft was there; where no receiver hears the aircraft (over oceans and remote land) there is no position for that stretch.",
+          "inputSchema": {
+            "properties": {
+              "number": {
+                "description": "Flight number: airline IATA or ICAO code plus number, e.g. AA1.",
+                "type": "string"
+              }
+            },
+            "required": ["number"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": true,
+            "title": "Flight position now"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:bcc7ab513fc94a4bbfd6e0df663dc2b365a4adb9ddeec410458e3902f5ab2355"
         },
         {
           "name": "get_flight_status",
           "title": "Flight status",
-          "description": "Current status of a flight by number (e.g. AA1 or AAL1). Returns the canonical flight number and the leg its gaduin.com flight page answers with (today's leg in its own time zone, else the active leg nearest now, else the latest one), with its role (current: left and not landed, inside its arrival horizon; next: not yet left; latest: landed, cancelled, no arrival recorded, unconfirmed or past due with nothing recorded), its status (arrival_not_recorded once it left and no arrival was recorded by its scheduled arrival plus 6 hours, else its recorded departure plus 24 hours; timing is then null), whether sources disagree on its outcome, its timing, delay in minutes and on-time or delayed verdict under the late rule, its departure and arrival times in UTC and airport-local time with the time zone, the leg's own last update time (null when none), a link to the flight page and, when one is open, a link to the prediction market that page links (this leg's until it leaves, else the next upcoming leg's, with that leg's service date).",
+          "description": "Current status of a flight by number (e.g. AA1 or AAL1). Returns the canonical flight number and the leg its gaduin.com flight page answers with (today's leg in its own time zone, else the active leg nearest now, else the latest one; with date, that service date's leg), with its role (current: left and not landed, inside its arrival horizon; next: not yet left; latest: landed, cancelled, no arrival recorded, unconfirmed or past due with nothing recorded), its status (arrival_not_recorded once it left and no arrival was recorded by its scheduled arrival plus 6 hours, else its recorded departure plus 24 hours; timing is then null), whether sources disagree on its outcome, its timing, delay in minutes and on-time or delayed verdict under the late rule, its departure and arrival times in UTC and airport-local time with the time zone, the leg's own last update time (null when none), the aircraft type, registration and ICAO 24-bit address recorded for the operating flight's own leg (each null when not on record; always null on a codeshare listing), a link to the flight page and, when one is open, a link to the prediction market that page links (this leg's until it leaves, else the next upcoming leg's, with that leg's service date). on_record is true. It also returns observed: the flights read off positions reported by aircraft transponders under the flight number's broadcast callsign (matched_by callsign, with the callsigns tried; an airline whose callsigns do not follow its flight numbers shows nothing there) whose takeoff, else landing, starts within the leg's service date in its own time zone; each takeoff and landing is a bracket, not a gate time, and never fills or grades any time, delay or verdict above. observed is null when that day has not begun, lies beyond the 89 days observed flights are kept or no airline is known for the number; null with observed_unavailable true when it could not be read. A flight with no operation on record (with date, none on that service date) answers on_record false with airline, url, leg, market and generated_at null and the flights observed under its callsign on date read as a UTC date, else in the last 2 UTC days; with none observed either, it is not found.",
           "inputSchema": {
             "properties": {
+              "date": {
+                "description": "Service date YYYY-MM-DD (the departure's local date) to answer for that day's operation instead of the headlined one; from 400 days back to 3 days ahead. For a flight not on record, the UTC date its observed flights are read for.",
+                "format": "date",
+                "type": "string"
+              },
               "number": {
                 "description": "Flight number: airline IATA or ICAO code plus number, e.g. AA1.",
                 "type": "string"
@@ -168,7 +370,41 @@
             "openWorld": true,
             "readOnly": true
           },
-          "digest": "sha256:475ed0d06ffecf7f491fe049523f2181a0eed6afb0b2cf392e5c6cac0d742f10"
+          "digest": "sha256:c272d23a93acad74616cfc1e6e5a4189e7cd508682c5c60c0a7a460571684e86"
+        },
+        {
+          "name": "get_flight_track",
+          "title": "Flight flown track",
+          "description": "For each operation of a flight number on one service date, every position recorded for the aircraft flying it from its departure until its arrival was recorded, oldest first, each with latitude, longitude, barometric altitude, course and whether it is contested (the aircraft was flying for another operation at the same time as far as GADUIN can tell). GADUIN follows the aircraft of some operations only: the others have track null and reason not_tracked. An operation not yet departed, or departed with no position recorded yet, has an empty points list. Positions are what the aircraft's own transponder broadcast, picked up by ground receivers and relayed to GADUIN with a delay, so reported_at_utc, not the time of the request, is when the aircraft was there; where no receiver hears the aircraft (over oceans and remote land) there is no position for that stretch.",
+          "inputSchema": {
+            "properties": {
+              "date": {
+                "description": "Service date YYYY-MM-DD, as get_flight_status reports it. Operations from the last 30 days and the next 3 are on record.",
+                "format": "date",
+                "type": "string"
+              },
+              "number": {
+                "description": "Flight number: airline IATA or ICAO code plus number, e.g. AA1.",
+                "type": "string"
+              }
+            },
+            "required": ["date", "number"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": true,
+            "title": "Flight flown track"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:aed180be8b8c5fe6acf21cdb98eebd8cc5c9dcd995c3ef0d1eda7ba90e433cdb"
         },
         {
           "name": "get_market",
@@ -229,13 +465,142 @@
           "digest": "sha256:8232b171594e2fc90ff3d408044bf8727cd410ed0d701572d72d29ddb8333dec"
         },
         {
-          "name": "get_station_board",
-          "title": "Train station board",
-          "description": "Departures and arrivals at a railway station found by name or station code: for each train still to come, the other end of its journey, scheduled and recorded times in UTC, expected times and platforms where the railway publishes them, status, delay, operator and, when one is open, a link to its market; whether the board is live (expected times) and how fresh its source is; the coming hour's departures and cancellations, with the late count only on a live, fresh board (null otherwise); and a link to the station page on gaduin.com. Finds stations that have a page on gaduin.com.",
+          "name": "get_observed_flights",
+          "title": "Observed flights by callsign",
+          "description": "The flights of one UTC date read off positions reported by aircraft transponders under the flight number's broadcast callsign: the airline's ICAO designator and the number (matched_by callsign, with the callsigns tried). An airline whose callsigns do not follow its flight numbers returns nothing, and neither does a codeshare number. Each flight is one aircraft's observed takeoff and landing with the airport; each is a bracket (earliest_utc to latest_utc, at most 10 minutes apart), not a gate time, and a side not observed is null with reason not_observed. A flight belongs to the date its takeoff bracket starts in, or its landing's when no takeoff was observed. No schedule, delay or on-time verdict is given; get_flight_status has the recorded times. Airports where no position on the ground is received yield no takeoff or landing. A movement is provisional until the UTC hour of the position that completed it has ended and 20 more minutes have passed (at most 80 minutes): until then a late position can still narrow its bracket, settle or clear its callsign, or withdraw it. complete says whether every movement of the date has settled.",
           "inputSchema": {
             "properties": {
+              "date": {
+                "description": "UTC date YYYY-MM-DD within the last 89 days. Defaults to today in UTC.",
+                "format": "date",
+                "type": "string"
+              },
+              "number": {
+                "description": "Flight number: airline IATA or ICAO code plus number, e.g. AA1.",
+                "type": "string"
+              }
+            },
+            "required": ["number"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": true,
+            "title": "Observed flights by callsign"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:fa645d147592235be6236efe86a4844cd2e6ea08e0f510d8fe45db09589f5d37"
+        },
+        {
+          "name": "get_port_board",
+          "title": "Port arrivals and departures",
+          "description": "One port-local day of a port's own movement list: every vessel arrival and departure as the port lists it, with vessel name, IMO, MMSI and call sign as listed, status, and expected and recorded times in UTC. An arrival is placed by its recorded arrival (else the arrival the list expects), a departure by its recorded departure. What a recorded arrival means differs by port: instant_kind says whether it is the port entry or the berthing. A vessel absent from the day is not listed by the port; read_that_day false means the list was not read that day at all, so an absence says nothing. total counts every movement of the day: while next_cursor is not null, call again with the same locode and cursor set to it. A movement the port revises between pages can move across a page boundary: re-read from the first page for one consistent snapshot. Ports come from list_ports.",
+          "inputSchema": {
+            "properties": {
+              "cursor": {
+                "description": "next_cursor from the previous answer, to read the next page; give the same locode with it. Omit for the first page.",
+                "type": "string"
+              },
+              "date": {
+                "description": "Port-local day YYYY-MM-DD. Defaults to today at the port, or to the cursor's day.",
+                "format": "date",
+                "type": "string"
+              },
               "limit": {
-                "description": "Max trains per direction (1-30). Defaults to 10.",
+                "description": "Max movements per page (1-200). Defaults to 100.",
+                "maximum": 200,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "locode": {
+                "description": "UN/LOCODE of the port from list_ports, e.g. SEGOT; a dock code answers for its port.",
+                "type": "string"
+              }
+            },
+            "required": ["locode"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": true,
+            "title": "Port arrivals and departures"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:ba427bc5b65609bb4aefa3b1c80299c636024976204d3817c3b547a731d64a8c"
+        },
+        {
+          "name": "get_rail_punctuality",
+          "title": "Rail punctuality",
+          "description": "Arrival punctuality of one operator, station or route (origin and destination station codes, one row per operator running it, counting only arrivals at its final destination), summed over the calendar days ending at the newest settled service date: calls (arrival calls with a recorded outcome, arrived or cancelled), on_time (less than 5 minutes late), within_15 (less than 15 minutes late, on_time included) and cancelled. Covers Great Britain's national rail network only: any other network is not found. A day counts only once all its arrivals are settled, so to_date trails today; days_counted says how many dates of the window are in the sums. Give exactly one of operator, station or route.",
+          "inputSchema": {
+            "properties": {
+              "days": {
+                "description": "Calendar days in the window (1-90), ending at the newest settled date. Defaults to 28.",
+                "maximum": 90,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "network": {
+                "description": "Rail network country code; only GB is recorded.",
+                "type": "string"
+              },
+              "operator": {
+                "description": "Operator code, e.g. GW.",
+                "type": "string"
+              },
+              "route": {
+                "description": "Origin and destination station codes, e.g. PAD-BRI.",
+                "type": "string"
+              },
+              "station": {
+                "description": "Three-letter station code, e.g. PAD.",
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": true,
+            "title": "Rail punctuality"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:734baa0668921208f667debdf3004abd49d8d9288c171843d67c9a3fe899200b"
+        },
+        {
+          "name": "get_station_board",
+          "title": "Train station board",
+          "description": "Departures and arrivals at a railway station found by name or station code: the trains still to come by default, or every train of a station-local day with window day (the default when date is given). For each train, the other end of its journey, scheduled and recorded times in UTC, expected times and platforms where the railway publishes them, status, delay, operator and, when one is open, a link to its market; whether the board is live (expected times) and how fresh its source is; the coming hour's departures and cancellations, with the late count only on a live, fresh board (null otherwise); and a link to the station page on gaduin.com. Finds stations with a page on gaduin.com first, then any other station a stored train calls at (search_stations lists them).",
+          "inputSchema": {
+            "properties": {
+              "date": {
+                "description": "Station-local date YYYY-MM-DD. Defaults to today at the station.",
+                "format": "date",
+                "type": "string"
+              },
+              "limit": {
+                "description": "Max trains per direction (1-30). Defaults to 10; with window day, omit it to list the whole day.",
                 "maximum": 30,
                 "minimum": 1,
                 "type": "integer"
@@ -247,6 +612,11 @@
               "station": {
                 "description": "Station name or code, e.g. London Paddington, PAD or Zürich HB.",
                 "maxLength": 64,
+                "type": "string"
+              },
+              "window": {
+                "description": "upcoming (trains from now on) or day (every train of the date). Defaults to day when date is given, else upcoming.",
+                "enum": ["upcoming", "day"],
                 "type": "string"
               }
             },
@@ -266,7 +636,182 @@
             "openWorld": true,
             "readOnly": true
           },
-          "digest": "sha256:5a069da1bffb67af6fe8491b37df65d83d1cc4282a74afb981ff63c2a823d9c7"
+          "digest": "sha256:097c045f8328e24ceaa7be4134356352593b6a9796e27a609e0d06530e92eb62"
+        },
+        {
+          "name": "get_train_status",
+          "title": "Train run by number",
+          "description": "Every run of a train number on one service date with every calling point: scheduled, expected and recorded arrival and departure in UTC, platform where stated, cancellations, per-stop delay, and the railway's stated reason for a delay or cancellation in its own words. Expected times appear only on networks whose operator publishes live expected times, and only while the run is not stale (updated in the last 15 minutes); elsewhere a run is the timetable plus recorded times and cancellations. A number can run more than once a day or under several operators: runs are never merged, each is listed, and number_identity says how far the number names one run on its network. total counts every matching run; returned holds the first 10 by scheduled departure: narrow with network, operator or origin when total is larger. Runs are kept for about 45 days; timetables are held up to about 36 hours ahead.",
+          "inputSchema": {
+            "properties": {
+              "date": {
+                "description": "Service date YYYY-MM-DD: the date the run starts on in its railway's time zone.",
+                "format": "date",
+                "type": "string"
+              },
+              "network": {
+                "description": "The railway's country code, e.g. GB, US or CH.",
+                "type": "string"
+              },
+              "number": {
+                "description": "Train number as published, e.g. 1A23, 171 or RJX 860.",
+                "type": "string"
+              },
+              "operator": {
+                "description": "Operator code, e.g. VT or SBB.",
+                "type": "string"
+              },
+              "origin": {
+                "description": "Origin station: its public code or its whole name.",
+                "type": "string"
+              }
+            },
+            "required": ["date", "number"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": true,
+            "title": "Train run by number"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:23738ee6e8b0de5907d43b600c664b8828133672147093cc98345fd496bb9b4e"
+        },
+        {
+          "name": "get_vessel_port_calls",
+          "title": "Vessel port calls",
+          "description": "One vessel's calls, by IMO number, as the movement lists of the ports GADUIN reads recorded them, newest first: port, vessel name, MMSI and call sign as listed, status, expected and recorded arrival (instant_kind says whether it is the port entry or the berthing) and recorded departure in UTC, each call as the port's newest word on it that still names this IMO. Only the ports list_ports lists appear, so a voyage elsewhere is absent; no vessel positions are given. total counts every call in the window: while next_cursor is not null, call again with the same imo and days and cursor set to it.",
+          "inputSchema": {
+            "properties": {
+              "cursor": {
+                "description": "next_cursor from the previous answer, to read the next page; give the same imo and days with it. Omit for the first page.",
+                "type": "string"
+              },
+              "days": {
+                "description": "Look-back in days (1-365): calls with any instant in this many days before now or later. Defaults to 30.",
+                "maximum": 365,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "imo": {
+                "description": "Seven-digit IMO ship number with a valid check digit, e.g. 9212163.",
+                "type": "string"
+              },
+              "limit": {
+                "description": "Max calls per page (1-100). Defaults to 50.",
+                "maximum": 100,
+                "minimum": 1,
+                "type": "integer"
+              }
+            },
+            "required": ["imo"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": true,
+            "title": "Vessel port calls"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:a2bac2a3ac2b94b20c72a722922a8319de59a92d30f87841980295f57bdeadd3"
+        },
+        {
+          "name": "list_aircraft_in_area",
+          "title": "Aircraft in an area",
+          "description": "Every aircraft whose latest reported position lies inside a box (edges included) and is at most 180 seconds old (live), each as get_aircraft_position reports it, nearest the box's centre first (ties by icao24, so a limit always keeps the same ones). An aircraft whose latest position is older, or lies outside the box, is not listed. total counts them all; truncated is true when the limit cut the farthest from the centre. Sides are at most 10 degrees of latitude and of longitude; latitudes beyond 85.05112878 degrees north or south are outside the area index, so a box may not reach past them and an aircraft there is never listed. Positions are what the aircraft's own transponder broadcast, picked up by ground receivers and relayed to GADUIN with a delay, so reported_at_utc, not the time of the request, is when the aircraft was there; where no receiver hears the aircraft (over oceans and remote land) there is no position for that stretch.",
+          "inputSchema": {
+            "properties": {
+              "bbox": {
+                "description": "The box as minLon,minLat,maxLon,maxLat in decimal degrees, e.g. -0.6,51.3,0.3,51.7: longitudes from -180 to 180, latitudes from -85.05112878 to 85.05112878, minLat below maxLat, each side at most 10 degrees; minLon greater than maxLon crosses the 180th meridian.",
+                "type": "string"
+              },
+              "limit": {
+                "description": "Max aircraft to return, nearest the centre first (1-500). Defaults to 100.",
+                "maximum": 500,
+                "minimum": 1,
+                "type": "integer"
+              }
+            },
+            "required": ["bbox"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": true,
+            "title": "Aircraft in an area"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:70cad54fa90ec201fc8e412b0186068c3e8b3cde1165f1ed39ff36ef95c8a599"
+        },
+        {
+          "name": "list_airport_movements",
+          "title": "Observed airport landings and takeoffs",
+          "description": "The landings (type arrivals) or takeoffs (type departures) of airline flights at an airport in one airport-local day, read off positions reported by aircraft transponders, not from any airline or airport record. A movement belongs to the day its bracket starts in. Each movement is a bracket, not an instant: it happened between earliest_utc and latest_utc, the last position certainly in the air (at least 300 m above the airport) and the first on the ground for a landing, the reverse for a takeoff, at most 10 minutes apart; each comes with its callsign, the aircraft's ICAO 24-bit address and, when observed, the same flight's other movement (paired). These are not gate times, and no schedule, delay or on-time verdict is given. Only aircraft broadcasting an airline callsign are listed. An airport where no position on the ground is received yields nothing, and at one within a few km of another airport, movements that cannot be told apart from the other airport's are not listed. A movement is provisional until the UTC hour of the position that completed it has ended and 20 more minutes have passed (at most 80 minutes): until then a late position can still narrow its bracket, settle or clear its callsign, or withdraw it. complete says whether every movement of the day has settled. Pages are ordered by earliest_utc, then icao24; total counts every movement of the day: while next_cursor is not null, call again with the same airport, type and date and cursor set to it.",
+          "inputSchema": {
+            "properties": {
+              "airport": {
+                "description": "Airport IATA code (e.g. LHR) or ICAO code (e.g. EGLL).",
+                "type": "string"
+              },
+              "cursor": {
+                "description": "next_cursor from the previous answer, to read the next page; give the same airport, type and date with it. Omit for the first page.",
+                "type": "string"
+              },
+              "date": {
+                "description": "Airport-local date YYYY-MM-DD within the last 89 days. Defaults to today at the airport.",
+                "format": "date",
+                "type": "string"
+              },
+              "limit": {
+                "description": "Max movements per page (1-100). Defaults to 50.",
+                "maximum": 100,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "type": {
+                "description": "arrivals for landings, departures for takeoffs.",
+                "enum": ["arrivals", "departures"],
+                "type": "string"
+              }
+            },
+            "required": ["airport", "type"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": true,
+            "title": "Observed airport landings and takeoffs"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:f36342215c534778fa3b509375b26d0ae9eaff9c85d550644a61bf2197ad6d48"
         },
         {
           "name": "list_chokepoints",
@@ -322,6 +867,36 @@
           "digest": "sha256:de567670aae625204353e44b98f0b0d8ccd5bcaf20c4955db4c731d40fc0f0f5"
         },
         {
+          "name": "list_flight_disruptions",
+          "title": "Disrupted flights now",
+          "description": "Flights on record leaving, on its local today, an airport whose own departures board GADUIN reads, that are cancelled or late now (coverage on_record: not every flight). Late means departed, or published to depart, more than late_threshold_minutes plus the airport's taxi allowance after the schedule its board shows, and not yet landed; an airport with no measured allowance lists only cancellations. Each physical flight appears once under its operating flight number, with designators listing every number it is sold under, its airports, scheduled departure in UTC, status (cancelled or delayed), delay in minutes and a link to its flight page. Cancellations first, then the longest delay. total counts every such flight; the list holds at most the worst 1,000 (truncated says when total exceeds them) and returned is how many this answer holds (at most limit). partial means some covered airport could not be read, so its flights may be missing from the list and the total.",
+          "inputSchema": {
+            "properties": {
+              "limit": {
+                "description": "Max flights to return, worst first (1-1000). Defaults to 100.",
+                "maximum": 1000,
+                "minimum": 1,
+                "type": "integer"
+              }
+            },
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": true,
+            "title": "Disrupted flights now"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:2e90c9b07c2a21c12c0646f8e92e1a9a353fd0ac31f24415e1e76454a30e2e20"
+        },
+        {
           "name": "list_markets",
           "title": "List prediction markets",
           "description": "List prediction markets on real-world transport outcomes (flight delays, train punctuality, ship arrivals, weekly ship counts through maritime chokepoints, airport flight counts), filtered by status (OPEN by default; CLOSED, SETTLED or CANCELLED for past ones), category and a free-text query matched against the route, flight number, airline, airport codes and vehicle. Returns total (every market the filters match), returned (how many this page holds: the first limit of them, earliest close time first) and each returned market's id, link, category, question, route, outcomes with current prices, volume, close time and, once settled, the outcome it settled on.",
@@ -367,13 +942,41 @@
           "digest": "sha256:df2666055d0c44adaf37aa207f0fd6a87f8120a8e541337fb9b8112467f66d6a"
         },
         {
+          "name": "list_ports",
+          "title": "Ports with a movement list",
+          "description": "Every port whose own published list of vessel arrivals and departures GADUIN reads, by UN/LOCODE, with its name, country, coordinates, time zone, when its list was last read and found up to date, and whether that is current (within current_within_minutes). Only these ports have a board (get_port_board) or appear in vessel port calls (get_vessel_port_calls); a port missing here is one GADUIN does not read, not one without traffic. The list is never cut.",
+          "inputSchema": {
+            "properties": {},
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": true,
+            "title": "Ports with a movement list"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:b7372038b1268b7dfce975fb330fc09e41d9607ea37930905e7fd3207718971b"
+        },
+        {
           "name": "search_flights",
           "title": "Search flights by route",
-          "description": "Today's departures on record from an airport (airport-local day), optionally only those to one destination (an airport code, or a city matched as whole words) or flown by one airline: finds flights without knowing their number. coverage is on_record: the counts cover the flights on record for this airport today, not its full schedule. Counts over the matching flights: departed_today (a departure is recorded and the flight is not cancelled), past_due_not_reported (not cancelled, no recorded departure, scheduled at or before now_utc), still_to_depart (not cancelled, no recorded departure, scheduled after now_utc) and cancelled_today. flights lists the still-to-depart ones, never a cancelled one: number, operating flight for codeshares, destination, scheduled and actual departure in UTC, status, delay in minutes from the scheduled time, verdict (delayed means more than late_threshold_minutes plus the airport's taxi_allowance_minutes; a recorded departure is not_graded with a null allowance or more than 60 minutes before its schedule), a link to its flight page and, when one is open, to its market. Without an airline filter, codeshare listings of one flight count once. The result links the gaduin.com page of the route when the destination is one airport with flights on record today, else the departure airport's page.",
+          "description": "Today's departures on record from an airport (airport-local day; date picks another local day), optionally only those to one destination (an airport code, or a city matched as whole words) or flown by one airline: finds flights without knowing their number. coverage is on_record: the counts cover the flights on record for this airport today, not its full schedule. Counts over the matching flights: departed_today (a departure is recorded and the flight is not cancelled), past_due_not_reported (not cancelled, no recorded departure, scheduled at or before now_utc), still_to_depart (not cancelled, no recorded departure, scheduled after now_utc) and cancelled_today. flights lists the still-to-depart ones, never a cancelled one (scope day lists every matching flight of the day instead, departed and cancelled ones included; total counts the flights the scope lists, returned how many this answer holds): number, operating flight for codeshares, destination, scheduled, estimated and actual departure in UTC, status, delay in minutes from the scheduled time, verdict (delayed means more than late_threshold_minutes plus the airport's taxi_allowance_minutes; a recorded departure is not_graded with a null allowance or more than 60 minutes before its schedule), a link to its flight page and, when one is open, to its market. Without an airline filter, codeshare listings of one flight count once. The result links the gaduin.com page of the route when the destination is one airport with flights on record today, else the departure airport's page.",
           "inputSchema": {
             "properties": {
               "airline": {
                 "description": "Airline IATA or ICAO code (e.g. BA or BAW).",
+                "type": "string"
+              },
+              "date": {
+                "description": "Departure airport-local date YYYY-MM-DD, within the last 400 days or ahead. Defaults to the airport's today.",
+                "format": "date",
                 "type": "string"
               },
               "from": {
@@ -385,6 +988,11 @@
                 "maximum": 50,
                 "minimum": 1,
                 "type": "integer"
+              },
+              "scope": {
+                "description": "upcoming (default) lists the still-to-depart flights; day lists every matching flight scheduled to depart that local day (with no schedule, departed on it), departed and cancelled ones included.",
+                "enum": ["upcoming", "day"],
+                "type": "string"
               },
               "to": {
                 "description": "Destination airport IATA or ICAO code, or city name (e.g. JFK, KJFK or New York).",
@@ -407,7 +1015,47 @@
             "openWorld": true,
             "readOnly": true
           },
-          "digest": "sha256:75fbb48141b07ac9d58550476e33c8b1c106f42c0c895ff160c3ae0b91070ae3"
+          "digest": "sha256:d414fd5a98a9ccbe0726d2b43be82b402389a890bec11b48883eaf1034184446"
+        },
+        {
+          "name": "search_stations",
+          "title": "Search railway stations",
+          "description": "Finds railway stations by name or public code among every station a stored train calls at, on every network GADUIN reads, whether or not it has a page on gaduin.com: name, public code (null where the railway has only an internal identifier: then pass the name with network to get_station_board), network, country, coordinates, time zone and how it matched. Matches rank by public code (or the railway's own station number), whole name, start of name, then any part of it; accents and case are ignored. total counts every match; returned is how many this answer holds, the first limit of them. coverage_days: the catalogue holds every station a train scheduled from that many days ago onward calls at.",
+          "inputSchema": {
+            "properties": {
+              "limit": {
+                "description": "Max stations to return (1-50). Defaults to 20.",
+                "maximum": 50,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "network": {
+                "description": "The railway's country code to narrow the match, e.g. GB, US or CH.",
+                "type": "string"
+              },
+              "q": {
+                "description": "Station name, part of it, or its code, e.g. Zurich.",
+                "maxLength": 64,
+                "type": "string"
+              }
+            },
+            "required": ["q"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": true,
+            "title": "Search railway stations"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:f20892a8cf25f1af4ba3f8486b509d552ceb8e50fe46ba2255d7dcd58697e5a3"
         }
       ],
       "prompts": [
@@ -488,7 +1136,7 @@
           "digest": "sha256:6f20288562139a0d60ed6c63067be3a3115c3e3bcaea33c6a5104e77948e50bf"
         }
       ],
-      "digest": "sha256:ac03eee302df2e9524c9d7a977b85b18d8acc8f3aa8c0aca92c01b6afdf86a56"
+      "digest": "sha256:47110c8d1e6c71439a0c6fe6ab6d26ee9bebb5f7938808a69b553254a197478c"
     }
   }
 }
