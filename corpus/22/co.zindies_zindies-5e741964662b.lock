@@ -1,0 +1,588 @@
+{
+  "lockfileVersion": 2,
+  "subjects": {
+    "co.zindies/zindies": {
+      "kind": "mcp-server",
+      "source": {
+        "client": "manual",
+        "file": "registry.modelcontextprotocol.io"
+      },
+      "transport": {
+        "type": "http",
+        "url": "https://mcp.zindies.co/"
+      },
+      "protocol": {
+        "era": "modern",
+        "version": "2026-07-28",
+        "supportedVersions": ["2026-07-28"]
+      },
+      "serverInfo": {
+        "name": "zindies",
+        "title": "Zindies",
+        "version": "v1"
+      },
+      "capabilities": {
+        "logging": {},
+        "prompts": {
+          "listChanged": true
+        },
+        "resources": {
+          "listChanged": true
+        },
+        "tools": {
+          "listChanged": true
+        }
+      },
+      "instructions": "Zindies のデータ (独立出版 ZINE / 作家 / 取扱店舗 / イベント) を機械的に\n取得・操作するためのツールを提供します。\n\n読み取り (認証不要):\n- 「ZINE」で何があるか調べたい → search\n- 特定の作家/作品/店舗/イベントの詳細 → get_creator / get_creation /\n  get_place / get_event\n- 「この ZINE はどこで買えるか」→ get_creation (取扱店舗 places と\n  通販リンク online_links を返す。店舗の住所・座標つき)\n- 「この店は今日/この週末開いてる？」営業日・営業時間 → get_place\n  (business_hours: 営業中かどうか・営業時間の自由記述・今月と翌月の\n  日ごとの営業日カレンダー。Web ページを読む必要はない)\n- 「この店でイベントを開けるか・相談できるか」→ get_place\n  (event_proposals: 店が相談を受け付けていると表明していれば、店が書いた\n  条件 terms と相談の入口 contact_url。null は「表明していない」であって\n  断っているわけではない)\n- 近所のお店を探したい → find_places_nearby\n- 直近のイベントを聞かれたら → list_events\n- 特定の店舗で開催されるイベントを聞かれたら → list_events_by_place\n  (place token で絞り込み。token は get_place / search で取得)\n- 特定の作家の主催/参加イベントを聞かれたら → list_events_by_creator\n  (creator token で絞り込み。relation で organized/participating/all を選択)\n- 「この店/この作家のイベントをカレンダーに取り込みたい・購読したい」→\n  list_events_by_place / list_events_by_creator / get_place の `calendar`\n  (購読用 iCal フィード。ics_url / webcal_url / google_calendar_url)。\n  イベントを 1 件ずつ登録するより、このフィードの購読を案内する。\n  店舗の営業日カレンダーの購読は get_place の\n  `business_hours.calendar.ics_url` (別のフィード)\n\n登録不要の道具 (zindies.co/apps/*。Zindies が預かるデータではなく運営が配る道具):\n- 「手で小さな ZINE を作りたい」折って作るテンプレートの PDF・コンビニの\n  ネットプリント番号 → list_apps (app: orizine)\n- 「お店の営業日を画像にしたい」→ list_apps (app: calendar)。登録済みの店なら\n  営業日は get_place の business_hours にある\n\n使いどころ:\n- ユーザが書店・ギャラリー・古本屋・ZINE イベント・読書会・歌会などの\n  固有名詞を挙げたら、Zindies 登録の店舗/イベントである可能性が高い。\n  Web 検索の前にまず search を 1 回試す (コストは小さい)。名前は表記揺れ\n  (大文字小文字・スペース・カナ/ローマ字) があっても部分一致で見つかる。\n\n書き込み (Authorization: Bearer 必須。User API token か、Zindies の OAuth アクセストークン。\nOAuth のときは toggle_favorite に favorites:write、rsvp_event に participations:write のスコープが要る):\n- 作家/作品/店舗/イベントをお気に入りに登録・解除 → toggle_favorite\n- イベントに参加・取消 (自動でお気に入りも連動) → rsvp_event\n\nレスポンス言語:\n- 全ツール共通の `locale` パラメータ (ja / en / ko / zh-TW) で、名前・\n  タイトル・説明など翻訳可能フィールドの言語を指定できます。ユーザとの\n  会話の言語が対応ロケールのときは、その言語コードを渡してください。\n  未指定はソース言語 (ja)。翻訳が無いフィールドはソース言語のまま返ります。\n\nBearer token は https://developer.zindies.co/token からユーザが自身で発行する。\n読み取り系は public 公開データのみを返します (private/provisional は除外)。\n\nZindies の BaaS (OAuth / REST API) を使ったアプリ (主に UI) を生成する前に、\nリソース \"build-with-ai\" を読んでください。接続情報・認証・CORS・データ\nモデル・エンドポイント・規約をまとめた instruction です。\n",
+      "tools": [
+        {
+          "name": "find_places_nearby",
+          "description": "Find Zindies places (shops/venues) near a given lat/lng. Results ordered by distance with `distance_km` included.",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "latitude": {
+                "description": "Center latitude.",
+                "maximum": 90,
+                "minimum": -90,
+                "type": "number"
+              },
+              "limit": {
+                "default": 20,
+                "description": "Maximum number of places to return. Default 20, max 50.",
+                "maximum": 50,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "locale": {
+                "description": "Response language for translatable text fields (names, titles, descriptions). Pass the language the user is conversing in when it is one of the supported locales. Fields without a translation fall back to their source language. Default: ja.",
+                "enum": ["ja", "en", "ko", "zh-TW"],
+                "type": "string"
+              },
+              "longitude": {
+                "description": "Center longitude.",
+                "maximum": 180,
+                "minimum": -180,
+                "type": "number"
+              },
+              "radius_km": {
+                "default": 5,
+                "description": "Search radius in km. Default 5, max 500.",
+                "maximum": 500,
+                "minimum": 0.1,
+                "type": "number"
+              }
+            },
+            "required": ["latitude", "longitude"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:6baf4efc7d973a049b8104a36bfa8fcd8862d1e638cbea7df58f4487023fdb9f"
+        },
+        {
+          "name": "get_creation",
+          "description": "Get a single Zindies creation (zine/publication) by token, with its full creator list, the shops that carry it (places, with address and geo coordinates) and its online shop links (online_links). Use it to answer \"where can I buy this zine?\". Also returns signed testimonials written by recommenders; when quoting one, always include its attribution_text, keep the wording unchanged, and link to its url (the creation page; its share preview shows the testimonial).",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "locale": {
+                "description": "Response language for translatable text fields (names, titles, descriptions). Pass the language the user is conversing in when it is one of the supported locales. Fields without a translation fall back to their source language. Default: ja.",
+                "enum": ["ja", "en", "ko", "zh-TW"],
+                "type": "string"
+              },
+              "token": {
+                "description": "Public token of the creation.",
+                "type": "string"
+              }
+            },
+            "required": ["token"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:d6a434c94876c14afc7b3dddb6a385569f6d1803073b16f10a60cee67863677c"
+        },
+        {
+          "name": "get_creator",
+          "description": "Get a single Zindies creator (author/artist) by token, with their public creations.",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "locale": {
+                "description": "Response language for translatable text fields (names, titles, descriptions). Pass the language the user is conversing in when it is one of the supported locales. Fields without a translation fall back to their source language. Default: ja.",
+                "enum": ["ja", "en", "ko", "zh-TW"],
+                "type": "string"
+              },
+              "token": {
+                "description": "Public token of the creator.",
+                "type": "string"
+              }
+            },
+            "required": ["token"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:ffb567ed214339e3cfba2cc7261e4322ef73a800d31f16ff8b3749acbcb988e5"
+        },
+        {
+          "name": "get_event",
+          "description": "Get a single Zindies event by id, with its host (`place`, `organizer_creator`, or `organizer` = an organizing body such as a festival committee), registered creators, reserved booths, programs (workshops, talks and other sessions held within the event), and `source_posts` (the organizer's own Instagram or note posts introducing exhibitors who are not in `booths`; these people have no Zindies page, so link to `url` for details).",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "id": {
+                "description": "Numeric ID of the event.",
+                "type": "integer"
+              },
+              "locale": {
+                "description": "Response language for translatable text fields (names, titles, descriptions). Pass the language the user is conversing in when it is one of the supported locales. Fields without a translation fall back to their source language. Default: ja.",
+                "enum": ["ja", "en", "ko", "zh-TW"],
+                "type": "string"
+              }
+            },
+            "required": ["id"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:e6a8d16be4c77377ce0edc5dac6ca8e1387c09dd86f12c5adeaf72f89bd9246e"
+        },
+        {
+          "name": "get_place",
+          "description": "Get a single Zindies place (shop/venue) by token, with address, geo\ncoordinates, place type, zines available there, and business hours.\n`business_hours` (null when the place has published nothing about its\nhours) carries `status_now` (open / closed / unknown, same judgement as\nthe web page badge), `regular` (free-text hours / holidays / special\nnotes as written by the place) and `calendar` (the place's day-by-day\ncalendar for this month and next: `days` lists only dates the place has\nset, each with state open / open2 / closed, a `symbol` (○ / ◎ / ✕),\nopening times and `is_open`; `months[].legend` explains the symbols,\n`months[].note` carries the month's remark and `ics_url` is an iCal\nfeed of the same calendar for subscribing). A date missing from\n`calendar.days` has no day-specific setting: fall back to `regular`,\ndo not treat it as closed. Use this to answer \"is this shop open on\n(date)?\" without fetching the web page.\n\n`events` points at the place's events: `url` (the upcoming-events page)\nand `calendar`, a subscribable iCal feed of upcoming events (`ics_url`,\n`webcal_url` for Apple Calendar / Outlook, `google_calendar_url` to add\nit to Google Calendar). The place thus has two distinct feeds: opening\ndays (`business_hours.calendar.ics_url`) and events\n(`events.calendar.ics_url`). When the user asks to import or subscribe\nto a shop's events in their calendar, give them `events.calendar`; for\nthe event list itself use list_events_by_place.\n\n`event_proposals` is non-null only when the place has said it is open\nto people proposing an event to hold there: `terms` (what the place\nwrote about its space and conditions; may be null) and `contact_url`\n(the page where a creator or another shop starts that conversation).\nnull means the place has not said so on Zindies — it is not a refusal;\ndo not tell the user the place rejects events.\n",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "locale": {
+                "description": "Response language for translatable text fields (names, titles, descriptions). Pass the language the user is conversing in when it is one of the supported locales. Fields without a translation fall back to their source language. Default: ja.",
+                "enum": ["ja", "en", "ko", "zh-TW"],
+                "type": "string"
+              },
+              "token": {
+                "description": "Public token of the place.",
+                "type": "string"
+              }
+            },
+            "required": ["token"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:9ae7645cc6d98411ebc027525900ac6760d22b95905295aa1696c52b3bbf5579"
+        },
+        {
+          "name": "list_apps",
+          "description": "List the free, no-sign-up tools Zindies offers under zindies.co/apps/\n(not data Zindies holds about creators / shops / events). Use this when\nthe user wants to make a small ZINE by hand (a printable fold-up\ntemplate) or wants an image of a shop's monthly opening days for\nInstagram.\n\n- `orizine`: a printable template that turns one A4 sheet, cut and\n  folded, into an 8-page A7 mini book. `files` lists every public PDF\n  (pattern / page numbers / binding) with a direct `pdf_url`, and\n  `netprint` when a Japanese convenience-store \"Network Print\" code is\n  available for it (`user_code`, `expires_at`, `qr_url`; null when\n  there is none right now). Codes are shared by everyone and are\n  renewed before they expire, so always read them from this tool rather\n  than reusing an old one. Print single-sided at 100% scale. The\n  template is CC BY 4.0: credit Zindies; printing, handing out, adapting\n  and selling the ZINEs made with it are free.\n- `calendar`: a web page that draws a month of opening days / closed\n  days as a 1080x1350 PNG in the browser. It cannot be run through MCP:\n  give the user `url`. If the shop is already registered on Zindies,\n  its opening days are public data — use get_place (`business_hours`)\n  instead of asking the user to re-enter them.\n\nEach app carries `next_step`: how its output connects to Zindies\n(the signature printed on the output, registering as a creator /\nshop). Mention it once, quietly; do not push it.\n",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "app": {
+                "description": "Return only this app. Default: all apps.",
+                "enum": ["orizine", "calendar"],
+                "type": "string"
+              },
+              "locale": {
+                "description": "Response language for translatable text fields (names, titles, descriptions). Pass the language the user is conversing in when it is one of the supported locales. Fields without a translation fall back to their source language. Default: ja.",
+                "enum": ["ja", "en", "ko", "zh-TW"],
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:f27550a27a8dd42f712d79e6a209577929da69f37a9da0676169c96e0cd926c8"
+        },
+        {
+          "name": "list_events",
+          "description": "List upcoming and ongoing Zindies events (festivals, fairs, exhibitions).\nDayEvent (single-day) and PeriodEvent (multi-day) are unified, distinguished\nby event_type. Default range: today through 60 days ahead.\n",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "area": {
+                "description": "Filter by JP region.",
+                "enum": ["chubu", "chugoku", "hokkaido", "hokuriku", "kansai", "kanto", "koshinetsu", "kyushu", "okinawa", "shikoku", "tohoku"],
+                "type": "string"
+              },
+              "event_type": {
+                "default": "all",
+                "description": "Restrict by event type.",
+                "enum": ["day", "period", "all"],
+                "type": "string"
+              },
+              "from": {
+                "description": "Range start (YYYY-MM-DD). Default: today.",
+                "format": "date",
+                "type": "string"
+              },
+              "kind": {
+                "description": "Filter by event kind.",
+                "enum": ["non_genre", "zine_making", "author", "festival_style", "zine_cafe", "book_club", "utakai"],
+                "type": "string"
+              },
+              "limit": {
+                "default": 20,
+                "description": "Maximum number of events to return. Default 20, max 50.",
+                "maximum": 50,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "locale": {
+                "description": "Response language for translatable text fields (names, titles, descriptions). Pass the language the user is conversing in when it is one of the supported locales. Fields without a translation fall back to their source language. Default: ja.",
+                "enum": ["ja", "en", "ko", "zh-TW"],
+                "type": "string"
+              },
+              "to": {
+                "description": "Range end (YYYY-MM-DD). Default: from + 60 days.",
+                "format": "date",
+                "type": "string"
+              }
+            },
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:c80235ca31537dac3f32a943bd5eebd0987b354448f65d00c1f0bfcdf672a432"
+        },
+        {
+          "name": "list_events_by_creator",
+          "description": "List upcoming and ongoing Zindies events a creator (author/artist) is\ninvolved in, identified by the creator's public token. A creator relates\nto an event in two ways: as the host (events the creator itself hosts;\nrelation \"organized\") or as a participant (a reserved booth, being listed\nas a participating creator, or hosting/speaking in one of the event's\nprograms such as a workshop or talk). Use `relation` to choose which to\ninclude. Each event carries a `relations` array describing how this\ncreator relates to it. Note that the `organizer` field is a different\nthing: it is the organizing body (a festival committee or group) that\nhosts some events, not this creator. Same response shape as list_events\notherwise. Default range: today through 60 days ahead.\n\nThe response also carries `calendar`: a subscribable iCal feed of the\ncreator's upcoming events (`ics_url`, `webcal_url`, `google_calendar_url`\n— same shape as list_events_by_place). Hand these to the user when they\nwant to follow a creator's events in their calendar app.\n",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "creator_token": {
+                "description": "Public token of the creator.",
+                "type": "string"
+              },
+              "event_type": {
+                "default": "all",
+                "description": "Restrict by event type.",
+                "enum": ["day", "period", "all"],
+                "type": "string"
+              },
+              "from": {
+                "description": "Range start (YYYY-MM-DD). Default: today.",
+                "format": "date",
+                "type": "string"
+              },
+              "kind": {
+                "description": "Filter by event kind.",
+                "enum": ["non_genre", "zine_making", "author", "festival_style", "zine_cafe", "book_club", "utakai"],
+                "type": "string"
+              },
+              "limit": {
+                "default": 20,
+                "description": "Maximum number of events to return. Default 20, max 50.",
+                "maximum": 50,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "locale": {
+                "description": "Response language for translatable text fields (names, titles, descriptions). Pass the language the user is conversing in when it is one of the supported locales. Fields without a translation fall back to their source language. Default: ja.",
+                "enum": ["ja", "en", "ko", "zh-TW"],
+                "type": "string"
+              },
+              "relation": {
+                "default": "all",
+                "description": "Which events to include: events the creator itself hosts (organized), events they join via booth/listing/program (participating), or both (all).",
+                "enum": ["organized", "participating", "all"],
+                "type": "string"
+              },
+              "to": {
+                "description": "Range end (YYYY-MM-DD). Default: from + 60 days.",
+                "format": "date",
+                "type": "string"
+              }
+            },
+            "required": ["creator_token"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:b330a83214807ee1031aaf292b5a541e4a483aeea4e19d327ac9b24070567c1b"
+        },
+        {
+          "name": "list_events_by_place",
+          "description": "List upcoming and ongoing Zindies events held at a specific place\n(shop/venue), identified by its public token. Same semantics and\nresponse shape as list_events, but scoped to one place. Default range:\ntoday through 60 days ahead.\n\nThe response also carries `calendar`: a subscribable iCal feed of this\nplace's upcoming events (`ics_url`, plus `webcal_url` for Apple\nCalendar / Outlook and `google_calendar_url` to add it to Google\nCalendar). When the user wants to import, subscribe to, or sync a\nplace's events into their calendar app, hand them these URLs instead\nof copying events one by one — the feed stays up to date as the place\nadds events. Note this is distinct from the place's opening-days\ncalendar (`business_hours.calendar.ics_url` on get_place).\n",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "event_type": {
+                "default": "all",
+                "description": "Restrict by event type.",
+                "enum": ["day", "period", "all"],
+                "type": "string"
+              },
+              "from": {
+                "description": "Range start (YYYY-MM-DD). Default: today.",
+                "format": "date",
+                "type": "string"
+              },
+              "kind": {
+                "description": "Filter by event kind.",
+                "enum": ["non_genre", "zine_making", "author", "festival_style", "zine_cafe", "book_club", "utakai"],
+                "type": "string"
+              },
+              "limit": {
+                "default": 20,
+                "description": "Maximum number of events to return. Default 20, max 50.",
+                "maximum": 50,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "locale": {
+                "description": "Response language for translatable text fields (names, titles, descriptions). Pass the language the user is conversing in when it is one of the supported locales. Fields without a translation fall back to their source language. Default: ja.",
+                "enum": ["ja", "en", "ko", "zh-TW"],
+                "type": "string"
+              },
+              "place_token": {
+                "description": "Public token of the place (e.g. \"fqpi\").",
+                "type": "string"
+              },
+              "to": {
+                "description": "Range end (YYYY-MM-DD). Default: from + 60 days.",
+                "format": "date",
+                "type": "string"
+              }
+            },
+            "required": ["place_token"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:b7441f053e58166d54cc50231fe9bd103767d9b07269a8450d40c895bb4032f4"
+        },
+        {
+          "name": "rsvp_event",
+          "description": "Join or cancel the authenticated user's participation in a Zindies event. Requires a Bearer token (User API token).",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "action": {
+                "default": "join",
+                "description": "join (default) to participate, cancel to leave.",
+                "enum": ["join", "cancel"],
+                "type": "string"
+              },
+              "comment": {
+                "description": "Optional comment to attach when joining (ignored for cancel).",
+                "type": "string"
+              },
+              "event_id": {
+                "description": "Numeric ID of the event.",
+                "type": "integer"
+              },
+              "locale": {
+                "description": "Response language for translatable text fields (names, titles, descriptions). Pass the language the user is conversing in when it is one of the supported locales. Fields without a translation fall back to their source language. Default: ja.",
+                "enum": ["ja", "en", "ko", "zh-TW"],
+                "type": "string"
+              }
+            },
+            "required": ["event_id"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": false,
+            "openWorldHint": false,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": false,
+            "openWorld": false,
+            "readOnly": false
+          },
+          "digest": "sha256:69e11ddd246547d9ea0f8949002f359ed8887d95de9258bb7c6d04751602c51a"
+        },
+        {
+          "name": "search",
+          "description": "Search across Zindies creators, creations (zines), places (shops/venues),\nand events by keyword. Use `query` for the keyword and optional `type`\nto restrict to one resource. The response is always an object keyed by\nresource (`creators` / `creations` / `places` / `events`); with a single\n`type`, only that key is present. `limit_per_type` caps each list.\n",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "limit_per_type": {
+                "description": "Max items per resource type. Default 6 (max 24) when type=all; default 20 (max 50) for a single type.",
+                "maximum": 50,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "locale": {
+                "description": "Response language for translatable text fields (names, titles, descriptions). Pass the language the user is conversing in when it is one of the supported locales. Fields without a translation fall back to their source language. Default: ja.",
+                "enum": ["ja", "en", "ko", "zh-TW"],
+                "type": "string"
+              },
+              "query": {
+                "description": "Search keyword. Searches name/title/description and translations (multi-locale).",
+                "minLength": 2,
+                "type": "string"
+              },
+              "type": {
+                "default": "all",
+                "description": "Restrict to one resource type. 'all' returns every type.",
+                "enum": ["all", "creator", "creation", "place", "event"],
+                "type": "string"
+              }
+            },
+            "required": ["query"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:397ff46f654d55686d116e2f7dedba8d1194f258270d2f9e18ed7841968ce03e"
+        },
+        {
+          "name": "toggle_favorite",
+          "description": "Toggle the authenticated user's favorite on a creator, creation, place, or event. Requires a Bearer token (User API token).",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "locale": {
+                "description": "Response language for translatable text fields (names, titles, descriptions). Pass the language the user is conversing in when it is one of the supported locales. Fields without a translation fall back to their source language. Default: ja.",
+                "enum": ["ja", "en", "ko", "zh-TW"],
+                "type": "string"
+              },
+              "target_type": {
+                "description": "Type of the favoritable record.",
+                "enum": ["creator", "creation", "place", "event"],
+                "type": "string"
+              },
+              "token": {
+                "description": "Public token of the creator/creation/place. For events, pass the numeric event ID as a string.",
+                "type": "string"
+              }
+            },
+            "required": ["target_type", "token"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": false,
+            "openWorldHint": false,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": false,
+            "openWorld": false,
+            "readOnly": false
+          },
+          "digest": "sha256:6cebfb8f5e1c03bfc82a15f6b585d840a8f20f08b10deae2dfb2af367107c699"
+        }
+      ],
+      "resources": [
+        {
+          "uri": "https://zindies.co/build-with-ai.md",
+          "name": "build-with-ai",
+          "title": "Build a Zindies app with AI",
+          "description": "Instruction guide for building apps on the Zindies BaaS (OAuth / REST API). Read this before generating an app.",
+          "mimeType": "text/markdown",
+          "digest": "sha256:78fbc775630fa01b638625ba9d05816f0d28b6ecf9f832f817f1c9fefc5533aa"
+        }
+      ],
+      "digest": "sha256:202edb7ad05eac132e271f61f921a00311c2c7535610b02ba9fcb2082df79d22"
+    }
+  }
+}

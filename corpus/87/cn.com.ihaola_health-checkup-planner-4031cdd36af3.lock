@@ -25,7 +25,7 @@
           "listChanged": true
         }
       },
-      "instructions": "# 好啦体检服务（haola-pe）MCP 使用指南\n\n## 授权（先读这一节）\n\n本服务使用 OAuth 2.1 + PKCE。未授权时 tools/call 返回 HTTP 401，响应头带：\n  WWW-Authenticate: Bearer resource_metadata=\"<resource_metadata 地址>\"\n\n收到 401 后按顺序执行，不要跳过：\n1. GET 上面的 resource_metadata，取 authorization_servers[0]\n2. GET <issuer>/.well-known/oauth-authorization-server，取 authorization_endpoint、token_endpoint、registration_endpoint\n3. POST registration_endpoint 做动态客户端注册：redirect_uris=[\"http://127.0.0.1:<port>/callback\"]、token_endpoint_auth_method=\"none\"、grant_types=[\"authorization_code\",\"refresh_token\"]\n4. 生成 code_verifier 与 code_challenge(S256)，拼 authorize URL，按下面「授权链接怎么展示」发给用户并请其登录授权\n5. 在 127.0.0.1:<port> 监听 /callback 收 code；POST token_endpoint 换 access_token\n6. 带 Authorization: Bearer <token> 重试原调用\n\n## 授权链接怎么展示（重要）\n\nauthorize URL 含 client_id、code_challenge、state 等随机参数，长度通常在 250–400 字符，直接贴给用户极难阅读，还可能被聊天框折行截断。规则：\n- 正文不出现原始 URL。用一句话说明用途，再用 Markdown 链接把 URL 藏在锚文本里，例如：\n  [👉 点这里登录好啦账号完成授权](<authorize URL>)\n- 链接文字只写\"在哪做、做什么\"（如\"点这里登录好啦账号完成授权\"），不要写域名，也不要粘贴参数。\n- 给链接前后各加一句上下文：为什么需要登录（如保存方案、预约需要登录身份）、预计耗时、授权完成后会自动继续原本的任务，用户不用重说一遍。\n- 宿主支持表单或按钮时，优先用按钮或 elicitation 承载，正文不再提链接。\n- 只支持纯文本、无法渲染 Markdown 的宿主，先给一行可点击链接，再单独用代码块给出完整链接让用户复制，方便长 URL 被折行时仍可完整取用。\n- 用户反馈链接点不开时，退回\"复制这段链接到浏览器打开\"，并继续监听回调、等待重试，不要放弃。\n\n禁止行为：\n- 不要向用户索要 token —— 用户没有 token，token 由第 3–5 步产生\n- 不要把 401 当作\"接口不可用\"\"服务异常\"或\"功能未开通\"\n- 不要在宿主不支持 OAuth 时放弃：宿主只支持静态 header 时，用 HTTP 客户端（curl 等）手工执行 1–5，再把 token 放进请求头\n- URL 不得截断、缩写或用省略号代替，缺一个字符就会授权失败；也不要向用户复述、朗读原始 URL 的各个参数\n- 同一轮对话内链接只给一次，用户点过之后不要重复贴出整条 URL\n\n## 多步推理\n- 不确定参数与取值时，先用 help 查看工具入参说明，再调用业务工具。\n- 甲方归属使用当前登录身份，不要自行填写甲方 ID。\n- 品牌名→短码用 vendor_brands 查询，不要拼造。\n- 选机构时先看 vendor_brands 返回的 type：chain 是连锁品牌，hospital 是医院主体；两类都要调用 vendor_list 获取具体 hospitalCode，不能直接拿 vendorid 预约。\n- 宽接口 + filter：同一工具用不同过滤条件覆盖多种查询，不要把可用过滤当成缺失端点。\n\n## 体检套餐设计与预约流程\n- 个人套餐设计用 vendor_items：按 vendorId 和 population 查 items 和 rules；population 取 man=男性、girl=未婚女性、lady=已婚女性；返回当前人群适用的项目，以及必选、捆绑、互斥和替代关系。\n- 选好项目后调用 plan_create：传 vendorId、项目 ids 数组 itemIds、gender 和 marital，可选传 name、summary；女性必须传 marital（married/unmarried），男性可不传。返回 planId、vendorId，能查到注意事项时同时返回 caution。校验失败时按返回的 issues 修改 itemIds 后重试。\n- caution.cautions[].duration 使用 startDaysBeforeExam 和 endDaysBeforeExam 表示体检前天数，0 表示体检当天；description 可直接展示。没有 duration 表示没有日期限制。空条目不会返回；checkItems[].cautionids 与 cautions[].id 用于关联项目与注意事项。\n- 个人体检预约顺序：plan_create → 展示 caution 并确认用户已知晓 → 用户确认协议 → reservation_book。\n- 保存方案需要登录身份：plan_create 属于需要登录的接口。调用它之前不要假设已登录，直接调用即可，由服务端判定。\n- plan_create 返回授权失败（401，或 msg 为\"缺少用户身份\"）时，说明用户尚未登录或登录态已过期。此时按「授权」一节走 OAuth 流程，用「点这里登录好啦账号完成授权」这类 Markdown 链接请用户登录，拿到 token 后重试 plan_create。不要当作\"功能未开放\"\"服务异常\"，也不要把登录步骤说成可选。\n- plan_create 返回的 agentPrompt 是给用户的下一步建议，拿到 planId 后按 agentPrompt 主动询问用户，不要静默吞掉。\n- plan_create 返回 caution 时，必须在调用 reservation_book 之前向用户展示与本次项目相关的注意事项，按 duration 从早到晚动态组织时间线展示。不要套固定天数分组，也不要直接贴全文；重点提示空腹、停药、禁忌时间窗。孕期、备孕、月经期这类禁忌单独强调，因为它们会直接影响项目能不能做。\n- reservation_book 返回 caution 时，如果预约前尚未展示过，需要补充展示。这是兜底，不能替代预约前的展示。\n- 预约只传 planId 和预约信息，不提交体检项目；体检件随预约结果下发。\n- 预约参数：已有体检人时传 planId、hospitalCode、vendorid、appointmentDate、contactId，不传 customerName、customerID、customerMobile；没有 contactId 时传 planId、hospitalCode、vendorid、appointmentDate，再根据返回的 contacts 选择或新建体检人。reservation_book 返回体检人信息不完整错误时，调用 contact_update 补齐后重试。\n- 客户端不支持 elicitation form 时，reservation_book 同时返回 contactMethodRequired、contacts 和 contactEntryUrl。contacts 是当前用户的常用体检人列表；让用户选择已有体检人、在对话中填写，或直接打开 contactEntryUrl，不要强制跳转 H5。选择已有体检人后把对应 contactid 作为 contactId 传回；选择对话填写后带 contactMethod:\"conversation\" 重新调用。\n- 用户选择在对话中填写时，reservation_book 返回 contactRequired、待填字段和 contactDraftId。按字段逐项询问，每次只问一项，用户确认后把各字段、contactDraftId 和 consent=true 一起传回。证件号会出现在当前对话中，可能被客户端记录；该隐私提示只提示一次，提交后不复述、不回显证件号，只引用 contactId。\n- 用户选择 H5 时，直接打开已返回的 contactEntryUrl。用户添加体检人后重新调用 reservation_book，读取返回的 data.contacts 选择本次体检人并传 contactId。\n- 不要主动要求用户发送身份证号；用户已选择在对话中填写时，可以继续询问证件号。\n- 客户端不支持 elicitation form 时，协议确认返回 consentRequired 和协议正文，用户确认后带 consentText 重新调用。\n\n## reservation_book 失败处理\n- reservation_book 返回非成功结果时，禁止自动重试，禁止用相同参数反复调用。\n- 先读取 message/msg、data、subCode，按服务端返回的信息执行。\n- 返回 contactRequired、contactMethodRequired、consentRequired 等交互要求时，进入对应流程，不要当作失败重试。\n- 返回业务失败、权限失败、门店限制、项目限制、重复预约时，直接向用户展示失败信息并停止。\n- 只有收到 401 授权挑战、会话失效，或工具明确标注可重试时，才允许处理授权或重建会话后重试原调用一次。\n- 超时或连接断开造成结果未知时，不要直接重试预约，先提示用户本次预约状态未知。\n\n## 联系人健康档案\n- 仅设计套餐时，不因套餐需求创建联系人或保存健康画像。\n- 用户明确要求保存长期画像时：本人不传 contactid；家人先 contact_list({relation,gender})，唯一候选使用其 contactid，多个候选请用户选择。\n- 家人无候选且用户明确要求保存时，可 contact_create({relation,gender}) 创建临时联系人，姓名、手机号、证件号后补；创建后重新 contact_list 获取 contactid。\n- 用户纠正以前误写到本人档案的家人信息时，调用 contact_profile_correct。只删除时 source 不传 contactid，entries 指定记录和匹配条件；迁移到家人时同时传 targetContactid。\n- 严禁把家人信息写入本人档案。\n\n## 长耗时任务（重要）\n- 方案/报价、报告解读等可能是长耗时操作：先调提交类工具拿到立即返回的提交标志，不要阻塞等待。\n- 每完成一个阶段调用 progress_report，向用户推送可读进度（如「方案生成中，约 1 分钟」）。\n- 期间用查询类工具轮询，拿到最终结果后再回复用户。\n\n## 红线\n- 绝不编造订单/体检记录等数据，必须先调真实工具获取。\n- 甲方（partner UUID）与乙方（vendor 短码，如 health100/ruici）不可混用。",
+      "instructions": "# 好啦体检服务（haola-pe）MCP 使用指南\n\n## 授权（先读这一节）\n\n本服务使用 OAuth 2.1 + PKCE。未授权时 tools/call 返回 HTTP 401，响应头带：\n  WWW-Authenticate: Bearer resource_metadata=\"<resource_metadata 地址>\"\n部分工具在已通过鉴权但缺少用户身份时返回 403 且 msg 为\"缺少用户身份\"，同样需要走下面的授权流程。\n\n收到 401 后按顺序执行，不要跳过：\n1. GET 上面的 resource_metadata，取 authorization_servers[0] 与 resource（resource 后面必须原样使用）\n2. GET <issuer>/.well-known/oauth-authorization-server，取 authorization_endpoint、token_endpoint、registration_endpoint\n3. POST registration_endpoint 做动态客户端注册：redirect_uris=[\"http://127.0.0.1:<port>/callback\"]、token_endpoint_auth_method=\"none\"、application_type=\"native\"、client_name=<你的客户端名称>\n4. 生成 code_verifier 与 code_challenge(S256)，拼 authorize URL。以下参数缺一不可：response_type=code、client_id、redirect_uri、resource、code_challenge、code_challenge_method=S256、state。resource 用第 1 步拿到的原值，缺失或改写会返回 400 \"resource 无效\"。按下面「授权链接怎么展示」发给用户并请其登录授权\n5. 在 127.0.0.1:<port> 监听 /callback 收 code；POST token_endpoint 换 access_token，参数为 grant_type=authorization_code、code、client_id、redirect_uri、code_verifier、resource（必须与第 4 步一致，否则返回 invalid_target）\n6. 带 Authorization: Bearer <token> 重试原调用\n\n## 授权链接怎么展示（重要）\n\nauthorize URL 含 client_id、code_challenge、state 等随机参数，长度通常在 250–400 字符，直接贴给用户极难阅读，还可能被聊天框折行截断。规则：\n- 正文不出现原始 URL。用一句话说明用途，再用 Markdown 链接把 URL 藏在锚文本里，例如：\n  [👉 点这里登录好啦账号完成授权](<authorize URL>)\n- 链接文字只写\"在哪做、做什么\"（如\"点这里登录好啦账号完成授权\"），不要写域名，也不要粘贴参数。\n- 给链接前后各加一句上下文：为什么需要登录（如保存方案、预约需要登录身份）、预计耗时、授权完成后会自动继续原本的任务，用户不用重说一遍。\n- 宿主支持表单或按钮时，优先用按钮或 elicitation 承载，正文不再提链接。\n- 只支持纯文本、无法渲染 Markdown 的宿主，先给一行可点击链接，再单独用代码块给出完整链接让用户复制，方便长 URL 被折行时仍可完整取用。\n- 用户反馈链接点不开时，退回\"复制这段链接到浏览器打开\"，并继续监听回调、等待重试，不要放弃。\n\n禁止行为：\n- 不要向用户索要 token —— 用户没有 token，token 由第 3–5 步产生\n- 不要把 401 当作\"接口不可用\"\"服务异常\"或\"功能未开通\"\n- 不要在宿主不支持 OAuth 时放弃：宿主只支持静态 header 时，用 HTTP 客户端（curl 等）手工执行 1–5，再把 token 放进请求头\n- URL 不得截断、缩写或用省略号代替，缺一个字符就会授权失败；也不要向用户复述、朗读原始 URL 的各个参数\n- 同一轮对话内链接只给一次，用户点过之后不要重复贴出整条 URL\n\n## 多步推理\n- 不确定参数与取值时，先用 help 查看工具入参说明，再调用业务工具。\n- 甲方归属使用当前登录身份，不要自行填写甲方 ID。\n- 品牌名→短码用 vendor_brands 查询，不要拼造。\n- 选机构时先看 vendor_brands 返回的 type：chain 是连锁品牌，hospital 是医院主体；两类都要调用 vendor_list 获取具体 hospitalCode，不能直接拿 vendorid 预约。\n- 宽接口 + filter：同一工具用不同过滤条件覆盖多种查询，不要把可用过滤当成缺失端点。\n\n## 体检套餐设计与预约流程\n- 个人套餐设计用 vendor_items：按 vendorId 和 population 查 items 和 rules；population 取 man=男性、girl=未婚女性、lady=已婚女性；返回当前人群适用的项目，以及必选、捆绑、互斥和替代关系。\n- 选好项目后调用 plan_create：传 vendorId、项目 ids 数组 itemIds、gender 和 marital，可选传 name、summary；女性必须传 marital（married/unmarried），男性可不传。返回 planId、vendorId，能查到注意事项时同时返回 caution。校验失败时按返回的 issues 修改 itemIds 后重试。\n- caution.cautions[].duration 使用 startDaysBeforeExam 和 endDaysBeforeExam 表示体检前天数，0 表示体检当天；description 可直接展示。没有 duration 表示没有日期限制。空条目不会返回；checkItems[].cautionids 与 cautions[].id 用于关联项目与注意事项。\n- 个人体检预约顺序：plan_create → 展示 caution 并确认用户已知晓 → 用户确认协议 → reservation_book。\n- 个人体检保存方案需要登录身份。plan_create 返回 401，或返回 403 且 msg 为\"缺少用户身份\"时，说明用户未登录或登录态已过期，此时按「授权」一节走 OAuth 流程，用「点这里登录好啦账号完成授权」这类 Markdown 链接请用户登录，拿到 token 后重试 plan_create。不要当作\"功能未开放\"\"服务异常\"，也不要把登录步骤说成可选。\n- plan_create 返回的 agentPrompt 是给用户的下一步建议，拿到 planId 后按 agentPrompt 主动询问用户，不要静默吞掉。\n- plan_create 返回 caution 时，必须在调用 reservation_book 之前向用户展示与本次项目相关的注意事项，按 duration 从早到晚动态组织时间线展示。不要套固定天数分组，也不要直接贴全文；重点提示空腹、停药、禁忌时间窗。孕期、备孕、月经期这类禁忌单独强调，因为它们会直接影响项目能不能做。\n- reservation_book 返回 caution 时，如果预约前尚未展示过，需要补充展示。这是兜底，不能替代预约前的展示。\n- 预约参数：已有体检人时传 planId、hospitalCode、vendorid、appointmentDate、contactId，不传 customerName、customerID、customerMobile；没有 contactId 时传 planId、hospitalCode、vendorid、appointmentDate，再根据返回的 contacts 选择或新建体检人。reservation_book 返回体检人信息不完整错误时，调用 contact_update 补齐后重试。\n- 客户端不支持 elicitation form 时，reservation_book 同时返回 contactMethodRequired、contacts 和 contactEntryUrl。contacts 是当前用户的常用体检人列表；让用户选择已有体检人、在对话中填写，或直接打开 contactEntryUrl，不要强制跳转 H5。选择已有体检人后把对应 contactid 作为 contactId 传回；选择对话填写后带 contactMethod:\"conversation\" 重新调用。\n- 用户选择在对话中填写时，reservation_book 返回 contactRequired、待填字段和 contactDraftId。按字段逐项询问，每次只问一项，用户确认后把各字段、contactDraftId 和 consent=true 一起传回。证件号会出现在当前对话中，可能被客户端记录；该隐私提示只提示一次，提交后不复述、不回显证件号，只引用 contactId。\n- 用户选择 H5 时，直接打开已返回的 contactEntryUrl。用户添加体检人后重新调用 reservation_book，读取返回的 data.contacts 选择本次体检人并传 contactId。\n- 不要主动要求用户发送身份证号；用户已选择在对话中填写时，可以继续询问证件号。\n- 客户端不支持 elicitation form 时，协议确认返回 consentRequired 和协议正文，用户确认后带 consentText 重新调用。\n\n## reservation_book 失败处理\n- reservation_book 返回非成功结果时，禁止自动重试，禁止用相同参数反复调用。\n- 先读取 message/msg、data、subCode，按服务端返回的信息执行。\n- 返回 contactRequired、contactMethodRequired、consentRequired 等交互要求时，进入对应流程，不要当作失败重试。\n- 返回业务失败、权限失败、门店限制、项目限制、重复预约时，直接向用户展示失败信息并停止。\n- 只有收到 401 授权挑战、会话失效，或工具明确标注可重试时，才允许处理授权或重建会话后重试原调用一次。\n- 超时或连接断开造成结果未知时，不要直接重试预约，先提示用户本次预约状态未知。\n\n## 联系人健康档案\n- 仅设计套餐时，不因套餐需求创建联系人或保存健康画像。\n- 用户明确要求保存长期画像时：本人不传 contactid；家人先 contact_list({relation,gender})，唯一候选使用其 contactid，多个候选请用户选择。\n- 家人无候选且用户明确要求保存时，可 contact_create({relation,gender}) 创建临时联系人，姓名、手机号、证件号后补；创建后重新 contact_list 获取 contactid。\n- 用户纠正以前误写到本人档案的家人信息时，调用 contact_profile_correct。只删除时 source 不传 contactid，entries 指定记录和匹配条件；迁移到家人时同时传 targetContactid。\n- 严禁把家人信息写入本人档案。\n\n## 长耗时任务（重要）\n- 方案/报价、报告解读等可能是长耗时操作：先调提交类工具拿到立即返回的提交标志，不要阻塞等待。\n- 每完成一个阶段调用 progress_report，向用户推送可读进度（如「方案生成中，约 1 分钟」）。\n- 期间用查询类工具轮询，拿到最终结果后再回复用户。\n\n## 红线\n- 绝不编造订单/体检记录等数据，必须先调真实工具获取。\n- 甲方（partner UUID）与乙方（vendor 短码，如 health100/ruici）不可混用。",
       "tools": [
         {
           "name": "card_list",
@@ -454,6 +454,40 @@
           "digest": "sha256:6ab38e9a547e4bbc904851d3c5c1a044609b969716980ed1af86240b3292187e"
         },
         {
+          "name": "corp_vendor_onboard",
+          "title": "corp.vendor_onboard",
+          "description": "[匿名可调用] 提交体检机构上架申请：用户想去的体检机构不在 vendor_list 返回结果中时调用，记录机构名并通知好啦跟进上架。userContact 用于回访用户，用户给到联系方式后可再次调用补充。本体: corp → Action: vendor_onboard",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "city": {
+                "type": "string"
+              },
+              "userContact": {
+                "type": "string"
+              },
+              "userNote": {
+                "type": "string"
+              },
+              "vendorContact": {
+                "type": "string"
+              },
+              "vendorName": {
+                "type": "string"
+              }
+            },
+            "required": ["vendorName"],
+            "type": "object"
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:231e4537c9c649bed623c0d70573a2e73448b82c02762447e0ad3eaa1ad6f8f9"
+        },
+        {
           "name": "help",
           "title": "help",
           "description": "[匿名可调用] 三级帮助系统。无参列出本体；传 ontology 列出该本体下工具；传 ontology 和 sub_action 查看参数，sub_action 用完整名称，如 vendor.list、plan.create。",
@@ -554,7 +588,7 @@
         {
           "name": "plan_create",
           "title": "plan.create",
-          "description": "[需要登录] 创建体检方案：按乙方项目规则校验客户端选择的项目并保存，返回 planId、vendorId、issues；name、summary 可选传入并返回；能查到注意事项时同时返回 caution，caution 已转换为面向 agent 的结构。itemIds 必须来自 vendor_items 返回的 items[].id；女性必须传 marital（married/unmarried），男性可不传；校验失败时返回 issues，不返回 planId。返回 caution 时，必须在调用 reservation.book 之前向用户展示与本次项目相关的注意事项，按 duration 从早到晚动态组织时间线，不套固定天数分组，重点提示空腹、停药、禁忌时间窗。拿到 planId 后再调用 reservation.book 预约。本体: plan → Action: create\n\n鉴权：需要用户登录令牌，或已经绑定用户的云市场实例凭证。未登录调用返回 401；云市场实例未绑定用户时返回 code=40003 和 data.bindUrl。",
+          "description": "[需要登录] 创建体检方案：按乙方项目规则校验客户端选择的项目并保存，返回 planId、vendorId、issues；name、summary 可选传入并返回；能查到注意事项时同时返回 caution，caution 已转换为面向 agent 的结构。itemIds 必须来自 vendor_items 返回的 items[].id；女性必须传 marital（married/unmarried），男性可不传；校验失败时返回 issues，不返回 planId。返回 caution 时，必须在调用 reservation.book 之前向用户展示与本次项目相关的注意事项，按 duration 从早到晚动态组织时间线，不套固定天数分组，重点提示空腹、停药、禁忌时间窗。本体: plan → Action: create\n\n鉴权：需要用户登录令牌，或已经绑定用户的云市场实例凭证。未登录调用返回 401；云市场实例未绑定用户时返回 code=40003 和 data.bindUrl。",
           "inputSchema": {
             "$schema": "https://json-schema.org/draft/2020-12/schema",
             "properties": {
@@ -589,7 +623,7 @@
             "openWorld": true,
             "readOnly": false
           },
-          "digest": "sha256:7be4d05d31d3d7f2a66c959930b6692807666391b793bf206df9c8e66a931722"
+          "digest": "sha256:f187c92e6cd5a8896febc77b0d36633f2389e1f47601d826fb603999e2a54b6b"
         },
         {
           "name": "progress_report",
@@ -894,7 +928,7 @@
           "digest": "sha256:071f012b68032dd4ba7903761478ce6698d74fc0bed27571acb341309c0849c1"
         }
       ],
-      "digest": "sha256:fed962cea6cf91ee5170d282f3bd287b226f98c90887f1be4c938dba9ae7c582"
+      "digest": "sha256:f62be1de6886c7774f140f8b2367aa782811f9bbfb1a9cf7a3c28e4f199109eb"
     }
   }
 }

@@ -37,7 +37,7 @@
           "listChanged": true
         }
       },
-      "instructions": "ENTSO-E European power-market data: prices, load, generation, cross-border flows, outages. Hot-path is DuckDB-over-Parquet — queries are sub-second over the cached ingest. Use `data_coverage` before assuming a recent date is landed.\n\nDATE CONVENTION (read before every series query):\n  • Default: `start`/`end` are UTC. `start` is INCLUSIVE, `end` is EXCLUSIVE — i.e. ts_utc ∈ [start, end).\n  • For 'all of April 2026' use start=2026-04-01, end=2026-05-01 (NOT end=2026-04-30 — that drops April 30 entirely, plus any local-time hours of April that fall on UTC dates outside the window for non-UTC zones).\n  • For 'yesterday' use start=YESTERDAY, end=TODAY.\n\nMARKET-DAY CONVENTION (use this for any 'what was the price on day X' question):\n  • The SDAC pan-European day-ahead auction defines its delivery day on a CET/CEST-aligned 24-hour grid for every coupled bidding zone — same UTC window for DE_LU, ES, GR, FI, PT, etc. (EPEX SPOT MRC process: 'All timings indicated in this document are CET timings'). UTC midnights slice off the last 1–2 hours of the real market day and pull in 1–2 from the next.\n  • For market-day questions ('yesterday's DE_LU baseload', 'May 2026 ES capture rate'), pass tz='Europe/Berlin' so the window aligns to the auction's delivery day. Example: get_day_ahead_prices(zone='DE_LU', start='2026-05-11', end='2026-05-12', tz='Europe/Berlin') returns exactly the 24 SDAC delivery hours for May 11.\n  • For per-zone-local-clock questions (rare; consumer-style: 'when was the consumption peak in Spain yesterday in Madrid time?') pass tz='local' — resolves to the zone's own IANA tz (Europe/Madrid for ES, etc.), NOT the auction grid.\n  • For zone-agnostic / cross-time-zone analysis, keep the UTC default.\n  • Responses always include a `period` field with start_utc, end_utc, duration_hours, and (when a zone is involved) start_local/end_local — verify duration_hours matches your intent (a 30-day month is 720 h).\n  • aggregation='daily'|'monthly' buckets follow the resolved tz: UTC by default; with tz= set, buckets align to that tz's day/month and are labeled by the local period start as a plain 'YYYY-MM-DD' string (the period block echoes bucket_tz). Market-day daily means = tz='Europe/Berlin' + aggregation='daily' in one call.\n\nDATA RESOLUTION (read before per-hour math):\n  • Most endpoints publish at PT60M (one row per hour). Some zones have rolled over to MTU=15min (PT15M) for select endpoints — notably `day_ahead_price` for DE_LU, and `actual_load`/`generation_per_type` across many zones. Data is stored at the native resolution it was published at.\n  • For day-ahead prices specifically: the auction still clears HOURLY, so the 4 quarter rows of an hour all carry the same price value. An hourly AVG of PT15M DA prices equals the original hourly price; a SUM would 4× over-count.\n  • For per-hour math on raw rows: aggregate to hourly first via `DATE_TRUNC('hour', ts_utc)` + AVG, THEN operate. The `get_derivation` tools handle this internally — `capture_price`, `negative_price_hours`, `residual_load`, `res_share`, `tb_spread` all aggregate to hourly before counting/averaging so the per-hour math is consistent across zones.\n  • For raw-row consumers: check the response row count vs expected hours. 2880 rows for a 720-hour April → PT15M storage; 720 rows → PT60M. Use `aggregation='hourly'` on `get_series` (or the `/api/series` / `/download` query param) to collapse to one row per hour at query time, regardless of native storage.",
+      "instructions": "European power-market data from ENTSO-E and other publishers: prices, load, generation, cross-border flows, balancing, outages. Answers come from one store, kept current; most return in under a second. Use `data_coverage` before assuming data for a recent date is available.\n\nDATE CONVENTION (read before every series query):\n  • Default: `start`/`end` are UTC. `start` is INCLUSIVE, `end` is EXCLUSIVE — i.e. ts_utc ∈ [start, end).\n  • For 'all of April 2026' use start=2026-04-01, end=2026-05-01 (NOT end=2026-04-30 — that drops April 30 entirely, plus any local-time hours of April that fall on UTC dates outside the window for non-UTC zones).\n  • For 'yesterday' use start=YESTERDAY, end=TODAY.\n\nMARKET-DAY CONVENTION (use this for any 'what was the price on day X' question):\n  • The SDAC pan-European day-ahead auction defines its delivery day on a CET/CEST-aligned 24-hour grid for every coupled bidding zone — same UTC window for DE_LU, ES, GR, FI, PT, etc. (EPEX SPOT MRC process: 'All timings indicated in this document are CET timings'). UTC midnights slice off the last 1–2 hours of the real market day and pull in 1–2 from the next.\n  • For market-day questions ('yesterday's DE_LU baseload', 'May 2026 ES capture rate'), pass tz='Europe/Berlin' so the window aligns to the auction's delivery day. Example: get_day_ahead_prices(zone='DE_LU', start='2026-05-11', end='2026-05-12', tz='Europe/Berlin') returns exactly the 24 SDAC delivery hours for May 11.\n  • For per-zone-local-clock questions (rare; consumer-style: 'when was the consumption peak in Spain yesterday in Madrid time?') pass tz='local' — resolves to the zone's own IANA tz (Europe/Madrid for ES, etc.), NOT the auction grid.\n  • For zone-agnostic / cross-time-zone analysis, keep the UTC default.\n  • Responses always include a `period` field with start_utc, end_utc, duration_hours, and (when a zone is involved) start_local/end_local — verify duration_hours matches your intent (a 30-day month is 720 h).\n  • aggregation='daily'|'monthly' buckets follow the resolved tz: UTC by default; with tz= set, buckets align to that tz's day/month and are labelled by the local period start as a plain 'YYYY-MM-DD' string (the period block echoes bucket_tz). Market-day daily means = tz='Europe/Berlin' + aggregation='daily' in one call.\n\nDATA RESOLUTION (read before per-hour math):\n  • Most endpoints publish at PT60M (one row per hour). Some zones have rolled over to MTU=15min (PT15M) for select endpoints — notably `day_ahead_price` for DE_LU, and `actual_load`/`generation_per_type` across many zones. Data is stored at the native resolution it was published at.\n  • For day-ahead prices specifically: the auction still clears HOURLY, so the 4 quarter rows of an hour all carry the same price value. An hourly AVG of PT15M DA prices equals the original hourly price; a SUM would 4× over-count.\n  • For per-hour math on raw rows: aggregate to hourly first via `DATE_TRUNC('hour', ts_utc)` + AVG, THEN operate. The `get_derivation` tools handle this internally — `capture_price`, `negative_price_hours`, `residual_load`, `res_share`, `tb_spread` all aggregate to hourly before counting/averaging so the per-hour math is consistent across zones.\n  • For raw-row consumers: check the response row count vs expected hours. 2880 rows for a 720-hour April → PT15M storage; 720 rows → PT60M. Use `aggregation='hourly'` on `get_series` (or the `/api/series` / `/download` query param) to collapse to one row per hour at query time, regardless of native storage.",
       "tools": [
         {
           "name": "compare_zones",
@@ -124,7 +124,7 @@
         {
           "name": "data_coverage",
           "title": "Check data coverage",
-          "description": "Show ingest coverage and lag for (endpoint × zone) — call before queries\nif you're not sure whether the data is landed yet.",
+          "description": "Show what data is available and how current it is for (endpoint × zone)\n— call before querying if you're not sure a recent date is available yet.",
           "inputSchema": {
             "additionalProperties": false,
             "properties": {
@@ -175,7 +175,7 @@
               "tags": []
             }
           },
-          "digest": "sha256:c56f3b7a20e2e049b629d5e1ef0a0838ced6a8f390f952e407eb3833f8d12c9d"
+          "digest": "sha256:217953543f6d4c3fc17971aa0f8b8e41ed817634bcb357b3272aafb8abd28124"
         },
         {
           "name": "get_crossborder_flow",
@@ -301,7 +301,7 @@
         {
           "name": "get_derivation",
           "title": "Get a derived metric",
-          "description": "Compute **capture price**, **capture rate** (a.k.a. value factor /\nquality factor / Marktwertfaktor), **TBx battery-arbitrage spreads**,\nand other generation-weighted market metrics server-side from landed\nParquet. Use this instead of fetching hourly prices + hourly generation\nyourself and weighting them client-side — server-side aggregation has\nno row cap and no pagination.\n\n`slug`: a key from list_derivations() — today: `\"capture_price\"`,\n`\"negative_price_hours\"`, `\"residual_load\"`, `\"res_share\"`,\n`\"emissions\"`, `\"tb_spread\"`.\n\n`tb_spread` returns monthly (default) or annual (aggregation='annual')\nTop-Bottom spreads TB1/TB2/TB4/TB6 in <currency>/MW per period — the sum\nof daily (top-x minus bottom-x hourly prices) over SDAC market days. The\nonly slug accepting `aggregation`, and the only one accepting\nmulti-zone `zone` ('all', a list, or CSV). Example — annual TB2 across\nevery European market in ONE call:\n  get_derivation(\"tb_spread\", \"2025-01-01\", \"2026-01-01\",\n                 zone=\"all\", aggregation=\"annual\")\nFor a single day's top/bottom hour TIMESTAMPS use get_tb_spread.\n\n`capture_price` returns monthly rows per (zone, psr_type, currency) with\ncolumns: currency, capture_price_eur_per_mwh, baseload_price_eur_per_mwh,\nquality_factor (the capture rate = capture/baseload), total_gen_mwh,\nn_hours. Months are bucketed by local time using the zone's IANA\ntimezone.\n\nENDED INPUTS: when an input series stopped upstream before the window's\nend, the answer carries `series_ended` (per zone for a multi-zone\ntb_spread): which inputs, why, what carries each on, and any metric that\ncarries this one on. GB: ENTSO-E's day-ahead price ended 2020-12-31, so\nGB capture_price, negative_price_hours and tb_spread stop there;\n`capture_price_mid` covers GB 2016-09 → now against the Market Index\nPrice (a traded index, not the auction — read its note).\n\nCURRENCY (capture_price and tb_spread alike): the `*_eur_per_mwh` /\n`tb*_eur_per_mw` key names are FIXED for API stability and do NOT track\nthe actual unit — read the row's `currency` column, which is\nauthoritative (EUR for euro zones, GBP for GB, PLN/RON/BGN for the\nPL/RO/BG local-currency eras). The response echoes it top-level as\n`currency`; a window spanning two currencies instead sets `unit` to null\nwith `mixed_currency: true` and a `currencies` list. A month (or period)\nspanning a redenomination splits into one row PER CURRENCY, each computed\nonly from that currency's hours — so never average or sum a price column\nacross rows with different `currency` values. Summing `total_gen_mwh`\nacross them IS correct: the split rows partition the month's hours rather\nthan duplicating them. `quality_factor` is a ratio and stays comparable\nacross currencies.\n\n`emissions` returns monthly rows per (zone, psr_type) with columns:\ngeneration_mwh, n_hours, emission_factor_kg_per_mwh, emissions_t_co2.\nProduction-based; IPCC AR5 lifecycle factors. Zero-emission rows\n(nuclear, wind, solar, hydro, geothermal, marine) appear with\nemissions_t_co2 = 0 — useful for stacked charts.\n\nFilter via `psr_types=[\"solar\",\"wind_onshore\",\"wind_offshore\"]` (or\nraw B-codes like \"B16\") to get only the technologies you care about.\nDefaults to all psr_types that have generation data.\n\nExample — Spain solar capture price, last 12 months:\n  get_derivation(\"capture_price\", \"2025-05-01\", \"2026-05-01\",\n                 zone=\"ES\", psr_types=[\"B16\"], tz=\"Europe/Madrid\")\nExample — Germany 2024 emissions by fuel:\n  get_derivation(\"emissions\", \"2024-01-01\", \"2025-01-01\",\n                 zone=\"DE_LU\", tz=\"Europe/Berlin\")\nReturns 12 monthly rows in one call; no pagination.",
+          "description": "Compute **capture price**, **capture rate** (a.k.a. value factor /\nquality factor / Marktwertfaktor), **TBx battery-arbitrage spreads**,\nand other generation-weighted market metrics server-side from the\nstored data. Use this instead of fetching hourly prices + hourly generation\nyourself and weighting them client-side — server-side aggregation has\nno row cap and no pagination.\n\n`slug`: a key from list_derivations() — today: `\"capture_price\"`,\n`\"negative_price_hours\"`, `\"residual_load\"`, `\"res_share\"`,\n`\"emissions\"`, `\"tb_spread\"`.\n\n`tb_spread` returns monthly (default) or annual (aggregation='annual')\nTop-Bottom spreads TB1/TB2/TB4/TB6 in <currency>/MW per period — the sum\nof daily (top-x minus bottom-x hourly prices) over SDAC market days. The\nonly slug accepting `aggregation`, and the only one accepting\nmulti-zone `zone` ('all', a list, or CSV). Example — annual TB2 across\nevery European market in ONE call:\n  get_derivation(\"tb_spread\", \"2025-01-01\", \"2026-01-01\",\n                 zone=\"all\", aggregation=\"annual\")\nFor a single day's top/bottom hour TIMESTAMPS use get_tb_spread.\n\n`capture_price` returns monthly rows per (zone, psr_type, currency) with\ncolumns: currency, capture_price_eur_per_mwh, baseload_price_eur_per_mwh,\nquality_factor (the capture rate = capture/baseload), total_gen_mwh,\nn_hours. Months are bucketed by local time using the zone's IANA\ntimezone.\n\nENDED INPUTS: when an input series stopped upstream before the window's\nend, the answer carries `series_ended` (per zone for a multi-zone\ntb_spread): which inputs, why, what carries each on, and any metric that\ncarries this one on. GB: ENTSO-E's day-ahead price ended 2020-12-31, so\nGB capture_price, negative_price_hours and tb_spread stop there;\n`capture_price_mid` covers GB 2016-09 → now against the Market Index\nPrice (a traded index, not the auction — read its note).\n\nCURRENCY (capture_price and tb_spread alike): the `*_eur_per_mwh` /\n`tb*_eur_per_mw` key names are FIXED for API stability and do NOT track\nthe actual unit — read the row's `currency` column, which is\nauthoritative (EUR for euro zones, GBP for GB, PLN/RON/BGN for the\nPL/RO/BG local-currency eras). The response echoes it top-level as\n`currency`; a window spanning two currencies instead sets `unit` to null\nwith `mixed_currency: true` and a `currencies` list. A month (or period)\nspanning a redenomination splits into one row PER CURRENCY, each computed\nonly from that currency's hours — so never average or sum a price column\nacross rows with different `currency` values. Summing `total_gen_mwh`\nacross them IS correct: the split rows partition the month's hours rather\nthan duplicating them. `quality_factor` is a ratio and stays comparable\nacross currencies.\n\n`emissions` returns monthly rows per (zone, psr_type) with columns:\ngeneration_mwh, n_hours, emission_factor_kg_per_mwh, emissions_t_co2.\nProduction-based; IPCC AR5 lifecycle factors. Zero-emission rows\n(nuclear, wind, solar, hydro, geothermal, marine) appear with\nemissions_t_co2 = 0 — useful for stacked charts.\n\nFilter via `psr_types=[\"solar\",\"wind_onshore\",\"wind_offshore\"]` (or\nraw B-codes like \"B16\") to get only the technologies you care about.\nDefaults to all psr_types that have generation data.\n\nExample — Spain solar capture price, last 12 months:\n  get_derivation(\"capture_price\", \"2025-05-01\", \"2026-05-01\",\n                 zone=\"ES\", psr_types=[\"B16\"], tz=\"Europe/Madrid\")\nExample — Germany 2024 emissions by fuel:\n  get_derivation(\"emissions\", \"2024-01-01\", \"2025-01-01\",\n                 zone=\"DE_LU\", tz=\"Europe/Berlin\")\nReturns 12 monthly rows in one call; no pagination.",
           "inputSchema": {
             "additionalProperties": false,
             "properties": {
@@ -415,7 +415,7 @@
               "tags": []
             }
           },
-          "digest": "sha256:b2009c6896ee1ce9efdf8344ea8b6da82a841d8280487dcabf675db011b0b358"
+          "digest": "sha256:d6173db068c9b63f59491fdfb88abdcc62dd487e3a03c32a52f3d0f81616a2df"
         },
         {
           "name": "get_generation",
@@ -493,7 +493,7 @@
         {
           "name": "get_load",
           "title": "Get load (actual or forecast)",
-          "description": "Actual or forecast load (MW). kind = actual | forecast | both.\n\n`start`/`end` default to UTC; `start` inclusive, `end` EXCLUSIVE.\nFor a full calendar month set `end` to the first day of the next\nmonth. Pass `tz=\"local\"` or an IANA name to interpret start/end as\nwall-clock in that timezone.",
+          "description": "Actual or forecast load (MW). kind = actual | forecast | both.\n\n`start`/`end` default to UTC; `start` inclusive, `end` EXCLUSIVE.\nFor a full calendar month set `end` to the first day of the next\nmonth. Pass `tz=\"local\"` or an IANA name to interpret start/end as\nwall-clock in that timezone.\n\nGB/UK: ENTSO-E's GB load ended 2021-06-15. A later window answers with\n`series_ended` naming `demand_outturn_transmission` (Elexon) — national\ndemand at the transmission boundary, ~5.5 GW below total load, not the\nsame quantity.",
           "inputSchema": {
             "additionalProperties": false,
             "properties": {
@@ -550,7 +550,7 @@
               "tags": []
             }
           },
-          "digest": "sha256:b73114863fc462c267e640f12b90ac4be33ca65d904107273c150b4e4b947302"
+          "digest": "sha256:193463843531c871d229fb28253a4a4c8155ca45ec0c2a588f8caa67835bce8f"
         },
         {
           "name": "get_outages",
@@ -625,7 +625,7 @@
         {
           "name": "get_series",
           "title": "Get a time series",
-          "description": "Generic time-series query for ANY registered series endpoint.\n\nOne tool covers every (non-outage) endpoint in the registry, so adding\na new dataset (call `list_endpoints()` to see the current 14) gets an\nMCP surface automatically — no new tool to learn.\n\nArgument shape adapts to the endpoint:\n  • single-zone (day_ahead_price, actual_load, generation_per_type, …)\n    → pass `zone=\"DE_LU\"`\n  • cross-zone  (crossborder_flow, scheduled_exchanges,\n                 net_transfer_capacity_dayahead)\n    → pass `from_zone=\"DE_LU\"` AND `to_zone=\"FR\"`\n  • psr-dependent (generation_per_type, wind_solar_forecast,\n                   installed_generation_capacity)\n    → optionally filter via `psr_types=[\"solar\",\"wind_onshore\"]`\n\n`start`/`end`: UTC by default; `start` inclusive, `end` EXCLUSIVE\n(for \"all of April 2026\" use end=2026-05-01). Pass `tz=\"local\"` or an\nIANA name to interpret as wall-clock in that timezone.\n\n`aggregation`: 'raw' (default — native PT15M/PT60M per endpoint),\n'hourly' (AVG over quarters → one row per hour, useful for the\ngrowing list of PT15M-stored endpoints like DE_LU day_ahead_price),\n'daily', or 'monthly'. For day-ahead prices specifically the auction\nstill clears hourly even where stored at PT15M, so AVG=any-quarter;\nSUM would 4× over-count.\n\nCurrency: price columns keep `_eur_` in their names for stability. An\nendpoint whose rows carry a `currency` column (day-ahead and intraday\nprices, the A81/A15 capacity prices, activated_balancing_price,\nimbalance_prices) labels each row (PLN, HUF, RON, CZK, GBP, …) and the\nresponse `unit` follows it; `unit` is null when the window mixes\ncurrencies (`mixed_currency`) or, for activated_balancing_price and\nimbalance_prices, holds rows of unknown currency\n(`currency_unknown_rows`). Never average a price across rows with\ndifferent `currency`.\n\nSplit periods: when a response carries `split_periods`, some periods hold\nmore than one row — different published series told apart by the listed\ncolumns (activated_balancing_price: `product`, e.g. CZ/SK mFRR standard\nA01 vs specific A02; or `currency`). Never average across them. Keep one\nwith `filters={\"product\": [\"A01\"]}` — `filters` takes any categorical\ncolumn of the endpoint (`{column: [values]}`).\n\nProcess types: activated balancing prices are one endpoint per ENTSO-E\nprocessType (activated_balancing_price = A16 realised; _mfrr_scheduled =\nA60, _mfrr_direct = A61, _afrr_local = A68) — different prices for the\nsame period, never to be merged. `related_series` names the siblings\nholding data for the zone.\n\nEnded series: a window reaching past the day a series stopped upstream\n(a zone that left ENTSO-E, a frozen archive, a series that ended) carries\n`series_ended` — the last day, why, and `successors`: the endpoints that\ncarry it on, each with a ready `call` and a `note` on how it differs. GB\nday-ahead after 2020-12-31 → day_ahead_price_imrp (GBP/MWh); GB\ngeneration after 2021-06-15 → generation_mix (NESO).\n\nOutage-family endpoints (different schema) stay on `get_outages()`.",
+          "description": "Generic time-series query for ANY registered series endpoint.\n\nOne tool covers every dataset except outages (call `list_endpoints()`\nto see them all), so a new dataset needs no new tool to learn.\n\nArgument shape adapts to the endpoint:\n  • single-zone (day_ahead_price, actual_load, generation_per_type, …)\n    → pass `zone=\"DE_LU\"`\n  • cross-zone  (crossborder_flow, scheduled_exchanges,\n                 net_transfer_capacity_dayahead)\n    → pass `from_zone=\"DE_LU\"` AND `to_zone=\"FR\"`\n  • psr-dependent (generation_per_type, wind_solar_forecast,\n                   installed_generation_capacity)\n    → optionally filter via `psr_types=[\"solar\",\"wind_onshore\"]`\n\n`start`/`end`: UTC by default; `start` inclusive, `end` EXCLUSIVE\n(for \"all of April 2026\" use end=2026-05-01). Pass `tz=\"local\"` or an\nIANA name to interpret as wall-clock in that timezone.\n\n`aggregation`: 'raw' (default — native PT15M/PT60M per endpoint),\n'hourly' (AVG over quarters → one row per hour, useful for the\ngrowing list of PT15M-stored endpoints like DE_LU day_ahead_price),\n'daily', or 'monthly'. For day-ahead prices specifically the auction\nstill clears hourly even where stored at PT15M, so AVG=any-quarter;\nSUM would 4× over-count.\n\nCurrency: price columns keep `_eur_` in their names for stability. An\nendpoint whose rows carry a `currency` column (day-ahead and intraday\nprices, the A81/A15 capacity prices, activated_balancing_price,\nimbalance_prices) labels each row (PLN, HUF, RON, CZK, GBP, …) and the\nresponse `unit` follows it; `unit` is null when the window mixes\ncurrencies (`mixed_currency`) or, for activated_balancing_price and\nimbalance_prices, holds rows of unknown currency\n(`currency_unknown_rows`). Never average a price across rows with\ndifferent `currency`.\n\nSplit periods: when a response carries `split_periods`, some periods hold\nmore than one row — different published series told apart by the listed\ncolumns (activated_balancing_price: `product`, e.g. CZ/SK mFRR standard\nA01 vs specific A02; or `currency`). Never average across them. Keep one\nwith `filters={\"product\": [\"A01\"]}` — `filters` takes any categorical\ncolumn of the endpoint (`{column: [values]}`).\n\nProcess types: activated balancing prices are one endpoint per ENTSO-E\nprocessType (activated_balancing_price = A16 realised; _mfrr_scheduled =\nA60, _mfrr_direct = A61, _afrr_local = A68) — different prices for the\nsame period, never to be merged. `related_series` names the siblings\nholding data for the zone.\n\nEnded series: a window reaching past the day a series stopped upstream\n(a zone that left ENTSO-E, a frozen archive, a series that ended) carries\n`series_ended` — the last day, why, and `successors`: the endpoints that\ncarry it on, each with a ready `call` and a `note` on how it differs. GB\nday-ahead after 2020-12-31 → day_ahead_price_imrp (GBP/MWh); GB\ngeneration after 2021-06-15 → generation_mix (NESO).\n\nOutage-family endpoints (different schema) stay on `get_outages()`.",
           "inputSchema": {
             "additionalProperties": false,
             "properties": {
@@ -743,7 +743,7 @@
               "tags": []
             }
           },
-          "digest": "sha256:3b56f64922cd5568c7a1787ea04a6cbf822cb888a10cef4039ef25af02ad5a3d"
+          "digest": "sha256:7caa6948747c65f111fe93a0ef3c3d8cd32d6cee467beb082933662a78c734d6"
         },
         {
           "name": "get_tb_spread",
@@ -793,7 +793,7 @@
         {
           "name": "list_derivations",
           "title": "List derived metrics",
-          "description": "List computed-metric derivations available via get_derivation().\n\nEach derivation is a metric computed on-the-fly from one or more\nlanded endpoints (Tier-2 Parquet). Today: capture_price (monthly\nVWAP capture price + baseload + capture rate per technology;\n\"capture rate\" is the industry-standard name for what the JSON\nresponse calls `quality_factor`), negative_price_hours, residual_load,\nres_share, emissions (monthly CO2 emissions per fuel using IPCC\nAR5 lifecycle factors, production-based), and tb_spread (monthly or\nannual Top-Bottom battery-arbitrage spread TB1/TB2/TB4/TB6 per zone\non SDAC market days; accepts zone='all' for every zone in one call).",
+          "description": "List computed-metric derivations available via get_derivation().\n\nEach derivation is a metric computed on the fly from one or more\nstored datasets. Today: capture_price (monthly\nVWAP capture price + baseload + capture rate per technology;\n\"capture rate\" is the industry-standard name for what the JSON\nresponse calls `quality_factor`), negative_price_hours, residual_load,\nres_share, emissions (monthly CO2 emissions per fuel using IPCC\nAR5 lifecycle factors, production-based), and tb_spread (monthly or\nannual Top-Bottom battery-arbitrage spread TB1/TB2/TB4/TB6 per zone\non SDAC market days; accepts zone='all' for every zone in one call).",
           "inputSchema": {
             "additionalProperties": false,
             "properties": {},
@@ -831,7 +831,7 @@
               "tags": []
             }
           },
-          "digest": "sha256:06d4344217ef116e6070734ffd521cb59ca11100d7d3999c82d08f384c1d9de4"
+          "digest": "sha256:446c6eb1db9934ee6c736a32dfce94842346644d64c4569b4c2ba2cfa6c6b984"
         },
         {
           "name": "list_endpoints",
@@ -996,47 +996,55 @@
       "resources": [
         {
           "uri": "entsoe://coverage",
-          "name": "_coverage",
-          "mimeType": "text/plain",
+          "name": "coverage",
+          "title": "Coverage and freshness",
+          "description": "How fresh each dataset is, as one JSON document: for every single-zone dataset in every active zone, when it was last refreshed, the minutes since, its freshness target and a class (green, amber, red, retired, unpublished, dormant; null if never loaded), plus a count per class. It holds no date ranges: to check whether a recent date is available, call data_coverage.",
+          "mimeType": "application/json",
           "meta": {
             "fastmcp": {
               "tags": []
             }
           },
-          "digest": "sha256:e6a6ec9f4746bb7554297a212d44000d5ddeba2ef6e4ef824de88c007d6e07fa"
+          "digest": "sha256:44ddda538667ca6a249a43b738769dc34edf3ddc154438946c072d49442cea48"
         },
         {
           "uri": "entsoe://endpoints",
-          "name": "_endpoints",
-          "mimeType": "text/plain",
+          "name": "endpoints",
+          "title": "Datasets",
+          "description": "Every dataset the server serves, as one JSON document: label, family, source and its required attribution, the source's usual currency (each price row's own currency wins), granularity, typical update interval, earliest date, columns, unit and a description. See also: list_endpoints.",
+          "mimeType": "application/json",
           "meta": {
             "fastmcp": {
               "tags": []
             }
           },
-          "digest": "sha256:4df1c577429020dc5695a29e74ce952ebe543a94bdd121a6194ab0ad9f598afe"
+          "digest": "sha256:8b3589545f44dc7d766c36e7969e88f63bcfbd617900508b1d106f4d1633635a"
         },
         {
           "uri": "entsoe://psr-types",
-          "name": "_psr_types",
-          "mimeType": "text/plain",
+          "name": "psr-types",
+          "title": "Production types",
+          "description": "The production-type codes used in generation data, as one JSON document: ENTSO-E's B-codes plus codes native to one source, each with a label, fuel class and whether it counts as generation. A source-native code is not interchangeable with a similar-looking B-code. See also: list_psr_types.",
+          "mimeType": "application/json",
           "meta": {
             "fastmcp": {
               "tags": []
             }
           },
-          "digest": "sha256:6575214c0afcf07b75ea4df05cca355dea67ea0172966ef114c7c10363361642"
+          "digest": "sha256:e56ad15ee249de8c7293c563d5e8a3c375dd984829273079b897d6774333648c"
         },
         {
           "uri": "entsoe://zones",
-          "name": "_zones",
-          "mimeType": "text/plain",
+          "name": "zones",
+          "title": "Bidding zones",
+          "description": "Every bidding zone the server knows, active and legacy, as one JSON document: key, name, country, EIC code, IANA time zone, status, successor zone, market cluster, sub-zones, earliest-data hints where set, and notes. See also: list_zones.",
+          "mimeType": "application/json",
           "meta": {
             "fastmcp": {
               "tags": []
             }
           },
-          "digest": "sha256:d123a677b07864095c214bc193cc077537d01f0a4aeca0c69fd47a87c373d233"
+          "digest": "sha256:3dcd8471a48b7aa6dc5977f4c595fb2865506584f8f12f8ad6b11b4c8f24915f"
         }
       ],
       "prompts": [
@@ -1097,7 +1105,7 @@
           "digest": "sha256:dcfeec321c4c8fb01f312519601a48d010d2a0c404fcd2ed5e182261ec7b7d0b"
         }
       ],
-      "digest": "sha256:16f3047e90aa0579c870aa32a0c587337fe63fcbb5ebdc79c79f57706e29c11e"
+      "digest": "sha256:985080238c745c54eac98e3141c018ca079c79f863d03a7575a4db4a105b49f9"
     }
   }
 }
