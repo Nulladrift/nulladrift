@@ -1809,6 +1809,107 @@
           "digest": "sha256:af07751600654549957bcb26de8eb560281d3a3fed936205247db9b205262d33"
         },
         {
+          "name": "payment_guard_authorize",
+          "title": "Payment Guard",
+          "description": "Payment Guard: enforce your own spend rules before an agent pays. Set rules once per API key (or an account default): max_per_call_usd, daily_budget_usd, period_budget_usd + period_hours, allowed_sellers, allowed_domains, max_calls_per_minute, max_calls_per_hour. Then send each payment intent to POST /v1/payment-guard/authorize: allow returns a short-lived Ed25519-signed clearance (not a payment signature) and reserves the amount against your budgets atomically; block returns HTTP 403 with reasons and nothing is reserved. POST /v1/payment-guard/proxy does the same check and, on allow, forwards your client-signed PAYMENT-SIGNATURE (or X-PAYMENT) to the seller once per event_id. Non-custodial: Screwtape.ai never holds funds and never accepts private keys, seeds or mnemonics. Requires a Bearer API key. authorize and proxy use one shared free-tier or prepaid call each ($0.005 equivalent); rules endpoints are free. Same event_id + body replays the decision without billing again. Over MCP, send the Bearer API key as the Authorization header of the MCP connection. Set rules first with PUT https://screwtape.ai/v1/payment-guard/rules. A block is a normal result (isError false, decision \"block\").",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "agent_id": {
+                "description": "Which agent wants to pay.",
+                "pattern": "^[A-Za-z0-9._:-]{1,128}$",
+                "type": "string"
+              },
+              "amount_usd": {
+                "description": "Amount the agent wants to pay.",
+                "exclusiveMinimum": 0,
+                "maximum": 1000000,
+                "type": "number"
+              },
+              "domain": {
+                "description": "Seller hostname, checked against allowed_domains.",
+                "maxLength": 253,
+                "type": "string"
+              },
+              "event_id": {
+                "description": "Your id for this payment. Reusing it with the same body replays the decision.",
+                "pattern": "^[A-Za-z0-9._:-]{1,128}$",
+                "type": "string"
+              },
+              "payee": {
+                "description": "Payee address or id, checked against allowed_sellers.",
+                "maxLength": 128,
+                "type": "string"
+              },
+              "payment_required": {
+                "description": "Optional: the seller's 402 payload, used to read the payee."
+              },
+              "seller_url": {
+                "description": "Public https URL of the paid resource. Required for proxy.",
+                "format": "uri",
+                "type": "string"
+              }
+            },
+            "required": ["agent_id", "amount_usd", "event_id"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "properties": {
+              "clearance": {
+                "description": "Ed25519-signed clearance on allow. Not a payment signature.",
+                "type": ["object", "null"]
+              },
+              "decision": {
+                "enum": ["allow", "block"],
+                "type": "string"
+              },
+              "reason": {
+                "type": "string"
+              },
+              "reasons": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "remaining_daily_usd": {
+                "type": "number"
+              },
+              "remaining_period_usd": {
+                "type": "number"
+              },
+              "replayed": {
+                "type": "boolean"
+              },
+              "request_id": {
+                "type": "string"
+              },
+              "rules_source": {
+                "enum": ["key", "account", "none"],
+                "type": "string"
+              },
+              "rules_version": {
+                "type": "string"
+              }
+            },
+            "required": ["decision", "reason", "request_id"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": false
+          },
+          "digest": "sha256:357df19fedc07b184b7e4c380f641eb49868807cd2c9c6dd035f1235a524989e"
+        },
+        {
           "name": "publish_receipt",
           "title": "Publish one signed receipt as a Screwtape Verified badge",
           "description": "Publish a signed receipt you own so a public page and a Screwtape Verified badge can link to that one verdict. Call it when you want to show that a specific output received a specific verdict. Do NOT call it to certify an agent in general: the page says this output received this verdict at this time, and it is not a general safety certification of the agent. Nothing is public until this call. Inputs: receipt_id (required), include_content (optional boolean, default false; true stores and shows the task and agent output only if that call was retained), label (optional, at most 80 characters), unpublish (optional boolean; true removes the public page). Returns public_url, badge_svg_url, embed_html, and embed_markdown. Requires the API key that owns the receipt. Cost: free.",
@@ -1873,6 +1974,202 @@
             "readOnly": false
           },
           "digest": "sha256:53ed9fe652ee3d1325b14722a973899c5c6c3f860abfe1601fc1098318ce5c0a"
+        },
+        {
+          "name": "trust_score",
+          "title": "Seller trust score",
+          "description": "Seller trust score: check whether a paying agent looks abusive or risky before you accept payment. Scores velocity, failed or refused payments, dispute-like patterns, and new versus established history across the Screwtape.ai seller network. Returns a 0–1 trust score, allow/review/block, risk and reasons. Subject values are hashed with a global network HMAC; reporter contributions are weighted by how the reporter paid (per-call payment > prepaid > free) and capped per reporter. window and observations are mutually exclusive. Raw IPs, payer addresses and keys are never stored. $0.005 per call (shared free tier; no monthly plan).",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "agent_id": {
+                "maxLength": 128,
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9._:-]+$",
+                "type": "string"
+              },
+              "event_id": {
+                "maxLength": 128,
+                "minLength": 1,
+                "pattern": "^[A-Za-z0-9._:-]+$",
+                "type": "string"
+              },
+              "lookback_hours": {
+                "description": "How far back stored signals are read. Default 24.",
+                "maximum": 168,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "observations": {
+                "items": {
+                  "additionalProperties": false,
+                  "properties": {
+                    "at": {
+                      "description": "ISO-8601 time; bucketed to the UTC day. Defaults to now.",
+                      "type": "string"
+                    },
+                    "count": {
+                      "maximum": 1000,
+                      "minimum": 1,
+                      "type": "integer"
+                    },
+                    "type": {
+                      "enum": ["payment_ok", "payment_failed", "payment_refused", "dispute_opened", "dispute_closed", "seen"],
+                      "type": "string"
+                    }
+                  },
+                  "required": ["type"],
+                  "type": "object"
+                },
+                "maxItems": 32,
+                "type": "array"
+              },
+              "subject": {
+                "additionalProperties": false,
+                "properties": {
+                  "kind": {
+                    "description": "payer, agent or caller. The value is hashed immediately and never stored raw.",
+                    "enum": ["payer", "agent", "caller"],
+                    "type": "string"
+                  },
+                  "value": {
+                    "description": "Opaque subject id from the seller. Hashed with a global network HMAC shared across sellers; raw value is discarded.",
+                    "maxLength": 256,
+                    "minLength": 1,
+                    "type": "string"
+                  }
+                },
+                "required": ["kind", "value"],
+                "type": "object"
+              },
+              "window": {
+                "additionalProperties": false,
+                "description": "Optional seller-computed counts for this request only. Mutually exclusive with observations (sending both is rejected). Counts only; no identifiers.",
+                "properties": {
+                  "dispute_open": {
+                    "maximum": 1000,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "first_seen_hours_ago": {
+                    "maximum": 87600,
+                    "minimum": 0,
+                    "type": ["number", "null"]
+                  },
+                  "hours": {
+                    "maximum": 168,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  "payment_failed": {
+                    "maximum": 100000,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "payment_ok": {
+                    "maximum": 100000,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "payment_refused": {
+                    "maximum": 100000,
+                    "minimum": 0,
+                    "type": "integer"
+                  }
+                },
+                "type": "object"
+              }
+            },
+            "required": ["subject"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "properties": {
+              "reasons": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "receipt_id": {
+                "type": "string"
+              },
+              "request_id": {
+                "type": "string"
+              },
+              "risk": {
+                "enum": ["low", "medium", "high"],
+                "type": "string"
+              },
+              "score": {
+                "description": "Trust score from 0 (risky) to 1 (trusted).",
+                "maximum": 1,
+                "minimum": 0,
+                "type": "number"
+              },
+              "signals": {
+                "description": "Derived counts only. No subject identifiers.",
+                "properties": {
+                  "dispute_open": {
+                    "type": "integer"
+                  },
+                  "established": {
+                    "type": "boolean"
+                  },
+                  "failure_rate": {
+                    "type": "number"
+                  },
+                  "lookback_hours": {
+                    "type": "integer"
+                  },
+                  "payment_failed": {
+                    "type": "integer"
+                  },
+                  "payment_ok": {
+                    "type": "integer"
+                  },
+                  "payment_refused": {
+                    "type": "integer"
+                  },
+                  "persisted": {
+                    "type": "boolean"
+                  },
+                  "subject_age_hours": {
+                    "type": ["number", "null"]
+                  },
+                  "total_attempts": {
+                    "type": "integer"
+                  },
+                  "velocity_per_day": {
+                    "type": "number"
+                  }
+                },
+                "type": "object"
+              },
+              "verdict": {
+                "enum": ["allow", "review", "block"],
+                "type": "string"
+              },
+              "verify_url": {
+                "type": "string"
+              }
+            },
+            "required": ["reasons", "request_id", "risk", "score", "signals", "verdict"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": false
+          },
+          "digest": "sha256:c56bdef0dee9c0607a1753c2c920fc91c3675da26ae18832c0a4671a9f09a723"
         },
         {
           "name": "try_check",
@@ -1981,7 +2278,7 @@
           "digest": "sha256:9ac464a84967962df96a5748ee8832053bdd644fca6af388cf30c4de46c665db"
         }
       ],
-      "digest": "sha256:5a10b7d6e70635b32c4b14f566e00351c478123245434302d0121f6f968c3f8d"
+      "digest": "sha256:201bc2c927939cb1e98aa915f42ddfdd9c228d40cd09824aab9e3527102a508f"
     }
   }
 }
