@@ -26,7 +26,7 @@
           "listChanged": false
         }
       },
-      "instructions": "Cnamio connects end users' custom domains to an app. To integrate it into a codebase, call get_integration_guide and follow it. To connect a domain now: check_domain, then connect_domain_automatic (when connectMethods has api_token and the domain owner gives a provider API token) or connect_domain (returns the records to create), then get_connection_status until completed. DNS records that already exist are never changed. Domain tools need the application credentials (HTTP Basic applicationId:secret) or a session token; ask the project owner, never invent them.",
+      "instructions": "Cnamio connects end users' custom domains to an app. To integrate it into a codebase, call get_integration_guide and follow it. To connect a domain now: check_domain, then connect_domain_automatic (when connectMethods has api_token and the domain owner gives a provider API token) or connect_domain (returns the records to create), then get_connection_status until completed. DNS records that already exist are never deleted; the only one that can change is an SPF policy, extended with every existing term kept. When someone else manages the DNS (an agency, the IT team), create_share_link returns a url to send them. Connected domains keep being monitored: get_connection_status and list_connections report health (healthy, degraded, broken). Domain tools need the application credentials (HTTP Basic applicationId:secret) or a session token; ask the project owner, never invent them.",
       "tools": [
         {
           "name": "check_domain",
@@ -226,9 +226,99 @@
           "digest": "sha256:62335e20e69915c376017eafef89af95a62ab0bcf80892de4c67f56b5fe934af"
         },
         {
+          "name": "create_share_link",
+          "title": "Create a shareable connection link",
+          "description": "Creates a link (url) that the person who manages the DNS (an agency, the IT team) opens to connect these domains with these records, without the application secret. Bound to the domains and records given; single-use per domain by default (maxUses), expires in 7 days by default (expiresInDays, at most 30). The url holds a token shown only in this answer: hand it to the person, never log it. Connections started from it appear as usual, with share_link_id.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "dnsRecords": {
+                "description": "Records your product needs. host is relative to the zone; placeholders {DOMAIN}, {SUBDOMAIN}, {SLD}, {TLD}; @ is the apex (no CNAME at the apex).",
+                "items": {
+                  "properties": {
+                    "host": {
+                      "examples": ["{SUBDOMAIN}"],
+                      "type": "string"
+                    },
+                    "optional": {
+                      "type": "boolean"
+                    },
+                    "priority": {
+                      "type": "integer"
+                    },
+                    "ttl": {
+                      "type": "integer"
+                    },
+                    "type": {
+                      "enum": ["A", "AAAA", "CNAME", "TXT", "MX", "CAA"],
+                      "type": "string"
+                    },
+                    "value": {
+                      "examples": ["custom.yourapp.com"],
+                      "type": "string"
+                    }
+                  },
+                  "required": ["host", "type", "value"],
+                  "type": "object"
+                },
+                "maxItems": 20,
+                "minItems": 1,
+                "type": "array"
+              },
+              "domains": {
+                "examples": [
+                  ["links.mybrand.com"]
+                ],
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 20,
+                "minItems": 1,
+                "type": "array"
+              },
+              "expiresInDays": {
+                "default": 7,
+                "maximum": 30,
+                "minimum": 0.05,
+                "type": "number"
+              },
+              "label": {
+                "description": "Your own note, never shown on the link page.",
+                "type": "string"
+              },
+              "maxUses": {
+                "default": 1,
+                "description": "Connections each domain may start through the link.",
+                "maximum": 100,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "userId": {
+                "description": "Your user id, echoed in jobs and webhooks.",
+                "type": "string"
+              }
+            },
+            "required": ["dnsRecords", "domains"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": false,
+            "openWorldHint": false,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": false,
+            "openWorld": false,
+            "readOnly": false
+          },
+          "digest": "sha256:c71583870536e1d56b9aa6a0672771c0c84a837dd8726944fca5c30a6caa89ed"
+        },
+        {
           "name": "get_connection_status",
           "title": "Connection status",
-          "description": "Status of a connection: pending, in_progress, completed (connected) or failed (72 hours without propagation).",
+          "description": "Status of a connection: pending, in_progress, completed (connected) or failed (72 hours without propagation). A connected domain keeps being monitored (read-only): health is healthy, degraded (an optional record is gone, or the zone cannot be read) or broken (a required record is gone), with missing_records listing what is gone.",
           "inputSchema": {
             "additionalProperties": false,
             "properties": {
@@ -251,7 +341,7 @@
             "openWorld": false,
             "readOnly": true
           },
-          "digest": "sha256:d78881eaa0fae2da7b29845993bca699c7774fcd4c070402509e2807b037bdf3"
+          "digest": "sha256:a85885e203a3932c8e7686dbaffee1de2fac41684c0e0c8842f40cb94ab7680d"
         },
         {
           "name": "get_integration_guide",
@@ -277,11 +367,16 @@
         {
           "name": "list_connections",
           "title": "List connections",
-          "description": "Recent connections of the application, newest first, optionally for one domain or status. Needs the application credentials (not a session token).",
+          "description": "Recent connections of the application, newest first, optionally for one domain, status or monitoring health (use health: \"broken\" to find connected domains whose records disappeared). Needs the application credentials (not a session token).",
           "inputSchema": {
             "additionalProperties": false,
             "properties": {
               "domain": {
+                "type": "string"
+              },
+              "health": {
+                "description": "Only connections in this monitoring state.",
+                "enum": ["healthy", "degraded", "broken"],
                 "type": "string"
               },
               "limit": {
@@ -307,12 +402,12 @@
             "openWorld": false,
             "readOnly": true
           },
-          "digest": "sha256:967b147d9fc2cec6edd803d2301839f424851461b89132999a620d35d55beb26"
+          "digest": "sha256:8565df45081c4009069d4e3d916ee1adea8ff9e2ac889cbb7d69d45b24c6fdb1"
         },
         {
           "name": "recheck_propagation",
           "title": "Check propagation now",
-          "description": "Asks Cnamio to check the domain's authoritative nameservers again now (at most once every 5 minutes per connection).",
+          "description": "Asks Cnamio to check the domain's authoritative nameservers again now (at most once every 5 minutes per connection; 429 before that). Only for connections still in progress: one that is already completed or failed answers 409 and nothing is checked.",
           "inputSchema": {
             "additionalProperties": false,
             "properties": {
@@ -337,10 +432,39 @@
             "openWorld": true,
             "readOnly": false
           },
-          "digest": "sha256:a08dbbe324dd80610e758a68315ca983a089248b75fd2078c01dbb116119e93e"
+          "digest": "sha256:6d5e1d5542253563d3c8fb0c3ef1e5140dfab7758952946ada06325c496651d1"
+        },
+        {
+          "name": "revoke_share_link",
+          "title": "Revoke a shareable connection link",
+          "description": "Ends a shareable link now: it hands out nothing more. Connections already started go on.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "shareLinkId": {
+                "pattern": "^shl_[A-Za-z0-9_-]{16}$",
+                "type": "string"
+              }
+            },
+            "required": ["shareLinkId"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": false
+          },
+          "digest": "sha256:aa71d12ec46747849fa0608bc13d80ccf43695f9620ffd4bc9debce46ab6ea4a"
         }
       ],
-      "digest": "sha256:d95985875f99c313b225e7ed7a3e3659b64d4604884f6167a554d9eba20d1bab"
+      "digest": "sha256:b7489707f4c9f4a553cb0d5030a548f49ba338d3a265d6ec0ea149cd8b059cec"
     }
   }
 }

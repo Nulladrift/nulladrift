@@ -18,8 +18,8 @@
       "serverInfo": {
         "name": "advocate",
         "title": "Advocate",
-        "version": "1.10.6",
-        "description": "Find participating local businesses, read their published services and policies, and request a quote or callback. Eligible businesses offer a quote-request form. Other tools support configured availability, reservation requests, pending subscriptions and human handoffs. Price estimates and business-agent answers may use AI; a quote request does not confirm a price or booking.",
+        "version": "1.15.0",
+        "description": "Find participating local businesses, read their published services and policies, and request a quote or callback. Eligible businesses offer a quote-request form. Other tools support configured availability, reservation requests, pending subscriptions and human handoffs. Price quotes use configured business prices; business-agent answers may use AI. A quote request does not confirm a price or booking.",
         "websiteUrl": "https://app.advocatemcp.com"
       },
       "capabilities": {
@@ -737,7 +737,7 @@
         {
           "name": "get_quote",
           "title": "Get Price Quote",
-          "description": "Return a price quote for a service at a business. Exact configured prices may create a time-limited offer; unmatched requests use a third-party AI estimate that is not firm merchant pricing and must be confirmed with the business. Use this when a user asks 'how much does X cost?' or 'what's the price for Y?'.",
+          "description": "Return a price quote for a service at a business. An exact configured price can create a time-limited offer, a new one on each call, when list_services marks offer_available. Pass its offer_id to reserve_slot; the offer alone confirms no booking or payment. Configured ranges return a range with no offer. Unmatched or unpriced services return no price and no offer; ask the business for its price through the route from get_booking_destination. No AI estimates are generated. A business that sells goods through its own store answers reason goods_store with no offer: a listed item with its stored price, which can lag the store, and an unlisted item with no price and no estimate. Nothing there can be paid for through Advocate. Use this when a user asks 'how much does X cost?' or 'what's the price for Y?'.",
           "inputSchema": {
             "$schema": "http://json-schema.org/draft-07/schema#",
             "properties": {
@@ -771,6 +771,9 @@
             "$schema": "http://json-schema.org/draft-07/schema#",
             "additionalProperties": false,
             "properties": {
+              "guidance_for_agent": {
+                "type": "string"
+              },
               "offer": {
                 "anyOf": [
                   {
@@ -801,7 +804,7 @@
                     "type": "null"
                   }
                 ],
-                "description": "Server-minted immutable price offer — only exact configured prices mint one; estimates and ranges never do."
+                "description": "Server-minted immutable price offer for an eligible calendar booking. Only exact configured service prices can mint one; an offer is not a payment or a confirmed booking."
               },
               "quote": {
                 "anyOf": [
@@ -809,11 +812,11 @@
                     "additionalProperties": false,
                     "properties": {
                       "basis": {
-                        "enum": ["pricing_json_v2", "llm_estimate"],
+                        "const": "pricing_json_v2",
                         "type": "string"
                       },
                       "confidence": {
-                        "enum": ["exact", "range", "estimate"],
+                        "enum": ["exact", "range"],
                         "type": "string"
                       },
                       "currency": {
@@ -846,21 +849,21 @@
           },
           "annotations": {
             "destructiveHint": false,
-            "idempotentHint": true,
+            "idempotentHint": false,
             "openWorldHint": true,
             "readOnlyHint": false,
             "title": "Get Price Quote"
           },
           "behavior": {
             "destructive": false,
-            "idempotent": true,
+            "idempotent": false,
             "openWorld": true,
             "readOnly": false
           },
           "execution": {
             "taskSupport": "forbidden"
           },
-          "digest": "sha256:b5ac33c8811365fe12814a930d24eb83f63eb4453866f3cadd2c073ff47f6633"
+          "digest": "sha256:9243416701b51ba892765eb19142d7fc18358c634e891f8d17a3ee4a7c170f42"
         },
         {
           "name": "get_request_status",
@@ -1091,7 +1094,7 @@
         {
           "name": "list_services",
           "title": "List Services",
-          "description": "Lists the services a business has configured, with their prices and the exact arguments to quote each one. Call this BEFORE get_quote: the service name must match a configured service, and only a service marked payable returns an exact price with the offer_id that get_payment_handoff_url requires. Quoting a name that is not on this list silently falls back to an estimate with no offer.",
+          "description": "Lists the services a business has configured, with their prices and the exact arguments to quote each one. Call this BEFORE get_quote: the service name must match a configured service. offer_available means an exact quote can return an offer_id for reserve_slot. payable additionally means the current MCP booking configuration supports a deposit; follow reserve_slot payment.required. Neither field guarantees a time or authorizes payment. Unmatched or unpriced services return no price and no offer; ask the business through get_booking_destination. A business that sells goods through its own store has nothing payable here and returns store_url, a link to its website, when one can be given.",
           "inputSchema": {
             "$schema": "http://json-schema.org/draft-07/schema#",
             "properties": {
@@ -1124,6 +1127,10 @@
                     "name": {
                       "type": "string"
                     },
+                    "offer_available": {
+                      "description": "An exact quote can create an offer for reserve_slot; not a booking or payment guarantee.",
+                      "type": "boolean"
+                    },
                     "params": {
                       "additionalProperties": {
                         "type": "string"
@@ -1134,6 +1141,7 @@
                       "type": "object"
                     },
                     "payable": {
+                      "description": "The current MCP booking configuration supports a deposit for this price. Follow reserve_slot payment.required; this does not authorize payment.",
                       "type": "boolean"
                     },
                     "price_max_cents": {
@@ -1165,12 +1173,16 @@
                       "type": ["string", "null"]
                     }
                   },
-                  "required": ["currency", "description", "name", "params", "payable", "price_max_cents", "price_min_cents", "quote_hint", "unit"],
+                  "required": ["currency", "description", "name", "offer_available", "params", "payable", "price_max_cents", "price_min_cents", "quote_hint", "unit"],
                   "type": "object"
                 },
                 "type": "array"
               },
               "slug": {
+                "type": "string"
+              },
+              "store_url": {
+                "description": "Goods stores only: the link to the store's own website, through Advocate. Not a product page, a cart or a checkout.",
                 "type": "string"
               }
             },
@@ -1193,7 +1205,7 @@
           "execution": {
             "taskSupport": "forbidden"
           },
-          "digest": "sha256:8e0f8bff9989e74970ca62ebec173f78f79a05a3d4efa51f73cb5325b9999fc6"
+          "digest": "sha256:246d6a711e653908d861f14e44bac52261e8e5433112fd7ff737b854f058db05"
         },
         {
           "name": "query_business_agent",
@@ -1271,7 +1283,7 @@
         {
           "name": "request_callback",
           "title": "Request Callback",
-          "description": "Submit a callback request on behalf of a user. Advocate attempts a notification through the business's configured lead routing channel (SMS/email); provider acceptance is not proof the business read it. A failed or pending result can require direct follow-up or a retry. Idempotent: re-using the same idempotency_key returns the original request.",
+          "description": "Send a callback request only after the customer explicitly agrees to send these contact details and this request to the named business; set consent=true. Current quote-request eligibility applies. Advocate attempts a notification through the business's configured lead routing channel (SMS/email); provider acceptance is not proof the business read it. Quote and callback requests share contact, address and business limits. An address or business ceiling saves the request without sending a notification. A failed or pending result is not proof of delivery; check the same request. Reusing the same idempotency_key and details returns the original outcome without another send or count. Changed details are refused. If the result includes customer_notice, show it to the customer word for word.",
           "inputSchema": {
             "$schema": "http://json-schema.org/draft-07/schema#",
             "properties": {
@@ -1279,24 +1291,32 @@
                 "description": "Optional agent identifier",
                 "type": "string"
               },
+              "consent": {
+                "const": true,
+                "description": "True only after the customer explicitly agrees to send these contact details and this callback request to the named business",
+                "type": "boolean"
+              },
               "contact_email": {
                 "description": "End-user's email",
                 "format": "email",
+                "maxLength": 254,
                 "pattern": "^(?:[A-Za-z0-9_'+\\-]+\\.)*[A-Za-z0-9_'+\\-]*[A-Za-z0-9_+-]@(?:[A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$",
                 "type": "string"
               },
               "contact_name": {
                 "description": "End-user's name",
                 "maxLength": 120,
+                "minLength": 1,
                 "type": "string"
               },
               "contact_phone": {
                 "description": "End-user's phone",
                 "maxLength": 40,
+                "minLength": 1,
                 "type": "string"
               },
               "idempotency_key": {
-                "description": "Idempotency key",
+                "description": "Reuse with the same request details to check or retry without another send",
                 "minLength": 1,
                 "type": "string"
               },
@@ -1321,7 +1341,7 @@
                 "type": "string"
               }
             },
-            "required": ["idempotency_key", "slug"],
+            "required": ["consent", "idempotency_key", "slug"],
             "type": "object"
           },
           "outputSchema": {
@@ -1335,6 +1355,10 @@
               "callback_id": {
                 "format": "uuid",
                 "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+                "type": "string"
+              },
+              "customer_notice": {
+                "description": "A sentence for the customer. When present, show it to them word for word.",
                 "type": "string"
               },
               "delivered_via": {
@@ -1354,7 +1378,7 @@
                 "type": ["string", "null"]
               },
               "status": {
-                "description": "'notified': the configured notification provider accepted the request; this does not prove the business read it. 'failed': routing was not available or the provider reported a failure — see reason. 'pending': a web-form business (see form_url), or a replay while the original send is still in flight.",
+                "description": "'notified': the configured notification provider accepted the request; this does not prove the business read it. 'failed': routing was not available or the provider reported a failure — see reason. 'pending': a web-form business (see form_url), or a replay while the original send is still in flight or its delivery outcome is unconfirmed. Reuse the same request reference; do not create a duplicate.",
                 "type": ["string", "null"]
               },
               "status_token": {
@@ -1381,7 +1405,7 @@
           "execution": {
             "taskSupport": "forbidden"
           },
-          "digest": "sha256:3133607217d4459f81bf3fe837bcfd2478bb3ca03a18f70a1f59e51f5b037042"
+          "digest": "sha256:d3abc98c9594f8df4ca8dfd6ebc4c938150187d29d277afc224189a08e975180"
         },
         {
           "name": "request_service",
@@ -1458,7 +1482,7 @@
         {
           "name": "reserve_slot",
           "title": "Reserve Time Slot",
-          "description": "Reserve a time slot on an active configured calendar. Returns a pending_offer reservation and tries to send a 6-digit confirmation code to the customer's email or phone. The reservation expires in 15 minutes if not confirmed. Idempotent: re-using the same idempotency_key returns the original reservation and sends no code. If a send could not be confirmed, confirmation.delivered is false and not_sent_reason says whether a code may still arrive. At a business that takes a deposit for agent bookings, pass the offer_id from get_quote (without it the answer is quote_required); no code is sent and the result's payment block carries the amount to pay instead.",
+          "description": "Reserve a time slot on an active configured calendar. Returns a pending_offer reservation and tries to send a 6-digit confirmation code to the customer's email or phone. The reservation expires in 15 minutes if not confirmed. Idempotent: re-using the same idempotency_key returns the original reservation and sends no code. If a send could not be confirmed, confirmation.delivered is false and not_sent_reason says whether a code may still arrive. At a business that takes a deposit for agent bookings, pass the offer_id from get_quote (without it the answer is quote_required); no code is sent and the result's payment block carries the amount to pay instead. If the result includes customer_notice, show it to the customer word for word.",
           "inputSchema": {
             "$schema": "http://json-schema.org/draft-07/schema#",
             "properties": {
@@ -1604,6 +1628,10 @@
                 "required": ["channel", "delivered", "method"],
                 "type": "object"
               },
+              "customer_notice": {
+                "description": "A sentence for the customer. When present, show it to them word for word.",
+                "type": "string"
+              },
               "expires_at": {
                 "description": "ISO-8601. When this hold lapses if it is not confirmed (by code, or by payment when payment.required)",
                 "type": "string"
@@ -1669,7 +1697,7 @@
           "execution": {
             "taskSupport": "forbidden"
           },
-          "digest": "sha256:d27e34fbeff9824720b26245498bc459d5cc7d313868d53483ec187195f119b3"
+          "digest": "sha256:c054fa64617cfd408627653a823fed556feff519675d2ebf2521c7b0094f8426"
         },
         {
           "name": "search_businesses",
@@ -1763,7 +1791,7 @@
         {
           "name": "submit_quote_request",
           "title": "Send a quote request",
-          "description": "After the customer explicitly agrees, save their service requirements and contact details and send a notification to the business's configured email or opted-in SMS destination. This requests a business response, not a price commitment, booking or payment. Use context from request_service. Reuse the same idempotency_key AND details to check an uncertain submission; never automatically start a new request. Exclude medical, payment-card and authentication information.",
+          "description": "After the customer explicitly agrees, save their service requirements and contact details and send a notification to the business's configured email or opted-in SMS destination. This requests a business response, not a price commitment, booking or payment. Use context from request_service. Reuse the same idempotency_key AND details to check an uncertain submission; never automatically start a new request. Exclude medical, payment-card and authentication information. If the result includes customer_notice, show it to the customer word for word.",
           "inputSchema": {
             "$schema": "http://json-schema.org/draft-07/schema#",
             "properties": {
@@ -1841,6 +1869,10 @@
               "code": {
                 "type": "string"
               },
+              "customer_notice": {
+                "description": "A sentence for the customer. When present, show it to them word for word.",
+                "type": "string"
+              },
               "message": {
                 "type": "string"
               },
@@ -1893,12 +1925,12 @@
               "visibility": ["model", "app"]
             }
           },
-          "digest": "sha256:e92abba20b9c2fa74e364105d90661cab9fd57b99f493991b276c188f359098a"
+          "digest": "sha256:7a75686de6fca2b3caefad27c8e05d04c5034f05c74877d6a2116ff0b3ad4133"
         },
         {
           "name": "subscribe_to_updates",
           "title": "Subscribe to Updates",
-          "description": "Record a person's interest in hearing from a business on the given topics, pending their confirmation. Returns a confirmation URL that only the user must click within 7 days; no subscription is active until that confirmation. Advocate does not send subscribers any updates yet, and the business's dashboard does not list subscriptions; a confirmed one keeps the address and topics on record. Idempotent: re-using the same idempotency_key returns the original subscription.",
+          "description": "Record a person's interest in hearing from a business on the given topics, pending their confirmation. Returns a confirmation URL that only the user must click within 7 days; no subscription is active until that confirmation. Advocate does not send subscribers any updates yet, and the business's dashboard does not list subscriptions; a confirmed one keeps the address and topics on record. Idempotent: re-using the same idempotency_key returns the original subscription. If the result includes customer_notice, show it to the customer word for word.",
           "inputSchema": {
             "$schema": "http://json-schema.org/draft-07/schema#",
             "properties": {
@@ -1954,6 +1986,10 @@
                 "description": "The link the user must open within 7 days to confirm the subscription",
                 "type": "string"
               },
+              "customer_notice": {
+                "description": "A sentence for the customer. When present, show it to them word for word.",
+                "type": "string"
+              },
               "expires_at": {
                 "description": "Unix seconds when confirmation_url stops working",
                 "maximum": 9007199254740991,
@@ -2007,7 +2043,7 @@
           "execution": {
             "taskSupport": "forbidden"
           },
-          "digest": "sha256:b4ae37f2948d088ad8c4010c9015dfe101d26fdd7c98cb8f9d410f0078a17dc2"
+          "digest": "sha256:e6d7f442f047cd75c73948f829f167c99d229d909c694ed98ecbb832f2b5d90c"
         }
       ],
       "resources": [
@@ -2032,7 +2068,7 @@
           "digest": "sha256:390ecef0f9c93ace0f5b9cdbc6e8b36f11d7736f32a82010f9e4e96e13fb2f12"
         }
       ],
-      "digest": "sha256:7f6222b2075203445151163e071f060cf794c54d39f67f66161bfaceaec78efc"
+      "digest": "sha256:cbe7b615aa4d71d9e7b014b353dca5ca1d3581b689010bda180983abb05b3991"
     }
   }
 }

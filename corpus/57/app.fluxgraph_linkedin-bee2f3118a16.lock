@@ -1040,6 +1040,46 @@
           "digest": "sha256:4d77d1c7b214fa38cab2f9467f96f7d4a23f51fdcaf128aac6ff576b2d526af7"
         },
         {
+          "name": "get_inbound_attribution",
+          "title": "Get Inbound Attribution",
+          "description": "[Read · free] Which of your posts bring in DMs, leads and clients, next to which get engagement. Reads the inbound outcomes logged with log_outcome (inbound_dm | lead | client) for one of your tracked profiles over the last `days` (default 90). Returns totals, top_by_outcomes (posts credited with at least one outcome), top_by_engagement (your most-engaged posts in the window, with their outcome counts, so the two rankings can be compared), by_format, and the unattributed outcomes still waiting for a post (fix with log_outcome outcome_id + post_url). Engagement is not used to attribute: outcomes are matched by post_url, message text and timing. Free — costs 0 credits.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": false,
+            "properties": {
+              "days": {
+                "description": "Look-back window in days (default 90)",
+                "maximum": 365,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "profile_id": {
+                "description": "Your tracked profile id from list_profiles",
+                "type": "string"
+              }
+            },
+            "required": ["profile_id"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Get Inbound Attribution"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "execution": {
+            "taskSupport": "forbidden"
+          },
+          "digest": "sha256:d1d0c290249fd1eb8ac271fff10e9655d6fe63cb967395b442d8f325bbb67695"
+        },
+        {
           "name": "get_outreach_path",
           "title": "Outreach Path to Target",
           "description": "[Read · free] Given a target person, find the shortest warm-intro path through your engager network. Walks coworker (shared current company) + alumni (shared past company / school) edges. Up to 3 hops. Paths only exist where job history is on file, and engagers collected from reactions/comments usually have none: the response's `coverage` says how many candidates (the target, and engagers tied to the target's companies) have job history, and when missing data may hide paths `_meta.next_step` names enrich_people with the exact person_ids to pass and its credit cost. Pure DB read — no LinkedIn pull, no credits charged.",
@@ -2414,24 +2454,29 @@
         },
         {
           "name": "log_outcome",
-          "title": "Log Outreach Outcome",
-          "description": "[Act · writes] Append an entry to the outreach log for a Constellation campaign. Use to record connection requests, acceptances, replies, or no-responses so get_campaign_stats can compute acceptance / reply rates over time. Identify the person with exactly one of person_id or linkedin_url (any profile URL form works: vanity or member-ID, with or without trailing slash or query string). The person must be connected to you: in one of your campaigns or segments, engaged with posts you can see in Flux, or pulled by you; anyone else returns not-found with a next_step to pull their profile via linkedin_profile_info. The person may be outside this campaign's mapped constellation; such outcomes are still logged (with a `warning`) and get_campaign_stats reports them under the `unattributed` pool/tier bucket. Free — costs 0 credits.",
+          "title": "Log Outcome",
+          "description": "[Act · writes] Record an outcome by hand. Two kinds.\n• Outbound (campaign outreach): action sent_request | accepted | replied | no_response with campaign_id and exactly one of person_id or linkedin_url (any profile URL form). The person must be connected to you (in one of your campaigns or segments, engaged with posts you can see in Flux, or pulled by you); anyone else returns not-found with a next_step to pull their profile via linkedin_profile_info. A person outside this campaign's mapped constellation is still logged (with a `warning`) and get_campaign_stats counts it under `unattributed`.\n• Inbound (results your own posting brought in): action inbound_dm | lead | client with profile_id (your tracked profile from list_profiles, whose posts it counts against). No campaign. When the user pastes a LinkedIn DM conversation, pass the whole paste as message_text and set occurred_at to the date of its first message (ISO 8601; omit only if the paste has no date). The sender's linkedin_url is optional and never triggers a paid lookup. Flux matches the outcome to the post that most likely prompted it: post_url if given, else for a lead or client the post already credited for this person's earlier inbound outcome, else the conversation's opening text and timing against your posts from the 30 days before. The result says the method (explicit | inherited | matched | recency | none) and lists up to three candidate posts. When nothing was matched and candidates exist, show them to the user and ask which post it was; then call again with outcome_id and that post_url to correct it. get_inbound_attribution reports which posts bring in DMs, leads and clients.\nFree — costs 0 credits.",
           "inputSchema": {
             "$schema": "http://json-schema.org/draft-07/schema#",
             "additionalProperties": false,
             "properties": {
               "action": {
-                "description": "Outreach event: sent_request | accepted | replied | no_response",
-                "enum": ["sent_request", "accepted", "replied", "no_response"],
+                "description": "Outbound: sent_request | accepted | replied | no_response. Inbound: inbound_dm | lead | client",
+                "enum": ["sent_request", "accepted", "replied", "no_response", "inbound_dm", "lead", "client"],
                 "type": "string"
               },
               "campaign_id": {
-                "description": "Campaign id",
+                "description": "Outbound only, required there: campaign id",
                 "format": "uuid",
                 "type": "string"
               },
               "linkedin_url": {
-                "description": "LinkedIn profile URL of the person you outreached to. Provide this or person_id.",
+                "description": "LinkedIn profile URL of the person. Outbound: provide this or person_id. Inbound: optional (the sender)",
+                "type": "string"
+              },
+              "message_text": {
+                "description": "Inbound: the DM or message text; paste the whole conversation if you have it",
+                "maxLength": 20000,
                 "type": "string"
               },
               "note": {
@@ -2439,13 +2484,30 @@
                 "maxLength": 4000,
                 "type": "string"
               },
-              "person_id": {
-                "description": "people.id of the person you outreached to. Provide this or linkedin_url.",
+              "occurred_at": {
+                "description": "Inbound: when it happened, ISO 8601 (for a pasted DM, the first message's date). Defaults to now",
+                "type": "string"
+              },
+              "outcome_id": {
+                "description": "Inbound correction: the id of an inbound outcome you logged, with post_url",
                 "format": "uuid",
+                "type": "string"
+              },
+              "person_id": {
+                "description": "people.id of the person. Outbound: provide this or linkedin_url. Inbound: optional",
+                "format": "uuid",
+                "type": "string"
+              },
+              "post_url": {
+                "description": "Inbound: URL of your post that prompted it, when the user knows. With outcome_id, corrects an earlier inbound outcome",
+                "type": "string"
+              },
+              "profile_id": {
+                "description": "Inbound only, required there: your tracked profile id from list_profiles",
                 "type": "string"
               }
             },
-            "required": ["action", "campaign_id"],
+            "required": ["action"],
             "type": "object"
           },
           "annotations": {
@@ -2453,7 +2515,7 @@
             "idempotentHint": false,
             "openWorldHint": false,
             "readOnlyHint": false,
-            "title": "Log Outreach Outcome"
+            "title": "Log Outcome"
           },
           "behavior": {
             "destructive": false,
@@ -2464,7 +2526,7 @@
           "execution": {
             "taskSupport": "forbidden"
           },
-          "digest": "sha256:63d5b7c19260af2b5f42b382a33fe72ed62e5d34213dadedfc216472001093c6"
+          "digest": "sha256:6cc97dfee3e13f364b669901851cc7c72346f93f9602e6a67aa98ce97f8aea27"
         },
         {
           "name": "map_constellation",
@@ -3483,7 +3545,7 @@
           "digest": "sha256:6e51f24fcc92195e6a90d8f1dd7281b5f3d4276c103e32dd0ad0457e31e04370"
         }
       ],
-      "digest": "sha256:d8dcc1facfc73972df39925cebf2325b428fb64598260427d8264e5fa0c2c33a"
+      "digest": "sha256:0c24ca21b3cf8654e0dddbcac6723881c9aaaccb1cc8701b628e11486656c413"
     }
   }
 }

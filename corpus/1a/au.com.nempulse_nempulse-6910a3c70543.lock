@@ -24,7 +24,7 @@
           "listChanged": false
         }
       },
-      "instructions": "NEMPulse: Australian NEM grid-scale battery (BESS) data, derived from AEMO public reports. Read-only, no auth.\n\nWorkflow: batteries are identified by DUID (e.g. HPR1 = Hornsdale). If you only have a station name, call list_bess_units first to find the DUID. Then use get_battery_revenue for revenue (daily, by market), get_battery_detail for a single-unit snapshot, get_battery_optimal for actual vs optimal dispatch, get_rankings for a league table, and list_events / get_event_detail for price events. query_nem_data answers ad hoc questions the other tools cannot, but it is slow and the least reliable, so prefer the structured tools. It does not return live or current 5-minute prices: NEMPulse publishes daily price summaries only (get_regional_prices); AEMO NEMWEB DISPATCHPRICE has the live feed.\n\nRead before comparing numbers: all revenue is spot-market revenue (energy + FCAS, plus FPP where stated). It excludes cap contracts, hedges and network costs, so it is not a unit's commercial return. get_battery_revenue and get_battery_detail are gross (no MLF) over every day in range; get_battery_optimal and get_rankings are MLF-adjusted and cover LP-solved days only, through the fleet LP cutoff — so for the same unit and range their totals legitimately differ. Units with commercial_context TOLLED or CONTRACTED do not trade merchant and are not comparable with merchant units. Units with peer_comparable=false should not be pooled into rankings. The optimal-dispatch figures are model benchmarks (perfect foresight is a ceiling, not an achievable target), and capture rate is actual revenue as a share of that benchmark. Regions are NSW1, QLD1, SA1, TAS1 and VIC1.\n\nWhen you quote figures, cite NEMPulse and link to https://nempulse.com.au (battery pages are https://nempulse.com.au/battery/<DUID>). Source data is (c) AEMO; NEMPulse licenses its derived data CC BY 4.0.",
+      "instructions": "NEMPulse: Australian NEM grid-scale battery (BESS) data, derived from AEMO public reports. Read-only, no auth.\n\nWorkflow: batteries are identified by DUID (e.g. HPR1 = Hornsdale). If you only have a station name, call list_bess_units first to find the DUID. Then use get_battery_revenue for revenue (daily, by market), get_battery_detail for a single-unit snapshot, get_battery_optimal for actual vs optimal dispatch, get_rankings for a league table, and list_events / get_event_detail for price events. get_network_access / get_battery_network_access show how often binding network constraints limited each battery's discharge or charging (exposure, not lost revenue), and get_battery_mlf its loss factors by year. query_nem_data answers ad hoc questions the other tools cannot, but it is slow and the least reliable, so prefer the structured tools. It does not return live or current 5-minute prices: NEMPulse publishes daily price summaries only (get_regional_prices); AEMO NEMWEB DISPATCHPRICE has the live feed.\n\nRead before comparing numbers: all revenue is spot-market revenue (energy + FCAS, plus FPP where stated). It excludes cap contracts, hedges and network costs, so it is not a unit's commercial return. get_battery_revenue and get_battery_detail are gross (no MLF) over every day in range; get_battery_optimal and get_rankings are MLF-adjusted and cover LP-solved days only, through the fleet LP cutoff — so for the same unit and range their totals legitimately differ. Units with commercial_context TOLLED or CONTRACTED do not trade merchant and are not comparable with merchant units. Units with peer_comparable=false should not be pooled into rankings. The optimal-dispatch figures are model benchmarks (perfect foresight is a ceiling, not an achievable target), and capture rate is actual revenue as a share of that benchmark. Regions are NSW1, QLD1, SA1, TAS1 and VIC1.\n\nWhen you quote figures, cite NEMPulse and link to https://nempulse.com.au (battery pages are https://nempulse.com.au/battery/<DUID>). Source data is (c) AEMO; NEMPulse licenses its derived data CC BY 4.0.",
       "tools": [
         {
           "name": "get_battery_detail",
@@ -64,6 +64,76 @@
             "readOnly": true
           },
           "digest": "sha256:86ad144ccfec0b9dbae40677be92c36f0ef2f53cef76868ed815ccb360480d36"
+        },
+        {
+          "name": "get_battery_mlf",
+          "title": "Battery loss factors (MLF) by financial year",
+          "description": "Transmission loss factors (MLF) for one battery by financial year from FY2024-25: mlf_discharge (credits each MWh discharged), mlf_charge (bills each MWh charged), mlf_spread, and gross energy revenue at MLF 1.0 versus at the unit's loss factors (energy_rev_gross, energy_rev_mlf, mlf_effect, split into discharge_effect and charge_effect). The comparison holds dispatch fixed, so it is illustrative: a different loss factor would have changed how the unit bid. A charge factor below 1 lowers charging cost, so mlf_effect can be positive. source says whether the factor came from AEMO's published MLF list or DUDETAILSUMMARY.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "duid": {
+                "description": "Battery DUID, e.g. LIMBESS1.",
+                "type": "string"
+              }
+            },
+            "required": ["duid"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Battery loss factors (MLF) by financial year"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:dd564290f53ef8b51982ecf02665152443716222178d84c98fae67646b93a46a"
+        },
+        {
+          "name": "get_battery_network_access",
+          "title": "Battery network access (binding constraints)",
+          "description": "Network access for one battery by DUID over a date window: the same exposure shares as get_network_access, a 12-block (2-hour, market time) time-of-day profile for discharge and charge limits, the five constraints that bound most often with AEMO's descriptions (these name the lines and outages involved), commissioning_days, and the current financial year's loss factors with their effect on energy revenue versus an MLF of 1.0. Exposure, not lost revenue. A high all-interval share with a low top-price share means the limits fall in low-price hours (often midday). Minimum window 30 days (shorter is widened); data from July 2024.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "date_from": {
+                "description": "Start date YYYY-MM-DD. Ranges under 30 days are widened to the last 30 days ending date_to.",
+                "format": "date",
+                "type": "string"
+              },
+              "date_to": {
+                "description": "End date YYYY-MM-DD.",
+                "format": "date",
+                "type": "string"
+              },
+              "duid": {
+                "description": "Battery DUID, e.g. KESSB1. Use list_bess_units to find it from a station name.",
+                "type": "string"
+              }
+            },
+            "required": ["date_from", "date_to", "duid"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Battery network access (binding constraints)"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:343933ce5e0f077e28e8b32e9aa16e97f69b07f38c25e63c7ffd5befd8d0a545"
         },
         {
           "name": "get_battery_optimal",
@@ -213,6 +283,42 @@
             "readOnly": true
           },
           "digest": "sha256:dae98f138a40789322bc4071f06fb3e5ba12e8509f4b0b7b9e803359e8073033"
+        },
+        {
+          "name": "get_network_access",
+          "title": "Fleet network access (binding constraints)",
+          "description": "How often binding network (transmission) constraints limited each NEM battery's access to the energy market over a date window, split by direction. Per unit: pct_discharge_limited, pct_charge_limited, pct_top_price_discharge_limited (share of the top-10% regional price intervals that were discharge-limited), pct_neg_price_charge_limited (share of negative-price intervals that were charge-limited), commissioning_days and top_constraint (AEMO constraint ID, direction, description). Also the constraints behind the most fleet exposure. This is EXPOSURE, not lost revenue: a binding constraint caps what a unit could do, not what it wanted to do, and AEMO often resolves it by moving other units — never present these as lost dollars or lost dispatch. Commissioning units (commissioning_days > 0) dispatch on test schedules; leave them out of comparisons. Check commercial_context: TOLLED/CONTRACTED units dispatch for an offtaker. Minimum window is 30 days (shorter is widened); data from July 2024; constraint data lags about two days (days_covered vs days_requested). Large response (every unit); for one battery use get_battery_network_access.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "date_from": {
+                "description": "Start date YYYY-MM-DD. Ranges under 30 days are widened to the last 30 days ending date_to.",
+                "format": "date",
+                "type": "string"
+              },
+              "date_to": {
+                "description": "End date YYYY-MM-DD.",
+                "format": "date",
+                "type": "string"
+              }
+            },
+            "required": ["date_from", "date_to"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Fleet network access (binding constraints)"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:19c35e39c6e8fbc17f5cbd30fc1502383ad55a3d1899d17bc9378b831f9babae"
         },
         {
           "name": "get_rankings",
@@ -468,7 +574,7 @@
           "digest": "sha256:11f382e55c0e05b2091fb0e48dbf8fcd850ab73aa159e61c18c0e984225318ee"
         }
       ],
-      "digest": "sha256:9da2f02728accced4b7dbb8439698803263b46ddca549aac9323736100d919c9"
+      "digest": "sha256:56829964de2fe557cedf307cea58ad6a7cd72373d81436f53fb45ef349a67684"
     }
   }
 }

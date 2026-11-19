@@ -79,6 +79,11 @@
                 "title": "Grain",
                 "type": "string"
               },
+              "include_inferred": {
+                "description": "Optional, default false, e.g. false. true requires sectors and also counts sectors that depend on a language-model decision (from_model, acts published from 2024-11-05), and the sectors block includes model, prompt and min_confidence. Without include_inferred=true, those acts are left out of the division rows and counted in unclassified in the \"*\" row. While those sectors are not offered, true is refused with an error.",
+                "title": "Include Inferred",
+                "type": "boolean"
+              },
               "limit": {
                 "default": 1000,
                 "description": "Maximum rows, integer 1-5000, e.g. 200 (default 1000); truncated is true when more matched.",
@@ -92,6 +97,14 @@
                   "type": "string"
                 },
                 "title": "Provinces",
+                "type": "array"
+              },
+              "sectors": {
+                "description": "Optional list of two-digit CNAE-2009 divisions and/or \"*\" (all acts), e.g. [\"62\", \"*\"]: each row then names its sector, the company's sector on the act's publication date, attributed as by the division filter of search_events. A division row splits events into from_own (code printed in the act) and from_carried (code printed in an earlier act of the company), plus from_model with include_inferred=true, and gives companies per basis, which can overlap and must not be added up. The \"*\" row gives total = from_own + from_carried + unclassified, plus from_model with include_inferred=true (unclassified: acts without a sector and, without include_inferred=true, acts whose sector depends on the model). The answer's sectors block names division_axis \"CNAE-2009\" and policy_version. A year not yet computed returns not_built, never zeros. With provinces or by_province it needs grain \"year\".",
+                "items": {
+                  "type": "string"
+                },
+                "title": "Sectors",
                 "type": "array"
               }
             },
@@ -111,7 +124,7 @@
             "openWorld": false,
             "readOnly": true
           },
-          "digest": "sha256:176202aeb9feb771d06b31bd6587c6e5d3da0d7d5dc13b3a512f161bbc29d73d"
+          "digest": "sha256:b1e8af1ab8e075c184b208cb9a6e77fa449573927ea48a9ca7eedd9107ccfbdd"
         },
         {
           "name": "brand_owner",
@@ -763,7 +776,7 @@
         {
           "name": "search_events",
           "title": "Search registry events",
-          "description": "Search BORME registry events (since 2009) across companies by publication\ndate, province, act type and company name, newest first.\n\nUse it for questions about many companies (\"insolvency notices in Valencia\nin September\"). For one known company use company_history; to find a\ncompany use search_companies; for one day's totals use daily_digest.\n\nReturns JSON {count, events: [{event_id, date, borme_id, province,\ncompany_name, company_slug, acts: [{act_type, act_type_raw, roles,\npayload}], registral}]}, plus company_name_match, plan_window and\nhidden_by_plan when they apply. No next page: when count equals limit,\nnarrow the filters.\n\nRead-only; one request per call against your daily quota. Without an API key\n(X-API-Key header, https://bormeapi.com/account) only the last 7 days\nare searched (plan_window). For an empty page with hidden_by_plan or\ncompany_name_match (matched_companies or suggested_companies), relay its\nnote. Invalid dates, provinces or act types are refused with a reason.",
+          "description": "Search BORME registry events (since 2009) across companies by publication\ndate, province, act type and company name, newest first or oldest first.\n\nUse it for questions about many companies. For one known company use company_history; to find a\ncompany use search_companies; for one day's totals use daily_digest.\n\nReturns JSON {count, events: [{event_id, date, borme_id, province,\ncompany_name, company_slug, acts: [{act_type, act_type_raw, roles,\npayload}], registral}], next_cursor, has_more}, plus company_name_match,\nplan_window and hidden_by_plan when they apply. While has_more is true,\npass next_cursor as cursor for the next page; with order=asc, save the\nlast next_cursor to poll for later events.\n\nRead-only; one request per call against your daily quota. Without an API key\n(X-API-Key header, https://bormeapi.com/account) only the last 7 days are\nsearched. If the page is empty and hidden_by_plan or\ncompany_name_match has a note, relay it. Invalid input is rejected with a\nreason.",
           "inputSchema": {
             "properties": {
               "act_types": {
@@ -774,9 +787,32 @@
                 "title": "Act Types",
                 "type": "array"
               },
+              "cnae": {
+                "description": "Optional CNAE code or prefix of 2 to 4 digits, with or without a dot, e.g. \"47\", \"4711\" or \"47.11\". Needs the Pro or Risk plan; a new account's free 7-day Risk trial includes it. Matches the printed digits, in any classification or, with cnae_version, only in that one. For the company's sector on the CNAE-2009 axis use division. Cannot be combined with cursor or order \"asc\".",
+                "title": "Cnae",
+                "type": "string"
+              },
+              "cnae_version": {
+                "description": "Optional classification version, one of \"1993\", \"2009\" or \"2025\". Requires cnae. If omitted, printed codes match whatever their cnae_version, including null. If supplied, only codes with that cnae_version match: named in the act (basis stated) or assigned by our rules (date, code). \"2009\" therefore also matches codes whose classification is not named in acts published before 1 January 2025, provided CNAE-2009 contains the code (our dating rule by BORME publication date; RD 10/2025 entered into force on 16 January 2025); add cnae_version_basis [\"stated\"] for the codes whose classification the act names.",
+                "title": "Cnae Version",
+                "type": "string"
+              },
+              "cnae_version_basis": {
+                "description": "Optional, with cnae only: a list of one or more of \"stated\" (the act names the classification), \"date\" (before 1 January 2025, CNAE-2009 by our dating rule), \"code\" (from 1 January 2025, only one classification contains the code), \"equivalent\" (both contain it, equivalent per the INE correspondence table) and \"ambiguous\" (both contain it, not equivalent). Keeps printed codes whose cnae_version_basis is one of them; to keep the previous result of a cnae_version filter, keep it and add e.g. [\"stated\"].",
+                "items": {
+                  "type": "string"
+                },
+                "title": "Cnae Version Basis",
+                "type": "array"
+              },
               "company_name_contains": {
                 "description": "Optional part of the company name, case- and accent-insensitive, e.g. \"mercadona\"; use at least 3 letters or digits for a selective search. % and _ match literally. It filters events; to look a company up by name, call search_companies first.",
                 "title": "Company Name Contains",
+                "type": "string"
+              },
+              "cursor": {
+                "description": "Optional: the unchanged next_cursor value from the previous response, to fetch the next page, e.g. \"djF8ZHwyMDI2LTA4LTI2fHNoYTE6MDA2N2U3YzdhZDQ2ZmQ1NGNiMTEzOGQzMTg4NWIxZDg3OGZlMjg5Ng\". It keeps its sort order. Keep the same filters to continue the same result set; with other filters the query still starts after the saved position.",
+                "title": "Cursor",
                 "type": "string"
               },
               "date_from": {
@@ -789,10 +825,20 @@
                 "title": "Date To",
                 "type": "string"
               },
+              "division": {
+                "description": "Optional two-digit CNAE-2009 division, e.g. \"62\": acts whose company had that sector on the act's BORME publication date. Each event then carries sector_division, sector_provenance and sector_source_event_id; provenance own (a code printed in this act), carried (a code printed in an earlier act of the company, also under an earlier name), model (a language-model decision, only with include_inferred=true) or carry_ended_ambiguous (a later printed code without a division ended the carried sector; no sector). The answer names division_axis \"CNAE-2009\" and policy_version. A sector can change when a later decision, or an act published on or before that date but added to our data later, classifies the company. Same attribution as act_stats sectors. Needs the Pro or Risk plan. Cannot be combined with cnae, cnae_version, cnae_version_basis, cursor or order \"asc\".",
+                "title": "Division",
+                "type": "string"
+              },
               "holder_kind": {
                 "description": "Optional, one of investment_vehicle or investment_manager, e.g. investment_vehicle. Returns events that originate a sole-shareholder or legal-person director link classified, from the entity's name alone, as investment_vehicle (a possible investment vehicle: SCR, ECR, FCR, FCRE, SICAV, capital riesgo, private equity, fondo de inversión) or investment_manager (a possible investment manager: SGEIC, SGIIC). It does not return every subsequent act mentioning that entity. A director link may originate in a re-election act. The name alone does not establish registration with the CNMV. This filter does not identify entities whose names contain none of these indicators. date_from and date_to may be at most 366 days apart; both dates are included, so at most 367 calendar days. Without date_from, the range covers 90 calendar days ending on date_to or today, including that day. Pro plan.",
                 "title": "Holder Kind",
                 "type": "string"
+              },
+              "include_inferred": {
+                "description": "Optional, with division only, default false, e.g. true. With division, true also matches and shows sectors that depend on a language-model decision (sector_provenance model, acts published from 2024-11-05), and the response includes model, prompt and min_confidence. Without include_inferred=true, acts whose sector depends on a language-model decision do not match division. true is refused while those sectors are not offered, and always with cnae; without division or cnae any value is refused.",
+                "title": "Include Inferred",
+                "type": "boolean"
               },
               "limit": {
                 "default": 50,
@@ -800,6 +846,11 @@
                 "maximum": 200,
                 "title": "Limit",
                 "type": "integer"
+              },
+              "order": {
+                "description": "Optional, \"desc\" (default, newest first) or \"asc\" (oldest first, from date_from), e.g. \"asc\". For an oldest-first feed, save next_cursor from the last response, even when has_more is false, and reuse it when polling later. The cursor follows the publication date: an event added later with a publication date that the cursor has already passed is not returned.",
+                "title": "Order",
+                "type": "string"
               },
               "provinces": {
                 "description": "Optional list of BORME province names, accent- and case-insensitive, e.g. [\"MADRID\", \"CADIZ\", \"VIZCAYA\"]. An autonomous community stands for all of its provinces, e.g. [\"Basque Country\"] or [\"Cataluña\"]. Full list: the resource borme://provinces.",
@@ -826,7 +877,7 @@
             "openWorld": false,
             "readOnly": true
           },
-          "digest": "sha256:bda56725c9d7cc1d75c960c197b7f51dbe06e4824da1879c4f6972f646c0ff34"
+          "digest": "sha256:c8939f7a6850479107485242dd79dc837e8a9f2745513c9df3aeee8f19e9ef53"
         },
         {
           "name": "vat_check",
@@ -973,7 +1024,7 @@
           "digest": "sha256:7a1cca68ce8f50bf303834f5d3179d7d4ff2628614d63ba4a20cc38ac1707f2b"
         }
       ],
-      "digest": "sha256:68a0bd315fb2cf6629fefff0151c957925037ae9b73576a139b12102f10d78f9"
+      "digest": "sha256:989a9f4668a014876864f64cfa2c9a48c0263b1142d55b1b80bab77e1f8a5458"
     }
   }
 }
