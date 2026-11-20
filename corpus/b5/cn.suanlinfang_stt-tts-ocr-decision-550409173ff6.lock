@@ -36,37 +36,57 @@
           "listChanged": false
         }
       },
+      "instructions": "算邻坊 AI 能力（suanlinfang.cn，按量计费，失败不计费）。生图为引流主推能力：generate_image 一次调用出图（文生图/图生图合一，默认自动选模型）。另有语音识别（STT）、语音合成（TTS）、文字识别（OCR）三族能力。所有工具调用需 API Key（nk- 前缀，suanlinfang.cn/consume-web/api-keys.html 创建，新用户赠 ¥10 体验金）。",
       "tools": [
         {
-          "name": "decide",
-          "title": "Decide",
-          "description": "智能决策（System One 类型化判断）：输入业务状态与若干类型化问题，返回每题的校准概率，不生成文本。\n适用：工单分类、风控判定、质检评估等结构化判断场景。无上下文记忆，每次请求独立。\nquestions 为 {题目id: 题目} 映射（1-32 题），type 三种：choice（多选一，criteria={选项名:描述}）、\nnoul（是否判断，criteria 可选 {true:描述,false:描述}）、score（有序等级打分，criteria=[等级描述...]），可选 instructions 说明该问什么。\n示例：{\"team\":{\"type\":\"choice\",\"criteria\":{\"refund\":\"退款\",\"logistics\":\"物流\"}},\"urgent\":{\"type\":\"noul\"},\"severity\":{\"type\":\"score\",\"criteria\":[\"轻微\",\"一般\",\"严重\"]}}\nanswers 按同键回传，含选中项、置信度与全选项概率。\n计费按输入 token（约 2 元/百万，输出免费），失败不计费。\n不支持对象入参的客户端可改传 questions_json（questions 的 JSON 字符串，二选一）。",
+          "name": "generate_image",
+          "title": "Generate Image",
+          "description": "AI 生图（1024×1024 PNG，按张计费，失败不计费）：传 prompt 即文生图；再传 init_image_url（参考图公网 URL，png/jpg/jpeg ≤10MB）即图生图（换装/换景/改背景等编辑指令写在 prompt 里）。\n本工具一次调用内完成「提交→等待→出结果」，默认最多等 120 秒（wait_seconds 可调 10~300）；\n出图成功返回 resultUrl（现签下载链接，1 小时内有效，请提醒用户及时下载转存）。\nmodel 留空自动选：文生图=flux2-klein（快而省），图生图=qwen-image-edit-2511；要更高质量可传 z-image-turbo，在线模型与实时牌价先用 list_image_models 查询。\nseed（非负整数）可复现同图：同 prompt + 同 seed 生成一致结果。\n若等待超时仍未完成，返回 taskNo（任务不丢失、不计排队费），调用 get_image_task 继续查询。",
           "inputSchema": {
             "additionalProperties": false,
             "properties": {
-              "questions": {
+              "init_image_url": {
                 "anyOf": [
                   {
-                    "additionalProperties": true,
-                    "type": "object"
+                    "type": "string"
                   },
                   {
                     "type": "null"
                   }
                 ],
-                "default": null,
-                "description": "类型化问题映射（{题目id: 题目}，结构见上）。与 questions_json 二选一必填。"
+                "default": null
               },
-              "questions_json": {
-                "default": "",
-                "description": "questions 的 JSON 字符串形式，供只支持标量参数的客户端（如扣子试运行）使用。与 questions 二选一必填。",
+              "model": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "prompt": {
                 "type": "string"
               },
-              "state": {
-                "type": "string"
+              "seed": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null
+              },
+              "wait_seconds": {
+                "default": 120,
+                "type": "integer"
               }
             },
-            "required": ["state"],
+            "required": ["prompt"],
             "type": "object"
           },
           "outputSchema": {
@@ -89,7 +109,7 @@
               "tags": []
             }
           },
-          "digest": "sha256:12fd3264cb16e7a6d12eb3cc8de43334654ee8a79be78d159e78c68b117e10e4"
+          "digest": "sha256:7edf06d66641c6792d41ee8995628fe0e00edad331e621e783e60f3e6367d726"
         },
         {
           "name": "get_document_task",
@@ -124,6 +144,40 @@
             }
           },
           "digest": "sha256:ffbea223bf00c791ba169a112f084ea58130acb0db62ea711368aecd70f27eae"
+        },
+        {
+          "name": "get_image_task",
+          "title": "Get Image Task",
+          "description": "查询生图任务状态。status：queued/running（进行中，快档常在数十秒内出图，慢档可能数分钟——视模型档位与当前空闲算力）、\nsuccess（resultUrl 为图片现签下载链接，1 小时内有效；链接过期后重新查询即换新链）、\nfailed（errorMsg 为失败原因，不扣费）、expired（结果已过保留期）。\n建议每 5~10 秒查询一次。generate_image 等待超时降级后用本工具续查。",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "task_no": {
+                "type": "string"
+              }
+            },
+            "required": ["task_no"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "additionalProperties": true,
+            "type": "object"
+          },
+          "annotations": {
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "digest": "sha256:f0bca485668ed0f59fc10bef6ea940a94681e6ae2aefdd4244ceed9254eec840"
         },
         {
           "name": "get_speech_task",
@@ -194,6 +248,45 @@
           "digest": "sha256:e6f110b08eb5014157e3fdd0331ade8d50870395068e4eac212451935d9534f3"
         },
         {
+          "name": "list_image_models",
+          "title": "List Image Models",
+          "description": "查询生图当前在线模型与实时牌价（id + pricing，按张计费）。选 model 前先看这个。",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {},
+            "type": "object"
+          },
+          "outputSchema": {
+            "properties": {
+              "result": {
+                "items": {
+                  "additionalProperties": true,
+                  "type": "object"
+                },
+                "type": "array"
+              }
+            },
+            "required": ["result"],
+            "type": "object",
+            "x-fastmcp-wrap-result": true
+          },
+          "annotations": {
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "digest": "sha256:dd4ba9b6e162edae778b4806cf9bac1428cc483997bc63d3abddadbac28770eb"
+        },
+        {
           "name": "list_tts_voices",
           "title": "List Tts Voices",
           "description": "查询语音合成当前可用音色清单（code/name/gender/styleTag）。合成前先看这个选 speaker。",
@@ -231,57 +324,6 @@
             }
           },
           "digest": "sha256:1a543cd899527ef34b89c22dde7ed08cf14a530e092163a06e3bc193ccb54292"
-        },
-        {
-          "name": "recognize_image",
-          "title": "Recognize Image",
-          "description": "识别图片中的文字（png/jpg/webp/bmp，≤20MB，公网 URL），同步返回逐行文本。\ntier：standard 标准档（快速，适合清晰打印件/截图）；accurate 精准档（表格、多栏、倾斜拍摄等复杂版面）。\nprompt 仅精准档生效：自定义识别指令（如「只提取表格金额列」），≤2000 字符，缺省识别全部文字。\n计费按页（单图=1 页，约 0.5~1.5 分/页）。",
-          "inputSchema": {
-            "additionalProperties": false,
-            "properties": {
-              "image_url": {
-                "type": "string"
-              },
-              "prompt": {
-                "anyOf": [
-                  {
-                    "type": "string"
-                  },
-                  {
-                    "type": "null"
-                  }
-                ],
-                "default": null
-              },
-              "tier": {
-                "enum": ["standard", "accurate"],
-                "type": "string"
-              }
-            },
-            "required": ["image_url", "tier"],
-            "type": "object"
-          },
-          "outputSchema": {
-            "additionalProperties": true,
-            "type": "object"
-          },
-          "annotations": {
-            "destructiveHint": false,
-            "idempotentHint": false,
-            "readOnlyHint": false
-          },
-          "behavior": {
-            "destructive": false,
-            "idempotent": false,
-            "openWorld": true,
-            "readOnly": false
-          },
-          "meta": {
-            "fastmcp": {
-              "tags": []
-            }
-          },
-          "digest": "sha256:0795f0c451cc6cdd5b68f3d141186fb1428cd2134f0fd89bbccee25fe2637edf"
         },
         {
           "name": "submit_document_task",
@@ -393,14 +435,14 @@
         {
           "name": "submit_transcription_task",
           "title": "Submit Transcription Task",
-          "description": "提交长音频转写任务（会议录音/播客/网课，最长 2 小时、≤500MB，wav/mp3/flac/m4a/ogg/aac）。\n平台自动按 180 秒切段逐段转写并拼接全文（纯文本，不含时间戳）。提交后用 get_transcription_task 轮询结果。\nlanguage 留空自动检测，指定时用语种代码（如 zh、en）；context 可传热词（人名、术语、品牌，逗号分隔），对全部音频段生效。\n计费按实际时长（约 0.5 元/小时），余额不足会在提交时被拒绝。",
+          "description": "提交长音频转写任务（会议录音/播客/网课，最长 2 小时、≤500MB，wav/mp3/flac/m4a/ogg/aac）。\n平台自动按 180 秒切段逐段转写并拼接全文（纯文本，不含时间戳）。提交后用 get_transcription_task 轮询结果。\nlanguage 留空自动检测，指定时用语种代码（如 zh、en）；hotwords 可传热词（人名、术语、品牌，逗号分隔），对全部音频段生效。\n计费按实际时长（约 0.5 元/小时），余额不足会在提交时被拒绝。",
           "inputSchema": {
             "additionalProperties": false,
             "properties": {
               "audio_url": {
                 "type": "string"
               },
-              "context": {
+              "file_name": {
                 "anyOf": [
                   {
                     "type": "string"
@@ -411,7 +453,7 @@
                 ],
                 "default": null
               },
-              "file_name": {
+              "hotwords": {
                 "anyOf": [
                   {
                     "type": "string"
@@ -457,12 +499,12 @@
               "tags": []
             }
           },
-          "digest": "sha256:71d367ef8929bc5bc9b6da135321b9d0185400b6d6ce3421863ef4755d0af29f"
+          "digest": "sha256:2390c2154261c6a6edba2f73ffe10e9e0f3caac30ad55c29b3ae53fa70106394"
         },
         {
           "name": "synthesize_speech",
           "title": "Synthesize Speech",
-          "description": "把文本合成为语音（≤3000 UTF-8 字节，约 1000 汉字），同步返回现签下载链接（url，GET 即得音频，1 小时内有效）。\n请提醒用户及时下载转存——链接过期后只能重新合成（重复计费）。\n更长的文本请改用 submit_speech_task（异步任务）。speaker 音色代码先用 list_tts_voices 查询。\n计费约 2 元/万字符，失败不计费。",
+          "description": "把文本合成为语音（≤1000 字符），同步返回现签下载链接（url，GET 即得音频，1 小时内有效）。\n请提醒用户及时下载转存——链接过期后只能重新合成（重复计费）。\n更长的文本请改用 submit_speech_task（异步任务）。speaker 音色代码先用 list_tts_voices 查询。\n计费约 2 元/万字符，失败不计费。",
           "inputSchema": {
             "additionalProperties": false,
             "properties": {
@@ -502,19 +544,19 @@
               "tags": []
             }
           },
-          "digest": "sha256:769fc0f74d00a5f2ae4dc779349e08a426fbe5c0a8a8895c65ce936f0e885c44"
+          "digest": "sha256:2ae24b8e9acd6278340e9a5e6938ef29f04a454821090f1c69784ca9b554b725"
         },
         {
           "name": "transcribe_audio",
           "title": "Transcribe Audio",
-          "description": "把一段短音频（公网 URL）转成文字。适用于 ≤3 分钟、≤20MB 的录音/语音消息，同步秒级返回。\n更长的音频请改用 submit_transcription_task（异步任务）。\nlanguage 留空自动检测（支持普通话、英语及 22 种中文方言）；指定时用语种代码（如 zh、en）。\ncontext 可传热词（人名、术语、品牌，逗号分隔），专有名词按所列写法优先转写——会议转写建议填与会人名。\n返回全文纯文本（不含时间戳/分句时间轴）。计费按音频实际时长（约 0.5 元/小时，精确到秒），失败不计费。",
+          "description": "把一段短音频（公网 URL）转成文字。适用于 ≤3 分钟、≤20MB 的录音/语音消息，同步秒级返回。\n更长的音频请改用 submit_transcription_task（异步任务）。\nlanguage 留空自动检测（支持普通话、英语及 22 种中文方言）；指定时用语种代码（如 zh、en）。\nhotwords 可传热词（人名、术语、品牌，逗号分隔），专有名词按所列写法优先转写——会议转写建议填与会人名。\n返回全文纯文本（不含时间戳/分句时间轴）。计费按音频实际时长（约 0.5 元/小时，精确到秒），失败不计费。",
           "inputSchema": {
             "additionalProperties": false,
             "properties": {
               "audio_url": {
                 "type": "string"
               },
-              "context": {
+              "hotwords": {
                 "anyOf": [
                   {
                     "type": "string"
@@ -560,10 +602,10 @@
               "tags": []
             }
           },
-          "digest": "sha256:aa4121651d7c8677164d7193ab4deccf310f6e3e033a0a27693988d751e053f5"
+          "digest": "sha256:51ce0b781ec985117fe28f6ae4b013e2ff0080c512e12caddad1c612e8203b44"
         }
       ],
-      "digest": "sha256:225a4e3f86906f913544ea6464459282fcdf87b34145a4085c34ef4ceb1e65d2"
+      "digest": "sha256:655da75965e589f25bc67d3f0ef2c3add3c43539794b752675c4f0f692f998ac"
     }
   }
 }

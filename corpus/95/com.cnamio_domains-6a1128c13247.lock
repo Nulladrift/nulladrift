@@ -18,25 +18,63 @@
       "serverInfo": {
         "name": "cnamio",
         "title": "Cnamio",
-        "version": "1.0.0",
-        "websiteUrl": "https://cnamio.com"
+        "version": "1.2.2",
+        "websiteUrl": "https://cnamio.com",
+        "icons": [
+          {
+            "src": "https://cnamio.com/brand/cnamio-app-icon.svg",
+            "mimeType": "image/svg+xml",
+            "sizes": ["any"]
+          },
+          {
+            "src": "https://cnamio.com/brand/cnamio-app-icon-48.png",
+            "mimeType": "image/png",
+            "sizes": ["48x48"]
+          },
+          {
+            "src": "https://cnamio.com/brand/cnamio-app-icon-64.png",
+            "mimeType": "image/png",
+            "sizes": ["64x64"]
+          },
+          {
+            "src": "https://cnamio.com/brand/cnamio-app-icon-128.png",
+            "mimeType": "image/png",
+            "sizes": ["128x128"]
+          },
+          {
+            "src": "https://cnamio.com/brand/cnamio-app-icon-192.png",
+            "mimeType": "image/png",
+            "sizes": ["192x192"]
+          },
+          {
+            "src": "https://cnamio.com/brand/cnamio-app-icon-256.png",
+            "mimeType": "image/png",
+            "sizes": ["256x256"]
+          },
+          {
+            "src": "https://cnamio.com/brand/cnamio-app-icon-512.png",
+            "mimeType": "image/png",
+            "sizes": ["512x512"]
+          }
+        ]
       },
       "capabilities": {
         "tools": {
           "listChanged": false
         }
       },
-      "instructions": "Cnamio connects end users' custom domains to an app. To integrate it into a codebase, call get_integration_guide and follow it. To connect a domain now: check_domain, then connect_domain_automatic (when connectMethods has api_token and the domain owner gives a provider API token) or connect_domain (returns the records to create), then get_connection_status until completed. DNS records that already exist are never deleted; the only one that can change is an SPF policy, extended with every existing term kept. When someone else manages the DNS (an agency, the IT team), create_share_link returns a url to send them. Connected domains keep being monitored: get_connection_status and list_connections report health (healthy, degraded, broken). Domain tools need the application credentials (HTTP Basic applicationId:secret) or a session token; ask the project owner, never invent them.",
+      "instructions": "Cnamio connects end users' custom domains to an app: it finds the DNS provider, creates the records with a provider token or returns the exact records to copy, confirms propagation and sends a signed webhook. Happy path from zero, in one session: (1) when adding custom domains to a codebase, start with get_integration_guide and follow it in the codebase (server SDK: npm i cnamio or pip install cnamio). (2) No credentials yet? start_sandbox returns a sandbox session: pass its auth_token as sandboxToken to check_domain, connect_domain, connect_domain_automatic, get_connection_status and recheck_propagation to run the flow end to end with any domain (nothing real is touched), to build and test before the developer has credentials. (3) Ask the developer for their email and their agreement to https://cnamio.com/terms and https://cnamio.com/privacy, then call start_signup with consent: true (only after they agreed): they get a verification link; opening it and accepting the Terms and Privacy Policy there creates their free test and live applications. Its answer also carries a sandbox session to keep working meanwhile. They generate the secret in the dashboard and put CNAMIO_APPLICATION_ID and CNAMIO_SECRET in the server environment: never ask for the secret in the chat, never invent or hard-code it. (4) With credentials (HTTP Basic applicationId:secret on this server, or the SDK): check_domain first, then connect_domain_automatic when connectMethods has api_token and the domain owner gives a provider API token, otherwise connect_domain (returns the records to create); then get_connection_status until completed, or rely on the domain.added webhook. recheck_propagation asks for an immediate check of a connection still in progress. Never ask for or use DNS provider account passwords: connect_domain_automatic takes only an API token the domain owner chooses to give. DNS records that already exist are never deleted; the only one that can change is an SPF policy, extended with every existing term kept. When someone else manages the DNS (an agency, the IT team), create_share_link returns a url to hand to that person; never log it or write it anywhere else. revoke_share_link ends a link that should no longer be used. Connected domains keep being monitored: get_connection_status and list_connections report health (healthy, degraded, broken); list_connections with health \"broken\" finds connected domains whose records disappeared. Every domain tool result starts with the Cnamio application it acted as. When it says \"Cnamio Test application\" or \"agent sandbox session\", the credentials work: results come from a simulated DNS provider (provider \"sandbox\"). Do not report missing credentials; tell the user that real DNS needs the Production application (reconnect choosing it).",
       "tools": [
         {
           "name": "check_domain",
           "title": "Check a domain",
-          "description": "Read-only. Finds where a domain's DNS is hosted and how it can be connected: provider, setupType, connectMethods (api_token when the records can be created with the user's provider token), nameservers, recordState for a single CNAME, and conflicts with records already published.",
+          "description": "Looks up where a domain's DNS is hosted and how the given records can be connected, without changing anything. Returns provider, setupType, connectMethods (contains api_token when the records can be created through the DNS provider's API with a provider token), nameservers, recordState for a single CNAME, and conflicts with records already published (checked unless checkConflicts is false).",
           "inputSchema": {
             "additionalProperties": false,
             "properties": {
               "checkConflicts": {
                 "default": true,
+                "description": "Compare the records with those already published.",
                 "type": "boolean"
               },
               "dnsRecords": {
@@ -73,7 +111,12 @@
                 "type": "array"
               },
               "domain": {
+                "description": "The domain or subdomain to connect, without scheme or path.",
                 "examples": ["links.mybrand.com"],
+                "type": "string"
+              },
+              "sandboxToken": {
+                "description": "The auth_token of a sandbox session. Used only when the request carries no credentials; the request then runs against the simulated sandbox provider (no real DNS).",
                 "type": "string"
               }
             },
@@ -81,8 +124,11 @@
             "type": "object"
           },
           "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
             "openWorldHint": true,
-            "readOnlyHint": true
+            "readOnlyHint": true,
+            "title": "Check a domain"
           },
           "behavior": {
             "destructive": false,
@@ -90,12 +136,20 @@
             "openWorld": true,
             "readOnly": true
           },
-          "digest": "sha256:129997bc150f5e21e47fad022e45089183922f4241b1d2dbba822e842077d4e8"
+          "meta": {
+            "securitySchemes": [
+              {
+                "scopes": ["domains:read"],
+                "type": "oauth2"
+              }
+            ]
+          },
+          "digest": "sha256:f73f52bb3fde383ceed67836f77104f63e8a2e01533dd9badfb5f3b18a452b1f"
         },
         {
           "name": "connect_domain",
           "title": "Connect a domain (manual records)",
-          "description": "Starts a manual connection: returns the exact records the domain owner must create at their DNS provider and starts watching propagation on the authoritative nameservers (up to 72 hours). Does not change DNS. Follow it with get_connection_status.",
+          "description": "Starts a manual connection of a domain: returns a job_id and the exact records the domain owner creates at their DNS provider, and Cnamio watches the authoritative nameservers for them for up to 72 hours. Changes no DNS.",
           "inputSchema": {
             "additionalProperties": false,
             "properties": {
@@ -133,10 +187,16 @@
                 "type": "array"
               },
               "domain": {
+                "description": "The domain or subdomain to connect, without scheme or path.",
+                "examples": ["links.mybrand.com"],
+                "type": "string"
+              },
+              "sandboxToken": {
+                "description": "The auth_token of a sandbox session. Used only when the request carries no credentials; the request then runs against the simulated sandbox provider (no real DNS).",
                 "type": "string"
               },
               "userId": {
-                "description": "Your user id, echoed in webhooks.",
+                "description": "Your own user id, echoed in the job and its webhooks.",
                 "type": "string"
               }
             },
@@ -147,7 +207,8 @@
             "destructiveHint": false,
             "idempotentHint": false,
             "openWorldHint": true,
-            "readOnlyHint": false
+            "readOnlyHint": false,
+            "title": "Connect a domain (manual records)"
           },
           "behavior": {
             "destructive": false,
@@ -155,12 +216,20 @@
             "openWorld": true,
             "readOnly": false
           },
-          "digest": "sha256:adce7d91da800839f97d76d98fd82b4828d2637b97b66478af0b49bd65ca5dc7"
+          "meta": {
+            "securitySchemes": [
+              {
+                "scopes": ["domains:write"],
+                "type": "oauth2"
+              }
+            ]
+          },
+          "digest": "sha256:08cb50246895d447fed8838fcf55f208b5d5523450b9c698fc76e15a610c569d"
         },
         {
           "name": "connect_domain_automatic",
           "title": "Connect a domain with the provider token",
-          "description": "Creates the records at the domain's DNS provider with an API token the domain owner provides (only when check_domain returned connectMethods containing api_token). The token is used during this call only and is never stored; existing records are never changed or deleted (a conflict returns 409 with the reasons). Never ask for or use DNS provider passwords.",
+          "description": "Creates the given records at the domain's DNS provider through the provider's API, with an API token from the domain owner, and returns a job_id. Works for domains whose connectMethods include api_token. The token is used for this request only and never stored. Existing records are never deleted; the only one that can change is an SPF policy, extended with every existing term kept. A conflict with existing records returns 409 with the reasons and creates nothing.",
           "inputSchema": {
             "additionalProperties": false,
             "properties": {
@@ -198,13 +267,20 @@
                 "type": "array"
               },
               "domain": {
+                "description": "The domain or subdomain to connect, without scheme or path.",
+                "examples": ["links.mybrand.com"],
                 "type": "string"
               },
               "providerToken": {
-                "description": "The domain owner's API token for their DNS provider.",
+                "description": "An API token for the domain's DNS provider, from the domain owner (a token, not an account password).",
+                "type": "string"
+              },
+              "sandboxToken": {
+                "description": "The auth_token of a sandbox session. Used only when the request carries no credentials; the request then runs against the simulated sandbox provider (no real DNS).",
                 "type": "string"
               },
               "userId": {
+                "description": "Your own user id, echoed in the job and its webhooks.",
                 "type": "string"
               }
             },
@@ -212,23 +288,32 @@
             "type": "object"
           },
           "annotations": {
-            "destructiveHint": false,
+            "destructiveHint": true,
             "idempotentHint": false,
             "openWorldHint": true,
-            "readOnlyHint": false
+            "readOnlyHint": false,
+            "title": "Connect a domain with the provider token"
           },
           "behavior": {
-            "destructive": false,
+            "destructive": true,
             "idempotent": false,
             "openWorld": true,
             "readOnly": false
           },
-          "digest": "sha256:62335e20e69915c376017eafef89af95a62ab0bcf80892de4c67f56b5fe934af"
+          "meta": {
+            "securitySchemes": [
+              {
+                "scopes": ["domains:write"],
+                "type": "oauth2"
+              }
+            ]
+          },
+          "digest": "sha256:07d4c4fbe8af0c7c47ad47d0e7c8fe0cdcbd2f305f5dfc1c190c6ee9681c708a"
         },
         {
           "name": "create_share_link",
           "title": "Create a shareable connection link",
-          "description": "Creates a link (url) that the person who manages the DNS (an agency, the IT team) opens to connect these domains with these records, without the application secret. Bound to the domains and records given; single-use per domain by default (maxUses), expires in 7 days by default (expiresInDays, at most 30). The url holds a token shown only in this answer: hand it to the person, never log it. Connections started from it appear as usual, with share_link_id.",
+          "description": "Creates a link (url) that lets whoever manages the DNS (an agency, the IT team) connect the given domains with the given records, without the application secret. The link is bound to those domains and records, single-use per domain by default (maxUses) and expires in 7 days by default (expiresInDays, at most 30). Returns the url, which carries a token returned only in this answer, and the share_link_id. Connections started from the link are listed like any other, with that share_link_id.",
           "inputSchema": {
             "additionalProperties": false,
             "properties": {
@@ -266,6 +351,7 @@
                 "type": "array"
               },
               "domains": {
+                "description": "The domains the link may connect.",
                 "examples": [
                   ["links.mybrand.com"]
                 ],
@@ -278,6 +364,7 @@
               },
               "expiresInDays": {
                 "default": 7,
+                "description": "Days until the link expires.",
                 "maximum": 30,
                 "minimum": 0.05,
                 "type": "number"
@@ -294,7 +381,7 @@
                 "type": "integer"
               },
               "userId": {
-                "description": "Your user id, echoed in jobs and webhooks.",
+                "description": "Your own user id, echoed in the job and its webhooks.",
                 "type": "string"
               }
             },
@@ -305,7 +392,8 @@
             "destructiveHint": false,
             "idempotentHint": false,
             "openWorldHint": false,
-            "readOnlyHint": false
+            "readOnlyHint": false,
+            "title": "Create a shareable connection link"
           },
           "behavior": {
             "destructive": false,
@@ -313,18 +401,30 @@
             "openWorld": false,
             "readOnly": false
           },
-          "digest": "sha256:c71583870536e1d56b9aa6a0672771c0c84a837dd8726944fca5c30a6caa89ed"
+          "meta": {
+            "securitySchemes": [
+              {
+                "scopes": ["share_links:write"],
+                "type": "oauth2"
+              }
+            ]
+          },
+          "digest": "sha256:10a321f1a4715adbf986aa41f7cf3185d9dea277fccee68bb881a19ec71168ee"
         },
         {
           "name": "get_connection_status",
           "title": "Connection status",
-          "description": "Status of a connection: pending, in_progress, completed (connected) or failed (72 hours without propagation). A connected domain keeps being monitored (read-only): health is healthy, degraded (an optional record is gone, or the zone cannot be read) or broken (a required record is gone), with missing_records listing what is gone.",
+          "description": "Returns the status of a connection: pending, in_progress, completed (connected) or failed (72 hours without propagation). A connected domain keeps being monitored (read-only): health is healthy, degraded (an optional record is gone, or the zone cannot be read) or broken (a required record is gone), with missing_records listing what is gone.",
           "inputSchema": {
             "additionalProperties": false,
             "properties": {
               "jobId": {
-                "description": "job_id returned by connect_domain or connect_domain_automatic",
+                "description": "The job_id of a connection (job_…).",
                 "pattern": "^job_[0-9a-f-]{36}$",
+                "type": "string"
+              },
+              "sandboxToken": {
+                "description": "The auth_token of a sandbox session. Used only when the request carries no credentials; the request then runs against the simulated sandbox provider (no real DNS).",
                 "type": "string"
               }
             },
@@ -332,8 +432,11 @@
             "type": "object"
           },
           "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
             "openWorldHint": false,
-            "readOnlyHint": true
+            "readOnlyHint": true,
+            "title": "Connection status"
           },
           "behavior": {
             "destructive": false,
@@ -341,20 +444,31 @@
             "openWorld": false,
             "readOnly": true
           },
-          "digest": "sha256:a85885e203a3932c8e7686dbaffee1de2fac41684c0e0c8842f40cb94ab7680d"
+          "meta": {
+            "securitySchemes": [
+              {
+                "scopes": ["domains:read"],
+                "type": "oauth2"
+              }
+            ]
+          },
+          "digest": "sha256:588d770121f7516f91c5aaaefc61d8ea1cb70bf9d560d866108a8804724fac71"
         },
         {
           "name": "get_integration_guide",
           "title": "Cnamio integration guide",
-          "description": "Returns the step-by-step guide to add custom domain connection to a project with Cnamio: records, environment variables, server session route, browser connect window, headless API and webhook verification (Node.js and Python). Start here when integrating Cnamio into code.",
+          "description": "Returns the Cnamio integration guide (Markdown) for adding custom domains to an app: the DNS records with a per-user ownership TXT, the environment variables, the server session route, the browser connect window, the headless API and webhook verification, with the Node.js and Python server SDKs (npm package cnamio, PyPI package cnamio). Framework recipes (Next.js, Express, Rails, Laravel, Django) are listed at https://cnamio.com/llms.txt. Takes no input and needs no credentials.",
           "inputSchema": {
             "additionalProperties": false,
             "properties": {},
             "type": "object"
           },
           "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
             "openWorldHint": false,
-            "readOnlyHint": true
+            "readOnlyHint": true,
+            "title": "Cnamio integration guide"
           },
           "behavior": {
             "destructive": false,
@@ -362,16 +476,24 @@
             "openWorld": false,
             "readOnly": true
           },
-          "digest": "sha256:363227d4ff209cde7582d3648d94a909bb61d127090886dc7fc18e68138113ad"
+          "meta": {
+            "securitySchemes": [
+              {
+                "type": "noauth"
+              }
+            ]
+          },
+          "digest": "sha256:1f083fd1652a4dd1850bad3d71eae54623cf4c848a6486e992fc7fcec774d471"
         },
         {
           "name": "list_connections",
           "title": "List connections",
-          "description": "Recent connections of the application, newest first, optionally for one domain, status or monitoring health (use health: \"broken\" to find connected domains whose records disappeared). Needs the application credentials (not a session token).",
+          "description": "Lists the application's recent connections, newest first, optionally only those of one domain, one status or one monitoring health (broken: connected domains whose required records disappeared), up to limit. Needs the application credentials or an OAuth sign-in; a session token is refused.",
           "inputSchema": {
             "additionalProperties": false,
             "properties": {
               "domain": {
+                "description": "Only connections of this domain.",
                 "type": "string"
               },
               "health": {
@@ -381,11 +503,13 @@
               },
               "limit": {
                 "default": 20,
+                "description": "How many connections at most.",
                 "maximum": 100,
                 "minimum": 1,
                 "type": "integer"
               },
               "status": {
+                "description": "Only connections in this status.",
                 "enum": ["pending", "in_progress", "completed", "failed"],
                 "type": "string"
               }
@@ -393,8 +517,11 @@
             "type": "object"
           },
           "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
             "openWorldHint": false,
-            "readOnlyHint": true
+            "readOnlyHint": true,
+            "title": "List connections"
           },
           "behavior": {
             "destructive": false,
@@ -402,18 +529,30 @@
             "openWorld": false,
             "readOnly": true
           },
-          "digest": "sha256:8565df45081c4009069d4e3d916ee1adea8ff9e2ac889cbb7d69d45b24c6fdb1"
+          "meta": {
+            "securitySchemes": [
+              {
+                "scopes": ["domains:read"],
+                "type": "oauth2"
+              }
+            ]
+          },
+          "digest": "sha256:aba32b26db5fd822938118c95e9f6ee9adde21bf6e8a39bd10f772b8ce8b11a6"
         },
         {
           "name": "recheck_propagation",
           "title": "Check propagation now",
-          "description": "Asks Cnamio to check the domain's authoritative nameservers again now (at most once every 5 minutes per connection; 429 before that). Only for connections still in progress: one that is already completed or failed answers 409 and nothing is checked.",
+          "description": "Checks the domain's authoritative nameservers again now for a connection still in progress and returns its status. At most once every 5 minutes per connection (429 before that); a connection already completed or failed answers 409 and nothing is checked.",
           "inputSchema": {
             "additionalProperties": false,
             "properties": {
               "jobId": {
-                "description": "job_id returned by connect_domain or connect_domain_automatic",
+                "description": "The job_id of a connection (job_…).",
                 "pattern": "^job_[0-9a-f-]{36}$",
+                "type": "string"
+              },
+              "sandboxToken": {
+                "description": "The auth_token of a sandbox session. Used only when the request carries no credentials; the request then runs against the simulated sandbox provider (no real DNS).",
                 "type": "string"
               }
             },
@@ -424,7 +563,8 @@
             "destructiveHint": false,
             "idempotentHint": true,
             "openWorldHint": true,
-            "readOnlyHint": false
+            "readOnlyHint": false,
+            "title": "Check propagation now"
           },
           "behavior": {
             "destructive": false,
@@ -432,16 +572,25 @@
             "openWorld": true,
             "readOnly": false
           },
-          "digest": "sha256:6d5e1d5542253563d3c8fb0c3ef1e5140dfab7758952946ada06325c496651d1"
+          "meta": {
+            "securitySchemes": [
+              {
+                "scopes": ["domains:write"],
+                "type": "oauth2"
+              }
+            ]
+          },
+          "digest": "sha256:aaae3055439bae48b5f0d684b7a68a8bd80a9dbe5c383d9e18bd182e4dc3287c"
         },
         {
           "name": "revoke_share_link",
           "title": "Revoke a shareable connection link",
-          "description": "Ends a shareable link now: it hands out nothing more. Connections already started go on.",
+          "description": "Revokes a shareable connection link at once: it starts no more connections and cannot be restored. Connections already started from it go on. Returns the link with its revoked_at time.",
           "inputSchema": {
             "additionalProperties": false,
             "properties": {
               "shareLinkId": {
+                "description": "The share_link_id of the link (shl_…).",
                 "pattern": "^shl_[A-Za-z0-9_-]{16}$",
                 "type": "string"
               }
@@ -450,21 +599,117 @@
             "type": "object"
           },
           "annotations": {
-            "destructiveHint": false,
+            "destructiveHint": true,
             "idempotentHint": true,
             "openWorldHint": false,
-            "readOnlyHint": false
+            "readOnlyHint": false,
+            "title": "Revoke a shareable connection link"
           },
           "behavior": {
-            "destructive": false,
+            "destructive": true,
             "idempotent": true,
             "openWorld": false,
             "readOnly": false
           },
-          "digest": "sha256:aa71d12ec46747849fa0608bc13d80ccf43695f9620ffd4bc9debce46ab6ea4a"
+          "meta": {
+            "securitySchemes": [
+              {
+                "scopes": ["share_links:write"],
+                "type": "oauth2"
+              }
+            ]
+          },
+          "digest": "sha256:e15f04f53561aa40301ef45d031ad96e71022ae8470fd4282478481663cc0975"
+        },
+        {
+          "name": "start_sandbox",
+          "title": "Get a sandbox session",
+          "description": "Creates a 30-minute sandbox session of a Cnamio test application, without an account or credentials. Returns application_id, auth_token, expires_at and user_id. A sandbox session answers from a simulated DNS provider: nothing real is read or written and any domain name connects at once; a first label conflict. simulates records already in the way, pending. a record that never propagates, and the provider token \"invalid\" is refused.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {},
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": false,
+            "openWorldHint": false,
+            "readOnlyHint": false,
+            "title": "Get a sandbox session"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": false,
+            "openWorld": false,
+            "readOnly": false
+          },
+          "meta": {
+            "securitySchemes": [
+              {
+                "type": "noauth"
+              }
+            ]
+          },
+          "digest": "sha256:1dd866b4b8f3cf12e024c6e4b734f3b1190bf23dae752de622d0757fcb145f47"
+        },
+        {
+          "name": "start_signup",
+          "title": "Start a free Cnamio account",
+          "description": "Requests a free Cnamio account for an email address. Cnamio emails a link to that address, and only opening it creates the account (a test application on the simulated sandbox provider and a live application on the free plan); an address that already has an account gets a sign-in link instead, and the answer is the same in both cases. Requires consent: true, meaning the address owner agreed to https://cnamio.com/terms and https://cnamio.com/privacy. Returns received: true and the next steps; the application secret is never returned (it is generated in the dashboard). The answer also carries a 30-minute sandbox session (sandbox).",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "company": {
+                "description": "Company or product name (optional).",
+                "type": "string"
+              },
+              "consent": {
+                "const": true,
+                "description": "true: that person agreed to the Terms and the Privacy Policy.",
+                "type": "boolean"
+              },
+              "email": {
+                "description": "The email address of the person the account is for.",
+                "format": "email",
+                "type": "string"
+              },
+              "locale": {
+                "description": "Language of the email and the dashboard.",
+                "enum": ["en", "pt-BR", "es"],
+                "type": "string"
+              },
+              "name": {
+                "description": "The person's name (optional).",
+                "type": "string"
+              }
+            },
+            "required": ["consent", "email"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": false,
+            "openWorldHint": true,
+            "readOnlyHint": false,
+            "title": "Start a free Cnamio account"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "meta": {
+            "securitySchemes": [
+              {
+                "type": "noauth"
+              }
+            ]
+          },
+          "digest": "sha256:8309a6030068b05ddb247be4af5e8788e2d4d8a255579edd6c66d53e4e2ba380"
         }
       ],
-      "digest": "sha256:b7489707f4c9f4a553cb0d5030a548f49ba338d3a265d6ec0ea149cd8b059cec"
+      "digest": "sha256:b290e9129deab2bf8b66264131a17621c05a12953d38d4c04e48ad9ada32c6a6"
     }
   }
 }
