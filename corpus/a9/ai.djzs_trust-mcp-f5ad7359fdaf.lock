@@ -17,23 +17,39 @@
       },
       "serverInfo": {
         "name": "djzs-trust-mcp",
-        "version": "1.0.0"
+        "title": "DJZS Trade Audit",
+        "version": "1.0.0",
+        "description": "Pre-execution audit for AI trading agents. Checks a prediction-market, perpetual or spot trade thesis for a stated reason, a falsification condition and bounded risk before capital is committed, returns PASS, WAIT or FAIL with a reproducible verdict hash, and looks up an agent's audit certificates and trust score.",
+        "websiteUrl": "https://djzs.ai",
+        "icons": [
+          {
+            "src": "https://djzs.ai/favicon.svg",
+            "mimeType": "image/svg+xml",
+            "sizes": ["any"]
+          },
+          {
+            "src": "https://djzs.ai/favicon-512.png",
+            "mimeType": "image/png",
+            "sizes": ["512x512"]
+          }
+        ]
       },
       "capabilities": {
         "tools": {
           "listChanged": true
         }
       },
+      "instructions": "DJZS audits the reasoning behind a trade before it executes. It does not predict prices or place orders.\n1. Checking a counterparty agent (free, read-only): call query_agent_trust with its wallet address for its pass/fail record, and query_pol_certificates to read its individual audit certificates.\n2. Before opening, sizing or increasing a position: send the thesis in the user's own words. Prediction-market bets go to verify_pm_trade; perpetual and spot trades go to verify_perp_trade. Each audit costs 2.00 USDC via x402 on Base and anchors a permanent certificate, so confirm with the user before calling. A thesis sent to the wrong tool is refused without charge.\n3. Act on the verdict: PASS (action PROCEED) means the thesis is complete and bounded; WAIT (action HALT) means fields named in halt_reason could not be resolved, so clarify and re-audit; FAIL means do not execute as stated until the flagged defects are fixed.\nA verdict grades whether the reasoning is stated, falsifiable and bounded, not whether the trade will win.",
       "tools": [
         {
           "name": "query_agent_trust",
-          "title": "Query DJZS Agent Trust Score",
+          "title": "Query Agent Trust Score",
           "description": "Query an agent's DJZS trust score, aggregated on-chain (Base mainnet) from its audit history and indexed via the DJZS subgraph. USE BEFORE delegating work, releasing escrow, or executing agent transactions. Returns scored_audits, pass/fail counts, the raw fail rate, and a Wilson 95% lower bound on it, plus latest verdict/risk and DJZS-S01/DJZS-X01 flag counts. WAIT verdicts are abstentions: they are excluded from BOTH the numerator and the denominator of the fail rate and are reported separately as wait_count. Below 10 scored audits the tool returns INSUFFICIENT_HISTORY and NO rate - a 0-of-0 record is not evidence of reliability and must not compare as better than a 3-of-50. This tool returns evidence, not a decision: it applies no threshold and emits no HALT. Interpreting the bound against your own risk tolerance is the caller's job.",
           "inputSchema": {
             "$schema": "http://json-schema.org/draft-07/schema#",
             "properties": {
               "agentAddress": {
-                "description": "Agent wallet address (0x-prefixed)",
+                "description": "Wallet address of the agent whose audit record you want, such as a counterparty you are about to delegate work to or pay",
                 "pattern": "^0x[0-9a-fA-F]{40}$",
                 "type": "string"
               }
@@ -41,16 +57,109 @@
             "required": ["agentAddress"],
             "type": "object"
           },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": {},
+            "properties": {
+              "action": {
+                "type": "string"
+              },
+              "agent": {
+                "description": "The queried address, lowercased",
+                "type": "string"
+              },
+              "detail": {
+                "type": "string"
+              },
+              "fail_count": {
+                "type": "number"
+              },
+              "fail_rate": {
+                "anyOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "FAIL / scored_audits; null below the minimum history"
+              },
+              "fail_rate_lower_bound_95": {
+                "anyOf": [
+                  {
+                    "type": "number"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Wilson 95% lower bound on the fail rate"
+              },
+              "flag_counts": {
+                "additionalProperties": {
+                  "type": "number"
+                },
+                "propertyNames": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              "interpretation": {
+                "type": "string"
+              },
+              "latest_risk_score": {
+                "type": "number"
+              },
+              "latest_verdict": {},
+              "message": {
+                "type": "string"
+              },
+              "pass_count": {
+                "type": "number"
+              },
+              "scored_audits": {
+                "description": "PASS plus FAIL audits; WAIT is excluded",
+                "type": "number"
+              },
+              "status": {
+                "description": "no_history, INSUFFICIENT_HISTORY (under 10 scored audits, no rate returned) or OK",
+                "type": "string"
+              },
+              "subgraph_counters": {
+                "additionalProperties": {},
+                "properties": {},
+                "type": "object"
+              },
+              "total_audits": {
+                "type": "number"
+              },
+              "trust": {
+                "type": "string"
+              },
+              "wait_count": {
+                "type": "number"
+              }
+            },
+            "required": ["agent", "status"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": true
+          },
           "behavior": {
-            "destructive": true,
-            "idempotent": false,
+            "destructive": false,
+            "idempotent": true,
             "openWorld": true,
-            "readOnly": false
+            "readOnly": true
           },
           "execution": {
             "taskSupport": "forbidden"
           },
-          "digest": "sha256:7f096e91287a24dc72c3620a1db52e69a201b9dcd2d69e88832082885282ef13"
+          "digest": "sha256:d9e949cf17e17cd8091deae53085bb4c072aa70f5e16d02d6ba6ae832d945a74"
         },
         {
           "name": "query_pol_certificates",
@@ -60,55 +169,167 @@
             "$schema": "http://json-schema.org/draft-07/schema#",
             "properties": {
               "from_ms": {
-                "description": "Window start (epoch ms). Default path auto-narrows (14d then 3d) to stay under the mainnet index timeout; pass an explicit value to reach older certificates (used as-is).",
+                "description": "Start of the search window, as Unix time in milliseconds. When omitted the server searches the last 14 days, then the last 3 days if the wider search fails; set it to reach older certificates, and it is used as given",
                 "maximum": 9007199254740991,
                 "minimum": -9007199254740991,
                 "type": "integer"
               },
               "limit": {
                 "default": 20,
-                "description": "Number of results",
+                "description": "Maximum number of certificates to return, newest first",
                 "maximum": 100,
                 "minimum": 1,
                 "type": "number"
               },
               "targetSystem": {
-                "description": "Project name or wallet address",
+                "description": "Return only certificates whose Target-System tag equals this agent or project identifier (a project name or wallet address), matched exactly as written on the certificate",
                 "type": "string"
               },
               "tier": {
-                "description": "Filter by tier",
+                "description": "Return only certificates carrying this tier tag",
                 "enum": ["micro", "founder", "treasury"],
                 "type": "string"
               },
               "to_ms": {
-                "description": "Window end (epoch ms). Defaults to now + 1h.",
+                "description": "End of the search window, as Unix time in milliseconds. When omitted it is one hour after the current time",
                 "maximum": 9007199254740991,
                 "minimum": -9007199254740991,
                 "type": "integer"
               },
               "verdict": {
-                "description": "Filter by verdict",
+                "description": "Return only certificates with this audit outcome",
                 "enum": ["PASS", "FAIL"],
                 "type": "string"
               }
             },
             "type": "object"
           },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": {},
+            "properties": {
+              "certificates": {
+                "items": {
+                  "additionalProperties": {},
+                  "properties": {
+                    "audit_id": {
+                      "type": "string"
+                    },
+                    "corrections": {
+                      "description": "Correction Records anchored against this certificate",
+                      "items": {},
+                      "type": "array"
+                    },
+                    "irys_id": {
+                      "description": "Irys transaction id of the certificate",
+                      "type": "string"
+                    },
+                    "irys_url": {
+                      "description": "Gateway URL to fetch the full certificate",
+                      "type": "string"
+                    },
+                    "target_system": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "Signed identifier, unverified:<value>, or null"
+                    },
+                    "target_system_verified": {
+                      "type": "boolean"
+                    },
+                    "tier": {
+                      "type": "string"
+                    },
+                    "timestamp": {
+                      "description": "Index timestamp as returned by Irys"
+                    },
+                    "verdict": {
+                      "description": "PASS, FAIL, WAIT, or unknown",
+                      "type": "string"
+                    }
+                  },
+                  "required": ["audit_id", "corrections", "irys_id", "irys_url", "target_system", "target_system_verified", "tier", "timestamp", "verdict"],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "fail_count": {
+                "type": "number"
+              },
+              "notes": {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "propertyNames": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              "other_verdict_count": {
+                "description": "Certificates whose verdict is none of PASS, FAIL, WAIT",
+                "type": "number"
+              },
+              "pass_count": {
+                "type": "number"
+              },
+              "target_system_unverified_count": {
+                "description": "Certificates whose target_system carries the unverified: prefix",
+                "type": "number"
+              },
+              "total_returned": {
+                "description": "Number of certificates in this response",
+                "type": "number"
+              },
+              "wait_count": {
+                "type": "number"
+              },
+              "window": {
+                "additionalProperties": {},
+                "properties": {
+                  "from_ms": {
+                    "description": "Window start actually searched, Unix ms",
+                    "type": "number"
+                  },
+                  "note": {
+                    "type": "string"
+                  },
+                  "to_ms": {
+                    "description": "Window end, Unix ms",
+                    "type": "number"
+                  }
+                },
+                "required": ["from_ms", "to_ms"],
+                "type": "object"
+              }
+            },
+            "required": ["certificates", "fail_count", "other_verdict_count", "pass_count", "target_system_unverified_count", "total_returned", "wait_count", "window"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": true
+          },
           "behavior": {
-            "destructive": true,
-            "idempotent": false,
+            "destructive": false,
+            "idempotent": true,
             "openWorld": true,
-            "readOnly": false
+            "readOnly": true
           },
           "execution": {
             "taskSupport": "forbidden"
           },
-          "digest": "sha256:1ddf6da04e889b95cf2c8d15f3903205c3611081fa973d6f208c00dcf011e861"
+          "digest": "sha256:b7ded65265cd6cd4d6e59977762ad45e83951d5aec7d13377d354d7d1897235e"
         },
         {
           "name": "verify_perp_trade",
-          "title": "Verify Perpetual / Spot Trade Thesis (DJZS pre-execution audit)",
+          "title": "Verify Perpetual or Spot Trade",
           "description": "Deterministic pre-execution audit of a perpetual or spot TRADE thesis (direction, size, leverage, entry, stop, target, venue, and the REASON), run before capital is committed. USE THIS TOOL before opening, sizing, or increasing any perpetual or spot position. Returns PASS / WAIT / FAIL with a reproducible verdict hash. A position stated with no thesis FAILS (DJZS-S01); an unbounded position FAILS (DJZS-X01); an unresolvable stop or thesis WAITs. Prediction-market bets are refused here (use verify_pm_trade) and are not charged. Price 2.00 USDC per audit on Base.",
           "inputSchema": {
             "$schema": "http://json-schema.org/draft-07/schema#",
@@ -122,11 +343,12 @@
                 "description": "Optional exact bracket (side, entry, stop, target, taker_fee_bps, optional hit_rate_pct / funding_rate_8h / sigma_annual). Returns the break-even hit rate in the non-scoring mechanics block; never enters the verdict or its hash",
                 "properties": {
                   "entry": {
+                    "description": "Planned entry price, in the instrument's quote currency",
                     "exclusiveMinimum": 0,
                     "type": "number"
                   },
                   "funding_rate_8h": {
-                    "description": "Funding rate per 8 hours as a fraction (0.0001 = 0.01%); longs pay a positive rate. Counted only with sigma_annual",
+                    "description": "Funding rate per 8-hour interval as a fraction (0.0001 means 0.01%); a positive rate is paid by longs. Used only when sigma_annual is also sent",
                     "maximum": 0.05,
                     "minimum": -0.05,
                     "type": "number"
@@ -138,6 +360,7 @@
                     "type": "number"
                   },
                   "side": {
+                    "description": "Direction of the position: long profits if price rises, short if it falls",
                     "enum": ["long", "short"],
                     "type": "string"
                   },
@@ -148,16 +371,18 @@
                     "type": "number"
                   },
                   "stop": {
+                    "description": "Stop-loss price, in the same units as entry",
                     "exclusiveMinimum": 0,
                     "type": "number"
                   },
                   "taker_fee_bps": {
-                    "description": "The venue's taker fee in basis points, charged on entry and on exit",
+                    "description": "The venue's taker fee in basis points; the break-even calculation charges it on entry and again on exit",
                     "maximum": 100,
                     "minimum": 0,
                     "type": "number"
                   },
                   "target": {
+                    "description": "Take-profit price, in the same units as entry",
                     "exclusiveMinimum": 0,
                     "type": "number"
                   }
@@ -166,23 +391,23 @@
                 "type": "object"
               },
               "intent": {
-                "description": "Free-text perpetual or spot trade thesis to audit: direction, size, leverage, entry, stop, target, venue, and the REASON",
+                "description": "The trade as the user or upstream agent stated it, in plain text: instrument, direction, size, leverage, entry, stop, target, venue, and the reason the price should move that way. A position sent with no reason FAILS",
                 "minLength": 10,
                 "type": "string"
               },
               "target_system": {
-                "description": "Optional agent/project identifier. Written to the certificate ONLY with a matching target_system_subject + target_system_signature; unsigned values are DISCARDED, not stored",
+                "description": "Agent or project name to record on the anchored certificate. It is stored ONLY when target_system_subject and target_system_signature are also sent and the signature verifies; otherwise it is DISCARDED, not stored",
                 "maxLength": 128,
                 "minLength": 1,
                 "type": "string"
               },
               "target_system_signature": {
-                "description": "EIP-191 personal_sign over \"DJZS-TSC-1 target-system claim\\nsubject: <lowercased subject>\\ntarget_system: <value>\"",
+                "description": "Signature by target_system_subject proving the claim: EIP-191 personal_sign over the text \"DJZS-TSC-1 target-system claim\\nsubject: <lowercased subject>\\ntarget_system: <value>\"",
                 "pattern": "^0x[0-9a-fA-F]{130}$",
                 "type": "string"
               },
               "target_system_subject": {
-                "description": "Address that signed the target_system claim. Must be the address that recovers from target_system_signature",
+                "description": "Wallet address that signed the target_system claim; the server checks that target_system_signature recovers to it",
                 "pattern": "^0x[0-9a-fA-F]{40}$",
                 "type": "string"
               }
@@ -190,11 +415,93 @@
             "required": ["intent"],
             "type": "object"
           },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": {},
+            "properties": {
+              "action": {
+                "description": "PROCEED for PASS, HALT for WAIT, FAIL for FAIL",
+                "type": "string"
+              },
+              "disagreements": {},
+              "extraction_failsafe": {
+                "type": "boolean"
+              },
+              "fail_reason": {
+                "type": "string"
+              },
+              "flags": {
+                "description": "Defects found, each with its DJZS code",
+                "items": {},
+                "type": "array"
+              },
+              "halt_reason": {
+                "description": "Present on WAIT: what to clarify before re-auditing",
+                "type": "string"
+              },
+              "in_scope": {
+                "type": "boolean"
+              },
+              "mechanics": {
+                "additionalProperties": {},
+                "description": "verify_perp_trade only: non-scoring execution mechanics",
+                "properties": {},
+                "type": "object"
+              },
+              "pol_certificate": {
+                "additionalProperties": {},
+                "description": "Anchoring status and Irys id of the Proof-of-Logic certificate",
+                "properties": {},
+                "type": "object"
+              },
+              "risk_score": {
+                "type": "number"
+              },
+              "schema_version": {
+                "type": "string"
+              },
+              "tally": {},
+              "taxonomy": {
+                "additionalProperties": {},
+                "description": "Ruleset and extraction-contract versions and hashes the verdict ran under",
+                "properties": {},
+                "type": "object"
+              },
+              "tool": {
+                "type": "string"
+              },
+              "trust_score": {
+                "additionalProperties": {},
+                "description": "On-chain trust-score write status, when agent_address was given",
+                "properties": {},
+                "type": "object"
+              },
+              "unknown_fields": {
+                "description": "Fields that could not be resolved from the thesis text",
+                "items": {},
+                "type": "array"
+              },
+              "verdict": {
+                "description": "PASS, WAIT or FAIL",
+                "type": "string"
+              },
+              "verdict_hash": {
+                "description": "Reproducible hash binding the verdict to its inputs",
+                "type": "string"
+              }
+            },
+            "required": ["action", "in_scope", "risk_score", "schema_version", "tool", "verdict", "verdict_hash"],
+            "type": "object"
+          },
           "annotations": {
-            "title": "Verify Perpetual / Spot Trade Thesis (DJZS pre-execution audit)"
+            "destructiveHint": false,
+            "idempotentHint": false,
+            "openWorldHint": true,
+            "readOnlyHint": false,
+            "title": "Verify Perpetual or Spot Trade"
           },
           "behavior": {
-            "destructive": true,
+            "destructive": false,
             "idempotent": false,
             "openWorld": true,
             "readOnly": false
@@ -206,11 +513,11 @@
             "agents-x402/paymentRequired": true,
             "agents-x402/priceUSD": 2
           },
-          "digest": "sha256:f64be42f012842aa1a97dd100f72e3ba9de57a3c32c46d8a342c5c0c086a860a"
+          "digest": "sha256:c1c89d13ddee384304f67d73bdb7ecb0fc56448eb212cb9f672bc386f60479e1"
         },
         {
           "name": "verify_pm_trade",
-          "title": "Verify Prediction-Market Trade Thesis (DJZS pre-execution audit)",
+          "title": "Verify Prediction-Market Trade",
           "description": "Deterministic pre-execution audit of a prediction-market trade thesis, run before capital is committed. USE THIS TOOL before opening, sizing, or increasing any prediction-market position, and whenever a user or an upstream agent asks whether a thesis is sound, carries a falsification condition, or has a sourced probability basis. Audits against the calibrated DJZS-M taxonomy (M01 narrative/resolution gap, M02 falsification absent, M03 probability unsourced, M04 consensus-as-edge advisory) and returns PASS->PROCEED, WAIT->HALT, or FAIL with the flagged defects and a reproducible verdict_hash. DO NOT use to retrieve past verdicts or certificates - use query_pol_certificates for those. DO NOT use for an agent's historical trust score - use query_agent_trust for that. DO NOT use for spot, perpetuals, or equities: out-of-scope submissions are refused WITHOUT CHARGE. Audit before act. Paid tool: 2 USDC per audit via x402 on Base.",
           "inputSchema": {
             "$schema": "http://json-schema.org/draft-07/schema#",
@@ -221,23 +528,23 @@
                 "type": "string"
               },
               "intent": {
-                "description": "Free-text prediction-market trade thesis to audit",
+                "description": "The prediction-market bet as the user or upstream agent stated it, in plain text: the market, the side, the reason, the probability and where it comes from, the size, and what would prove the bet wrong. Send the original wording; the audit judges only what is written",
                 "minLength": 10,
                 "type": "string"
               },
               "target_system": {
-                "description": "Optional agent/project identifier. Written to the certificate ONLY with a matching target_system_subject + target_system_signature; unsigned values are DISCARDED, not stored",
+                "description": "Agent or project name to record on the anchored certificate. It is stored ONLY when target_system_subject and target_system_signature are also sent and the signature verifies; otherwise it is DISCARDED, not stored",
                 "maxLength": 128,
                 "minLength": 1,
                 "type": "string"
               },
               "target_system_signature": {
-                "description": "EIP-191 personal_sign over \"DJZS-TSC-1 target-system claim\\nsubject: <lowercased subject>\\ntarget_system: <value>\"",
+                "description": "Signature by target_system_subject proving the claim: EIP-191 personal_sign over the text \"DJZS-TSC-1 target-system claim\\nsubject: <lowercased subject>\\ntarget_system: <value>\"",
                 "pattern": "^0x[0-9a-fA-F]{130}$",
                 "type": "string"
               },
               "target_system_subject": {
-                "description": "Address that signed the target_system claim. Must be the address that recovers from target_system_signature",
+                "description": "Wallet address that signed the target_system claim; the server checks that target_system_signature recovers to it",
                 "pattern": "^0x[0-9a-fA-F]{40}$",
                 "type": "string"
               }
@@ -245,11 +552,93 @@
             "required": ["intent"],
             "type": "object"
           },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": {},
+            "properties": {
+              "action": {
+                "description": "PROCEED for PASS, HALT for WAIT, FAIL for FAIL",
+                "type": "string"
+              },
+              "disagreements": {},
+              "extraction_failsafe": {
+                "type": "boolean"
+              },
+              "fail_reason": {
+                "type": "string"
+              },
+              "flags": {
+                "description": "Defects found, each with its DJZS code",
+                "items": {},
+                "type": "array"
+              },
+              "halt_reason": {
+                "description": "Present on WAIT: what to clarify before re-auditing",
+                "type": "string"
+              },
+              "in_scope": {
+                "type": "boolean"
+              },
+              "mechanics": {
+                "additionalProperties": {},
+                "description": "verify_perp_trade only: non-scoring execution mechanics",
+                "properties": {},
+                "type": "object"
+              },
+              "pol_certificate": {
+                "additionalProperties": {},
+                "description": "Anchoring status and Irys id of the Proof-of-Logic certificate",
+                "properties": {},
+                "type": "object"
+              },
+              "risk_score": {
+                "type": "number"
+              },
+              "schema_version": {
+                "type": "string"
+              },
+              "tally": {},
+              "taxonomy": {
+                "additionalProperties": {},
+                "description": "Ruleset and extraction-contract versions and hashes the verdict ran under",
+                "properties": {},
+                "type": "object"
+              },
+              "tool": {
+                "type": "string"
+              },
+              "trust_score": {
+                "additionalProperties": {},
+                "description": "On-chain trust-score write status, when agent_address was given",
+                "properties": {},
+                "type": "object"
+              },
+              "unknown_fields": {
+                "description": "Fields that could not be resolved from the thesis text",
+                "items": {},
+                "type": "array"
+              },
+              "verdict": {
+                "description": "PASS, WAIT or FAIL",
+                "type": "string"
+              },
+              "verdict_hash": {
+                "description": "Reproducible hash binding the verdict to its inputs",
+                "type": "string"
+              }
+            },
+            "required": ["action", "in_scope", "risk_score", "schema_version", "tool", "verdict", "verdict_hash"],
+            "type": "object"
+          },
           "annotations": {
-            "title": "Verify Prediction-Market Trade Thesis (DJZS pre-execution audit)"
+            "destructiveHint": false,
+            "idempotentHint": false,
+            "openWorldHint": true,
+            "readOnlyHint": false,
+            "title": "Verify Prediction-Market Trade"
           },
           "behavior": {
-            "destructive": true,
+            "destructive": false,
             "idempotent": false,
             "openWorld": true,
             "readOnly": false
@@ -261,10 +650,10 @@
             "agents-x402/paymentRequired": true,
             "agents-x402/priceUSD": 2
           },
-          "digest": "sha256:d9c2506172531072e21660f7c1fbbec9e2e358243c08a5b9068fb2018f019059"
+          "digest": "sha256:353d2539094af7aed06ef52f22154f53ce30f5a6f7f1746ec5aa49fb39dee7ad"
         }
       ],
-      "digest": "sha256:a67124016b20d2c372e12da0376ed834c47e9535d2cc19f57ac3ec2edbff4ccb"
+      "digest": "sha256:6ed0f4e6f5a263832995ec46d89990fc02d952be6b68d374d0534916adf672c3"
     }
   }
 }

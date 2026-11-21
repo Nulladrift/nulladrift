@@ -32,6 +32,44 @@
           "description": "Analyze supplied GPX/FIT directly with the browser's canonical pipeline; no catalog search or runner profile is needed. Accept inline course_file, URL, or artifact source. Existing CRSProf is preserved and summarized. Returns job plus a bounded structured summary, units, missing-data warnings and complete CRSProf artifact. Defaults: moving threshold 0.25 m/s, minimum stop 30 s, merge distance 60 m with combined-speed guard. Detected stop elapsed may include short moving portions; it is not total non-moving time. No timestamp means no invented pace/time. Hosted clients without file-byte access or direct upload connectivity should send the user to the fixed page https://courseprofiler.com/agent-upload.html. The page creates the private upload session; the user copies the returned artifact ID into chat. MCP does not create a session-specific browser link. Inspect job.status/errors; this call currently runs analysis synchronously. Optional idempotency {key, caller_token} requires the server feature enabled; API keys are optional. Persist the private caller/key before submission, use get_activity_submission to reconcile, and never switch to a fresh key to bypass an unresolved outcome.",
           "inputSchema": {
             "additionalProperties": false,
+            "allOf": [
+              {
+                "if": {
+                  "properties": {
+                    "options": {
+                      "required": ["expected_implementation"]
+                    }
+                  },
+                  "required": ["options"]
+                },
+                "then": {
+                  "properties": {
+                    "options": {
+                      "required": ["activity_role"]
+                    }
+                  },
+                  "required": ["idempotency"]
+                }
+              },
+              {
+                "if": {
+                  "properties": {
+                    "options": {
+                      "required": ["requested_numeric_contract"]
+                    }
+                  },
+                  "required": ["options"]
+                },
+                "then": {
+                  "properties": {
+                    "options": {
+                      "required": ["activity_role", "expected_implementation"]
+                    }
+                  },
+                  "required": ["idempotency"]
+                }
+              }
+            ],
             "properties": {
               "course_file": {
                 "additionalProperties": false,
@@ -86,8 +124,13 @@
               "options": {
                 "additionalProperties": false,
                 "properties": {
+                  "activity_role": {
+                    "description": "Optional explicit intent for GPX/FIT. Plan produces geometry only and rejects execution thresholds; Execution requires source timing. Omit for legacy auto-detection. Existing CRSProf is preserved with analysis_options_not_applied; its role is not changed.",
+                    "enum": ["plan", "execution"],
+                    "type": "string"
+                  },
                   "algorithm": {
-                    "description": "Omitted: PACE_BASED for timestamped input, SLOPE_BASED for untimed routes, matching browser upload defaults.",
+                    "description": "Omitted: SLOPE_BASED for explicit Plan geometry; otherwise PACE_BASED for timestamped input and SLOPE_BASED for untimed routes. Explicit Plan rejects PACE_BASED.",
                     "enum": ["GREEDY", "SLOPE_BASED", "PACE_BASED"],
                     "type": "string"
                   },
@@ -103,6 +146,11 @@
                     "minimum": 0,
                     "type": "number"
                   },
+                  "expected_implementation": {
+                    "description": "Requires explicit role and durable idempotency. V3 binds requested fields; omitted and explicit defaults differ. Matching is not processing approval. Rejections are replayed original terminal outcomes, never fresh-key retry permission.",
+                    "pattern": "^cp-exec-sha256:[0-9a-f]{64}$",
+                    "type": "string"
+                  },
                   "include_routes": {
                     "default": true,
                     "type": "boolean"
@@ -112,6 +160,11 @@
                     "description": "Moving threshold in m/s.",
                     "minimum": 0,
                     "type": "number"
+                  },
+                  "requested_numeric_contract": {
+                    "description": "Opt-in fingerprint v4: exact requested numeric tokens for the three analysis controls, without changing double calculations. Requires pin, role and durable key. Maximum 100 token characters, absolute explicit exponent 30 and absolute decimal scale 60; duplicate keys reject. Omission preserves v1-v3 behavior.",
+                    "enum": ["exact_activity_options_v1"],
+                    "type": "string"
                   }
                 },
                 "required": [],
@@ -360,6 +413,11 @@
                   {
                     "additionalProperties": false,
                     "properties": {
+                      "activity_role": {
+                        "description": "Present only when an explicit role was applied to a new GPX/FIT analysis; not producer-version or complete-settings proof.",
+                        "enum": ["plan", "execution"],
+                        "type": "string"
+                      },
                       "average_pace_seconds_per_km": {
                         "type": ["number", "null"]
                       },
@@ -465,6 +523,170 @@
                       "point_count": {
                         "type": "integer"
                       },
+                      "processing_evidence": {
+                        "description": "Optional observations for server-enabled, newly owned durable activity submissions. Bound means exact source/result binding, not complete applicability, processing approval, source currency or publication authority. Writer enforces 24576 UTF-8 bytes; stage trace 16000 bytes. Missing evidence never authorizes reanalysis. Replay retains original evidence unchanged.",
+                        "oneOf": [
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "processing_evidence_ready": {
+                                "const": false
+                              },
+                              "reason": {
+                                "const": "processing_capture_unavailable"
+                              },
+                              "state": {
+                                "const": "unavailable"
+                              },
+                              "version": {
+                                "const": 1
+                              }
+                            },
+                            "required": ["processing_evidence_ready", "reason", "state", "version"],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "implementation": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "kind": {
+                                    "const": "executable_jar_sha256_v1"
+                                  },
+                                  "value": {
+                                    "pattern": "^cp-exec-sha256:[0-9a-f]{64}$",
+                                    "type": "string"
+                                  }
+                                },
+                                "required": ["kind", "value"],
+                                "type": "object"
+                              },
+                              "ingestion": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "analysis_input": {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "bytes": {
+                                        "maximum": 26214400,
+                                        "minimum": 1,
+                                        "type": "integer"
+                                      },
+                                      "sha256": {
+                                        "pattern": "^[0-9a-f]{64}$",
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": ["bytes", "sha256"],
+                                    "type": "object"
+                                  },
+                                  "source": {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "bytes": {
+                                        "maximum": 26214400,
+                                        "minimum": 1,
+                                        "type": "integer"
+                                      },
+                                      "sha256": {
+                                        "pattern": "^[0-9a-f]{64}$",
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": ["bytes", "sha256"],
+                                    "type": "object"
+                                  },
+                                  "transformation": {
+                                    "enum": ["gpx", "fit_to_gpx", "zip_to_gpx"]
+                                  }
+                                },
+                                "required": ["analysis_input", "source", "transformation"],
+                                "type": "object"
+                              },
+                              "processing_evidence_ready": {
+                                "const": false
+                              },
+                              "result": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "artifact_id": {
+                                    "pattern": "^art_[A-Za-z0-9_-]{1,120}$",
+                                    "type": "string"
+                                  },
+                                  "bytes": {
+                                    "maximum": 134217728,
+                                    "minimum": 1,
+                                    "type": "integer"
+                                  },
+                                  "job_id": {
+                                    "pattern": "^job_[A-Za-z0-9_-]{1,120}$",
+                                    "type": "string"
+                                  },
+                                  "sha256": {
+                                    "pattern": "^[0-9a-f]{64}$",
+                                    "type": "string"
+                                  }
+                                },
+                                "required": ["artifact_id", "bytes", "job_id", "sha256"],
+                                "type": "object"
+                              },
+                              "stage_trace": {
+                                "additionalProperties": true,
+                                "properties": {
+                                  "processing_evidence_ready": {
+                                    "const": false
+                                  },
+                                  "stages": {
+                                    "items": {
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "configuration": {
+                                          "maxProperties": 37,
+                                          "type": "object"
+                                        },
+                                        "derived_data": {
+                                          "type": "object"
+                                        },
+                                        "include_routes": {
+                                          "type": "boolean"
+                                        },
+                                        "name": {
+                                          "enum": ["main", "canonical_stop_preprocessing"]
+                                        },
+                                        "observed_result": {
+                                          "type": "object"
+                                        }
+                                      },
+                                      "required": ["configuration", "derived_data", "include_routes", "name"],
+                                      "type": "object"
+                                    },
+                                    "maxItems": 2,
+                                    "minItems": 1,
+                                    "type": "array"
+                                  },
+                                  "state": {
+                                    "const": "captured"
+                                  },
+                                  "version": {
+                                    "const": 1
+                                  }
+                                },
+                                "required": ["processing_evidence_ready", "stages", "state", "version"],
+                                "type": "object"
+                              },
+                              "state": {
+                                "const": "bound"
+                              },
+                              "version": {
+                                "const": 1
+                              }
+                            },
+                            "required": ["implementation", "ingestion", "processing_evidence_ready", "result", "stage_trace", "state", "version"],
+                            "type": "object"
+                          }
+                        ]
+                      },
                       "stops": {
                         "items": {
                           "additionalProperties": false,
@@ -530,7 +752,7 @@
             "openWorld": true,
             "readOnly": false
           },
-          "digest": "sha256:349a0ce04ec091664262e2ecc1d8324349be5b64d397ab1e2586b99768f8013a"
+          "digest": "sha256:a5d2d7a027185f9a60dd9f0becaeb8a3514418c3828fc7cb21bac0d3625a174f"
         },
         {
           "name": "assess_finish_time_goal",
@@ -2859,6 +3081,120 @@
           "digest": "sha256:46829b3fb53ef6630f2b7791c8cc9fd3cc778471a9493feb8f64fa25829135ec"
         },
         {
+          "name": "get_activity_processing_requirements",
+          "title": "Get pinned activity processing requirements",
+          "description": "Read-only non-secret snapshot of the current executable identity and server gates for pinned activity requests. No fetches, analysis or storage writes. Not a reservation, future version guarantee, attestation or processing/publication approval. Readiness remains false; request-time guards remain authoritative.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {},
+            "required": [],
+            "type": "object"
+          },
+          "outputSchema": {
+            "additionalProperties": false,
+            "allOf": [
+              {
+                "if": {
+                  "properties": {
+                    "capture_enabled": {
+                      "const": true
+                    }
+                  }
+                },
+                "then": {
+                  "properties": {
+                    "durable_idempotency_enabled": {
+                      "const": true
+                    }
+                  }
+                }
+              }
+            ],
+            "description": "Read-only non-secret snapshot of pinned activity requirements. No source fetches, analysis or storage writes. Identity is not a reservation, future guarantee, cryptographic attestation or processing/publication approval. Request-time guards remain authoritative; legacy unpinned request behavior is unchanged.",
+            "properties": {
+              "capture_enabled": {
+                "type": "boolean"
+              },
+              "contract_version": {
+                "const": 1
+              },
+              "durable_idempotency_enabled": {
+                "type": "boolean"
+              },
+              "expected_implementation_pattern": {
+                "const": "^cp-exec-sha256:[0-9a-f]{64}$"
+              },
+              "implementation": {
+                "oneOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "kind": {
+                        "const": "executable_jar_sha256_v1"
+                      },
+                      "state": {
+                        "const": "identified"
+                      },
+                      "value": {
+                        "pattern": "^cp-exec-sha256:[0-9a-f]{64}$",
+                        "type": "string"
+                      }
+                    },
+                    "required": ["kind", "state", "value"],
+                    "type": "object"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "kind": {
+                        "const": "executable_jar_sha256_v1"
+                      },
+                      "reason": {
+                        "const": "producer_implementation_unavailable"
+                      },
+                      "state": {
+                        "const": "unavailable"
+                      }
+                    },
+                    "required": ["kind", "reason", "state"],
+                    "type": "object"
+                  }
+                ]
+              },
+              "processing_evidence_ready": {
+                "const": false
+              },
+              "request_id": {
+                "type": "string"
+              },
+              "requires_explicit_role": {
+                "const": true
+              },
+              "requires_idempotency": {
+                "const": true
+              },
+              "supported_pin_kind": {
+                "const": "executable_jar_sha256_v1"
+              }
+            },
+            "required": ["capture_enabled", "contract_version", "durable_idempotency_enabled", "expected_implementation_pattern", "implementation", "processing_evidence_ready", "requires_explicit_role", "requires_idempotency", "supported_pin_kind"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:abde4bafd439cd7354a60cd17f300b4b3332bcff7a0390fe42e848120d064c15"
+        },
+        {
           "name": "get_activity_submission",
           "title": "Reconcile activity submission",
           "description": "Read-only lookup of an opt-in analyze_activity submission using the same caller/key. No URL fetches, writes or reanalysis. outcome_unknown is not absence and never authorizes a fresh execution. Requires durable idempotency enabled; private caller_token required for anonymous callers.",
@@ -2888,7 +3224,384 @@
             "type": "object"
           },
           "outputSchema": {
-            "additionalProperties": true,
+            "additionalProperties": false,
+            "properties": {
+              "error": {
+                "anyOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "code": {
+                        "description": "Machine-readable warning/error code.",
+                        "type": "string"
+                      },
+                      "message": {
+                        "description": "Human-readable warning/error message.",
+                        "type": "string"
+                      },
+                      "severity": {
+                        "description": "Problem severity, usually warning or error.",
+                        "type": "string"
+                      }
+                    },
+                    "required": ["code", "message"],
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "job": {
+                "anyOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "completed_at": {
+                        "description": "ISO-8601 completion timestamp, when available.",
+                        "type": "string"
+                      },
+                      "created_at": {
+                        "description": "ISO-8601 creation timestamp.",
+                        "type": "string"
+                      },
+                      "errors": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "code": {
+                              "description": "Machine-readable warning/error code.",
+                              "type": "string"
+                            },
+                            "message": {
+                              "description": "Human-readable warning/error message.",
+                              "type": "string"
+                            },
+                            "severity": {
+                              "description": "Problem severity, usually warning or error.",
+                              "type": "string"
+                            }
+                          },
+                          "required": ["code", "message"],
+                          "type": "object"
+                        },
+                        "type": "array"
+                      },
+                      "expires_at": {
+                        "description": "ISO-8601 expiration timestamp.",
+                        "type": "string"
+                      },
+                      "job_id": {
+                        "description": "CourseProfiler job ID to poll with get_job.",
+                        "type": "string"
+                      },
+                      "progress": {
+                        "additionalProperties": true,
+                        "type": "object"
+                      },
+                      "result_artifacts": {
+                        "description": "Artifacts produced by the job, including role metadata.",
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "artifact_id": {
+                              "description": "CourseProfiler artifact ID.",
+                              "type": "string"
+                            },
+                            "content_type": {
+                              "description": "MIME content type.",
+                              "type": "string"
+                            },
+                            "created_at": {
+                              "description": "ISO-8601 creation timestamp.",
+                              "type": "string"
+                            },
+                            "download_url": {
+                              "description": "Artifact download URLs are private and short-lived; share them only with the user, verbatim in a code block, not a clickable link. Ask the user to copy the entire URL into their browser address bar. Do not rewrite the URL or add tracking parameters such as utm_source: changes invalidate the signature. If expired, call get_artifact for a fresh URL. This applies only to artifact download_url values, not authorization or upload links.",
+                              "type": "string"
+                            },
+                            "download_url_expires_at": {
+                              "description": "ISO-8601 download URL expiration timestamp.",
+                              "type": "string"
+                            },
+                            "expires_at": {
+                              "description": "ISO-8601 artifact expiration timestamp.",
+                              "type": "string"
+                            },
+                            "file_name": {
+                              "description": "Suggested file name.",
+                              "type": "string"
+                            },
+                            "metadata": {
+                              "additionalProperties": true,
+                              "type": "object"
+                            },
+                            "size_bytes": {
+                              "description": "Artifact size in bytes.",
+                              "type": "integer"
+                            },
+                            "type": {
+                              "description": "Artifact type, e.g. crsprof, usrprof, pdf, json, or source_file.",
+                              "type": "string"
+                            },
+                            "warnings": {
+                              "items": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "code": {
+                                    "description": "Machine-readable warning/error code.",
+                                    "type": "string"
+                                  },
+                                  "message": {
+                                    "description": "Human-readable warning/error message.",
+                                    "type": "string"
+                                  },
+                                  "severity": {
+                                    "description": "Problem severity, usually warning or error.",
+                                    "type": "string"
+                                  }
+                                },
+                                "required": ["code", "message"],
+                                "type": "object"
+                              },
+                              "type": "array"
+                            }
+                          },
+                          "required": ["artifact_id", "type"],
+                          "type": "object"
+                        },
+                        "type": "array"
+                      },
+                      "started_at": {
+                        "description": "ISO-8601 start timestamp, when available.",
+                        "type": "string"
+                      },
+                      "status": {
+                        "description": "Job status, e.g. queued, running, succeeded, or failed.",
+                        "type": "string"
+                      },
+                      "status_url": {
+                        "description": "Relative API URL for polling this job.",
+                        "type": "string"
+                      },
+                      "submission_request_id": {
+                        "description": "Request ID that originally allocated this job; absent in legacy metadata.",
+                        "type": "string"
+                      },
+                      "warnings": {
+                        "items": {
+                          "additionalProperties": false,
+                          "properties": {
+                            "code": {
+                              "description": "Machine-readable warning/error code.",
+                              "type": "string"
+                            },
+                            "message": {
+                              "description": "Human-readable warning/error message.",
+                              "type": "string"
+                            },
+                            "severity": {
+                              "description": "Problem severity, usually warning or error.",
+                              "type": "string"
+                            }
+                          },
+                          "required": ["code", "message"],
+                          "type": "object"
+                        },
+                        "type": "array"
+                      }
+                    },
+                    "required": ["job_id", "status"],
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "submission": {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              "summary": {
+                "anyOf": [
+                  {
+                    "additionalProperties": true,
+                    "properties": {
+                      "processing_evidence": {
+                        "description": "Optional observations for server-enabled, newly owned durable activity submissions. Bound means exact source/result binding, not complete applicability, processing approval, source currency or publication authority. Writer enforces 24576 UTF-8 bytes; stage trace 16000 bytes. Missing evidence never authorizes reanalysis. Replay retains original evidence unchanged.",
+                        "oneOf": [
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "processing_evidence_ready": {
+                                "const": false
+                              },
+                              "reason": {
+                                "const": "processing_capture_unavailable"
+                              },
+                              "state": {
+                                "const": "unavailable"
+                              },
+                              "version": {
+                                "const": 1
+                              }
+                            },
+                            "required": ["processing_evidence_ready", "reason", "state", "version"],
+                            "type": "object"
+                          },
+                          {
+                            "additionalProperties": false,
+                            "properties": {
+                              "implementation": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "kind": {
+                                    "const": "executable_jar_sha256_v1"
+                                  },
+                                  "value": {
+                                    "pattern": "^cp-exec-sha256:[0-9a-f]{64}$",
+                                    "type": "string"
+                                  }
+                                },
+                                "required": ["kind", "value"],
+                                "type": "object"
+                              },
+                              "ingestion": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "analysis_input": {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "bytes": {
+                                        "maximum": 26214400,
+                                        "minimum": 1,
+                                        "type": "integer"
+                                      },
+                                      "sha256": {
+                                        "pattern": "^[0-9a-f]{64}$",
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": ["bytes", "sha256"],
+                                    "type": "object"
+                                  },
+                                  "source": {
+                                    "additionalProperties": false,
+                                    "properties": {
+                                      "bytes": {
+                                        "maximum": 26214400,
+                                        "minimum": 1,
+                                        "type": "integer"
+                                      },
+                                      "sha256": {
+                                        "pattern": "^[0-9a-f]{64}$",
+                                        "type": "string"
+                                      }
+                                    },
+                                    "required": ["bytes", "sha256"],
+                                    "type": "object"
+                                  },
+                                  "transformation": {
+                                    "enum": ["gpx", "fit_to_gpx", "zip_to_gpx"]
+                                  }
+                                },
+                                "required": ["analysis_input", "source", "transformation"],
+                                "type": "object"
+                              },
+                              "processing_evidence_ready": {
+                                "const": false
+                              },
+                              "result": {
+                                "additionalProperties": false,
+                                "properties": {
+                                  "artifact_id": {
+                                    "pattern": "^art_[A-Za-z0-9_-]{1,120}$",
+                                    "type": "string"
+                                  },
+                                  "bytes": {
+                                    "maximum": 134217728,
+                                    "minimum": 1,
+                                    "type": "integer"
+                                  },
+                                  "job_id": {
+                                    "pattern": "^job_[A-Za-z0-9_-]{1,120}$",
+                                    "type": "string"
+                                  },
+                                  "sha256": {
+                                    "pattern": "^[0-9a-f]{64}$",
+                                    "type": "string"
+                                  }
+                                },
+                                "required": ["artifact_id", "bytes", "job_id", "sha256"],
+                                "type": "object"
+                              },
+                              "stage_trace": {
+                                "additionalProperties": true,
+                                "properties": {
+                                  "processing_evidence_ready": {
+                                    "const": false
+                                  },
+                                  "stages": {
+                                    "items": {
+                                      "additionalProperties": false,
+                                      "properties": {
+                                        "configuration": {
+                                          "maxProperties": 37,
+                                          "type": "object"
+                                        },
+                                        "derived_data": {
+                                          "type": "object"
+                                        },
+                                        "include_routes": {
+                                          "type": "boolean"
+                                        },
+                                        "name": {
+                                          "enum": ["main", "canonical_stop_preprocessing"]
+                                        },
+                                        "observed_result": {
+                                          "type": "object"
+                                        }
+                                      },
+                                      "required": ["configuration", "derived_data", "include_routes", "name"],
+                                      "type": "object"
+                                    },
+                                    "maxItems": 2,
+                                    "minItems": 1,
+                                    "type": "array"
+                                  },
+                                  "state": {
+                                    "const": "captured"
+                                  },
+                                  "version": {
+                                    "const": 1
+                                  }
+                                },
+                                "required": ["processing_evidence_ready", "stages", "state", "version"],
+                                "type": "object"
+                              },
+                              "state": {
+                                "const": "bound"
+                              },
+                              "version": {
+                                "const": 1
+                              }
+                            },
+                            "required": ["implementation", "ingestion", "processing_evidence_ready", "result", "stage_trace", "state", "version"],
+                            "type": "object"
+                          }
+                        ]
+                      }
+                    },
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": ["summary"],
             "type": "object"
           },
           "annotations": {
@@ -2903,7 +3616,7 @@
             "openWorld": false,
             "readOnly": true
           },
-          "digest": "sha256:5c58ffe97739063f3e741c57827cc63f9693fa41ab0b32ff35d378a03b86cf93"
+          "digest": "sha256:d883973e565323291efbd2a4217541bcf8a1f21bb439e55a5731919747a052d6"
         },
         {
           "name": "get_artifact",
@@ -5059,7 +5772,7 @@
           "digest": "sha256:699188c09c7d5ebaef74cf7056834e5dde8ed8bea3695d0e5f54dd33dee7e0cd"
         }
       ],
-      "digest": "sha256:f7d61108231b37a310a362e587adff9206347a38ac742e892ae4fed542d3590c"
+      "digest": "sha256:af5dfb09893edab54738b64a996499dc0497b3710e8ab8db4256577ddef4231b"
     }
   }
 }
