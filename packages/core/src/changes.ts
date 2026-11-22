@@ -145,12 +145,18 @@ export function sortChanges(changes: Change[]): Change[] {
  * It lives beside the taxonomy rather than in the engine because it reasons about a list of
  * changes and nothing else: the dashboard asks the same question and has no business depending
  * on a diff engine to do it.
+ *
+ * Only a server with a surface this run captured can have changed without shipping. A new server
+ * that could not be audited arrives as `server.added` with nothing behind it, and one that is
+ * gone has nothing now; both were listed as having changed without a release, which describes a
+ * surface nobody saw.
  */
 export function serversThatShippedNothing(changes: readonly Change[]): string[] {
   const moved = new Set<string>();
   const versioned = new Set<string>();
   for (const change of changes) {
-    moved.add(change.server);
+    const uncaptured = change.kind === "server.removed" || (change.kind === "server.added" && change.after === undefined);
+    if (!uncaptured) moved.add(change.server);
     if (change.kind === "server.identity.changed") versioned.add(change.server);
   }
   return [...moved].filter((server) => !versioned.has(server)).sort();

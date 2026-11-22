@@ -302,22 +302,42 @@ function looksLikeAnOperand(value: string): boolean {
   return value.startsWith("@") || value.includes("/") || /\.(m?[jt]s|cjs|py|json|ya?ml|toml|sh|exe)$/i.test(value);
 }
 
+/*
+ * Path words that say the next part of the path names a revision: `raw`, `blob`, `tree`, `commit`
+ * on GitHub and every forge that copied its URLs (GitHub Enterprise, GitLab, Gitea, Forgejo,
+ * sourcehut), `archive` for a tarball of one, and gitiles' `+`.
+ *
+ * The code-host list above covers the public forges by name, and a self-hosted one has a name no
+ * list can hold: `github.acme-corp.com/raw/acme/srv/<sha>/server.py` had its commit replaced as a
+ * key, so swapping one commit for another compared clean. Found in a security review. A segment
+ * is kept only when it is exactly the length of a commit id -- 40 hex characters for SHA-1, 64
+ * for SHA-256 -- and follows one of these words, so a 32-character key under `/raw/` is still a key.
+ */
+const REVISION_WORDS = new Set(["raw", "blob", "blobs", "tree", "trees", "commit", "commits", "archive", "src", "+"]);
+const COMMIT_ID = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i;
+
 /**
  * A URL path with any segment that is a credential replaced, for hosted servers whose address
  * embeds the key (`https://host/api/<token>/mcp`). The rest of the path stays, so a server that
  * moves to a different path or host is still drift.
  */
 export function redactPath(pathname: string, options: { contentAddressed?: boolean } = {}): string {
+  let revisionPath = false;
   return pathname
     .split("/")
     .map((segment) => {
+      const afterRevisionWord = revisionPath;
+      if (REVISION_WORDS.has(decoded(segment).toLowerCase())) revisionPath = true;
       if (segment === "" || PLACEHOLDER.test(decoded(segment))) return segment;
       if (looksRandom(segment)) return REDACTED;
       // A UUID or a long hex string in a hosted server's address is its key far more often than
       // not (Pipedream, Composio and the like put the account's key there). On a code host it is
-      // a commit or a gist, and it is the thing being pinned.
+      // a commit or a gist, and it is the thing being pinned; so is a commit id under a path word
+      // that says a revision comes next, on any host.
+      const commit = afterRevisionWord && COMMIT_ID.test(segment);
       if (
         !options.contentAddressed &&
+        !commit &&
         (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(segment) || /^[0-9a-f]{32,}$/i.test(segment))
       )
         return REDACTED;

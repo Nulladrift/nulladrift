@@ -1,6 +1,6 @@
 /** Turning what a server sent into the stable, reviewable form the lock stores. */
 import { redactPath } from "./credentials";
-import { alternatives, asObject, effectiveSchema, MAX_VISIT_DEPTH } from "./jsonschema";
+import { alternatives, asObject, beginWalk, effectiveSchema, entriesOf, MAX_VISIT_DEPTH } from "./jsonschema";
 import type { JsonObject, JsonValue, LockedAnnotations, LockedBehavior } from "./types";
 
 /**
@@ -35,13 +35,22 @@ export function isEscalation(previous: LockedBehavior, next: LockedBehavior): bo
 }
 
 /*
- * Keywords whose value is data rather than a schema. A `required` array inside a `const` or a
- * `default` is part of a value the model is shown, and its order is the server's to choose:
- * sorting it there made `["backup", "delete"]` and `["delete", "backup"]` compare as the same.
+ * Keywords whose value is a schema or a list of schemas, and keywords whose value maps names to
+ * schemas. Only these are walked; every other value is data, kept as the server wrote it.
+ *
+ * A `required` array inside a `const` or a `default` is part of a value the model is shown, and
+ * its order is the server's to choose: sorting it there made `["backup", "delete"]` and
+ * `["delete", "backup"]` compare as the same. That was fixed by naming the five keywords that hold
+ * values, which left every keyword nobody had named -- `x-default`, `x-examples`, any vendor's
+ * extension -- walked as a schema and sorted the same way. A list of what is a schema does not
+ * have that gap: a keyword this has never heard of is data, which is what an unknown keyword is.
  */
-const DATA_KEYWORDS = new Set(["const", "default", "enum", "examples", "example"]);
+const SCHEMA_KEYWORDS = new Set([
+  "items", "prefixItems", "additionalItems", "contains", "allOf", "anyOf", "oneOf", "not", "if", "then", "else",
+  "additionalProperties", "unevaluatedProperties", "unevaluatedItems", "propertyNames", "contentSchema",
+]);
 /** Keywords whose value maps names to schemas: the keys are names, never keywords. */
-const NAMED_SCHEMAS = new Set(["properties", "patternProperties", "$defs", "definitions", "dependentSchemas"]);
+const NAMED_SCHEMAS = new Set(["properties", "patternProperties", "$defs", "definitions", "dependentSchemas", "dependencies"]);
 
 /**
  * Sorts the `required` keyword's array. Member order there is semantically insignificant and is
@@ -49,8 +58,8 @@ const NAMED_SCHEMAS = new Set(["properties", "patternProperties", "$defs", "defi
  * because order *is* significant in `prefixItems`, `allOf` and `icons`, and we only reorder where
  * we can show it is safe.
  *
- * Only where `required` is a keyword: not inside a value (`const`, `default`, `enum`,
- * `examples`), and not as the name of a property, which is a schema of its own.
+ * Only where `required` is a keyword of a schema: not inside a value (`const`, `default`, `enum`,
+ * `examples`, an `x-` extension), and not as the name of a property, which is a schema of its own.
  */
 export function normalizeSchema(value: JsonValue): JsonValue {
   return normalizeNode(value, false);
@@ -71,11 +80,9 @@ function normalizeNode(value: JsonValue, namesOnly: boolean): JsonValue {
       out[key] = [...(member as string[])].sort();
       continue;
     }
-    if (DATA_KEYWORDS.has(key)) {
-      out[key] = member;
-      continue;
-    }
-    out[key] = normalizeNode(member, NAMED_SCHEMAS.has(key));
+    if (NAMED_SCHEMAS.has(key)) out[key] = normalizeNode(member, true);
+    else if (SCHEMA_KEYWORDS.has(key)) out[key] = normalizeNode(member, false);
+    else out[key] = member;
   }
   return out;
 }
@@ -101,6 +108,14 @@ export function extractHeaderParams(schema: JsonValue): string[] {
    * looks complete.
    */
   let budget = MAX_HEADER_VISITS;
+  /*
+   * And a ceiling on what the walks read, which counting walks did not bound: each walk reads every
+   * property and branch of the node it reaches, so a root of N properties that each lead back to it
+   * is N walks of N reads. Past it, a marker of its own. The ceiling is what the walk ceiling
+   * allows if every node it reaches has fifty members, so the answer -- which is part of the
+   * tool's digest -- is the one it always was for every schema that is not built to do this.
+   */
+  let reads = 0;
 
   const walk = (node: JsonValue, path: string[], depth: number, refsOnPath: ReadonlySet<string>): void => {
     if (depth > MAX_VISIT_DEPTH) return;
@@ -109,35 +124,46 @@ export function extractHeaderParams(schema: JsonValue): string[] {
     const object = effectiveSchema(node, schema);
     if (!object) return;
 
+    // A walk that would return at once is not started: the same answer, without building its path.
+    const descend = (): boolean => budget > 0 && depth + 1 <= MAX_VISIT_DEPTH;
+
     const properties = asObject(object["properties"]);
     if (properties) {
-      for (const [name, child] of Object.entries(properties)) {
+      for (const [name, child] of entriesOf(properties)) {
+        if (++reads > MAX_HEADER_READS) return;
         const resolved = effectiveSchema(child, schema);
         if (!resolved) continue;
         const header = resolved["x-mcp-header"];
         if (typeof header === "string" && header.length > 0) found.push(`${[...path, name].join(".")} -> ${header}`);
         const ref = asObject(child)?.["$ref"];
         if (typeof ref === "string" && refsOnPath.has(ref)) continue;
+        if (!descend()) continue;
         walk(child, [...path, name], depth + 1, typeof ref === "string" ? new Set([...refsOnPath, ref]) : refsOnPath);
       }
     }
 
     // A parameter reachable only through one branch of an `anyOf` is still reachable.
     for (const branch of alternatives(object)) {
+      if (++reads > MAX_HEADER_READS) return;
       const ref = asObject(branch.schema)?.["$ref"];
       if (typeof ref === "string" && refsOnPath.has(ref)) continue;
+      if (!descend()) continue;
       walk(branch.schema, path, depth + 1, typeof ref === "string" ? new Set([...refsOnPath, ref]) : refsOnPath);
     }
   };
 
   const rootRef = asObject(schema)?.["$ref"];
+  beginWalk(schema);
   walk(schema, [], 0, new Set(typeof rootRef === "string" ? [rootRef] : []));
   if (budget <= 0) found.push(`(schema too large to scan for headers past ${MAX_HEADER_VISITS} nodes)`);
+  if (reads > MAX_HEADER_READS) found.push(`(schema too large to scan for headers past ${MAX_HEADER_READS} reads)`);
   return [...new Set(found)].sort();
 }
 
 /** How many schema nodes the header scan visits before it stops and says so. */
 export const MAX_HEADER_VISITS = 20_000;
+/** How many properties and branches the header scan reads, across every visit, before it stops and says so. */
+export const MAX_HEADER_READS = 50 * MAX_HEADER_VISITS;
 
 /** Drops `_meta` keys under any ignored prefix. Returns undefined when nothing is left to pin. */
 export function stripIgnoredMeta(meta: JsonValue | undefined, ignoredPrefixes: readonly string[]): JsonObject | undefined {
