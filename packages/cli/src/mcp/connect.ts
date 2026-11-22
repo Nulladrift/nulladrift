@@ -12,7 +12,7 @@ import type { Transport } from "@modelcontextprotocol/client";
 import type { ConfiguredServer } from "../config/types";
 import { createAuthProvider } from "./oauth";
 import { USER_AGENT, VERSION } from "../lib/version";
-import { UnreachableServerError } from "./types";
+import { boundReason, MAX_REASON_CHARS, UnreachableServerError } from "./types";
 import { describeNetworkFailure } from "./network";
 
 export const DEFAULT_TIMEOUT_MS = 30_000;
@@ -446,9 +446,10 @@ export async function connect(
     const detail = stderrBuffer.trim();
     // The network's own reason, when there is one: "fetch failed" alone does not say what to fix.
     const network = describeNetworkFailure(error);
+    // Half the bound at most, so a long error body leaves room for the stderr that explains it.
     throw new UnreachableServerError(
       server.name,
-      `${(error as Error).message}${network ? ` (${network})` : ""}${detail ? `\n  server stderr: ${diagnosticLines(detail).join("\n  ")}` : ""}`,
+      `${boundReason((error as Error).message, MAX_REASON_CHARS / 2)}${network ? ` (${network})` : ""}${detail ? `\n  server stderr: ${diagnosticLines(detail).join("\n  ")}` : ""}`,
       error,
     );
   }

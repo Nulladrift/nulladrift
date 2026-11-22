@@ -12,7 +12,7 @@ import type { ConfiguredServer } from "./config/types";
 import { LOCKFILE_VERSION } from "./lock/types";
 import { captureSurface } from "./mcp/capture";
 import { DEFAULT_TIMEOUT_MS } from "./mcp/connect";
-import { UnreachableServerError, authFailureKind } from "./mcp/types";
+import { boundReason, UnreachableServerError, authFailureKind } from "./mcp/types";
 import { own, setOwn } from "./lib/own";
 import { VERSION } from "./lib/version";
 import type { Unreachable } from "./report/types";
@@ -150,7 +150,8 @@ export async function captureAll(options: CaptureOptions): Promise<CaptureResult
       return { name: server.name, entry: provenance ? { ...entry, provenance } : entry, unverified, displaced };
     } catch (error) {
       options.onServerDone?.(server.name, "failed");
-      const reason = withoutSecrets(error instanceof UnreachableServerError ? error.message : (error as Error).message, server);
+      // Cleaned first: a key cut in half by the bound would no longer match the key.
+      const reason = boundReason(withoutSecrets(error instanceof UnreachableServerError ? error.message : (error as Error).message, server));
       const kind = authFailureKind(error) ?? "unreachable";
       // Kept: what it runs can be compared with a pin even when it would not answer.
       return { name: server.name, failure: { server: server.name, reason, kind } satisfies Unreachable, provenance: established?.provenance, displaced: established?.displaced };
@@ -182,7 +183,7 @@ export async function captureAll(options: CaptureOptions): Promise<CaptureResult
   // unreachable too: the audit is incomplete either way, and CI should treat them the same. Each
   // is written down as its file writes it, so an agreement to leave it out is to that definition.
   for (const skipped of discovery.skipped) {
-    unreachable.push({ server: skipped.serverName, reason: skipped.message, kind: "unreachable" });
+    unreachable.push({ server: skipped.serverName, reason: boundReason(skipped.message), kind: "unreachable" });
     setOwn(unaudited, skipped.serverName, skipped.transport ? { transport: skipped.transport } : {});
   }
   // A name the project defines two ways is audited under neither until it says which it means.
@@ -195,7 +196,7 @@ export async function captureAll(options: CaptureOptions): Promise<CaptureResult
   }
   // A --config file we could not make sense of is not "no servers"; it is an unfinished audit.
   for (const problem of discovery.problems) {
-    unreachable.push({ server: problem.file, reason: problem.reason, kind: "unreachable" });
+    unreachable.push({ server: problem.file, reason: boundReason(problem.reason), kind: "unreachable" });
   }
 
   return {

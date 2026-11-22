@@ -13,6 +13,20 @@
  */
 const MARKER = "<!-- nulladrift:surface -->";
 
+/** GitHub refuses a comment body longer than this, whole. */
+const MAX_COMMENT_CHARS = 65_536;
+
+/**
+ * The body, cut at a line to fit, and saying so. A long report -- dozens of servers that could not
+ * be read, each with its reason -- was refused outright, so a pull request got no findings at all.
+ */
+function fitted(body: string): string {
+  if (body.length <= MAX_COMMENT_CHARS) return body;
+  const note = "\n\n_The rest of this report was cut short to fit a comment; the job log has all of it._";
+  const room = body.slice(0, MAX_COMMENT_CHARS - note.length);
+  return `${room.slice(0, Math.max(room.lastIndexOf("\n"), 0))}${note}`;
+}
+
 export interface CommentTarget {
   api: string;
   repo: string;
@@ -65,7 +79,7 @@ async function call(target: CommentTarget, path: string, init: RequestInit = {})
  * rather than failed on: a build should not go red because a comment could not be posted.
  */
 export async function upsertComment(target: CommentTarget, body: string): Promise<"created" | "updated" | "forbidden"> {
-  const marked = `${MARKER}\n${body}`;
+  const marked = fitted(`${MARKER}\n${body}`);
 
   const existing = await call(target, `/issues/${target.issue}/comments?per_page=100`);
   if (existing.status === 403) return "forbidden";
