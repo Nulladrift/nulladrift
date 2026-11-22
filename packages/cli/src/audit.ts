@@ -62,6 +62,11 @@ export interface CaptureResult {
    * acknowledgement covers.
    */
   unaudited: Record<string, LockedUnaudited>;
+  /**
+   * What the servers that could not be audited run, where that was established before they were
+   * started. A pinned local file rewritten to exit at once is otherwise an outage, not a change.
+   */
+  unauditedProvenance: Record<string, LockedProvenance>;
   /** Names defined two ways; reported as unreachable, never acknowledged. */
   conflicted: string[];
   /**
@@ -129,12 +134,14 @@ export async function captureAll(options: CaptureOptions): Promise<CaptureResult
   const discovery = await discoverServers(options.projectRoot, options.configFiles, { userConfigs: options.userConfigs === true });
 
   const captured = await mapWithLimit(discovery.servers, options.concurrency ?? 4, async (server) => {
+    let established: Awaited<ReturnType<typeof provenanceOf>> | undefined;
     try {
       /*
        * What the server runs is read before it runs. Hashed after, a local file could put the
        * approved bytes back over itself once loaded, and the lock pinned the file it no longer was.
        */
-      const { provenance, unverified, displaced } = await provenanceOf(server, options);
+      established = await provenanceOf(server, options);
+      const { provenance, unverified, displaced } = established;
       // An image runs by the digest it was pinned at; see launchPinned. The lock keeps the config as written.
       const pinned = server.transport.type === "stdio" ? launchPinned(server.transport, provenance) : undefined;
       const surface = await captureSurface(pinned ? { ...server, transport: pinned } : server, options.timeoutMs ?? DEFAULT_TIMEOUT_MS);
@@ -145,7 +152,8 @@ export async function captureAll(options: CaptureOptions): Promise<CaptureResult
       options.onServerDone?.(server.name, "failed");
       const reason = withoutSecrets(error instanceof UnreachableServerError ? error.message : (error as Error).message, server);
       const kind = authFailureKind(error) ?? "unreachable";
-      return { name: server.name, failure: { server: server.name, reason, kind } satisfies Unreachable };
+      // Kept: what it runs can be compared with a pin even when it would not answer.
+      return { name: server.name, failure: { server: server.name, reason, kind } satisfies Unreachable, provenance: established?.provenance, displaced: established?.displaced };
     }
   });
 
@@ -154,6 +162,7 @@ export async function captureAll(options: CaptureOptions): Promise<CaptureResult
   const unverified: string[] = [];
   const displaced: CaptureResult["displaced"] = [];
   const unaudited: Record<string, LockedUnaudited> = {};
+  const unauditedProvenance: Record<string, LockedProvenance> = {};
   const configured = new Map(discovery.servers.map((server) => [server.name, server]));
   for (const result of captured) {
     if ("entry" in result && result.entry) {
@@ -164,6 +173,8 @@ export async function captureAll(options: CaptureOptions): Promise<CaptureResult
       unreachable.push(result.failure);
       const server = configured.get(result.name);
       setOwn(unaudited, result.name, server ? { transport: lockTransport(server) } : {});
+      if (result.provenance) setOwn(unauditedProvenance, result.name, result.provenance);
+      if (result.displaced) displaced.push({ server: result.name, ...result.displaced });
     }
   }
 
@@ -199,6 +210,7 @@ export async function captureAll(options: CaptureOptions): Promise<CaptureResult
     unverified: unverified.sort(),
     displaced,
     unaudited,
+    unauditedProvenance,
     conflicted: discovery.conflicts.map((conflict) => conflict.name),
     partial: Object.entries(subjects)
       .filter(([, entry]) => entry.coverage !== undefined)
@@ -231,6 +243,38 @@ function unagreed(agreed: LockedUnaudited | undefined, now: LockedUnaudited, rea
 }
 
 /**
+ * A pinned server, still configured, that could not be read on this run.
+ *
+ * Not `server.removed`, which is what the diff calls any pin missing from the reading: "no longer
+ * configured" failed a build `--allow-unreachable` said would warn, and `review --accept-all` then
+ * deleted the pin, so when the server answered again it came back as a new server rather than as
+ * the changes it had made. What can be compared without reading it still is: how it is reached,
+ * against the pin, and what it runs, against the pinned artifact.
+ */
+function unreadPin(name: string, pinned: LockedMcpServer, now: LockedUnaudited, runs: LockedProvenance | undefined, reason: string): Change[] {
+  const changes: Change[] = [];
+  if (now.transport === undefined || stableKey(now.transport) !== stableKey(pinned.transport)) {
+    changes.push({
+      kind: "server.transport.changed",
+      severity: SEVERITY["server.transport.changed"],
+      server: name,
+      summary: `the server is reached differently than when it was pinned, and could not be audited: ${reason}`,
+      before: pinned.transport,
+      after: now.transport,
+    });
+  }
+  if (runs !== undefined) {
+    /*
+     * Through the engine, so the artifact is held to the rules a captured server is. The surface is
+     * the pinned one with its digest marked unread: nobody saw it, so nothing may be said of it.
+     */
+    const unread: LockedMcpServer = { ...pinned, provenance: runs, digest: "unread" };
+    changes.push(...diffLockfiles({ lockfileVersion: LOCKFILE_VERSION, subjects: { [name]: pinned } }, { lockfileVersion: LOCKFILE_VERSION, subjects: { [name]: unread } }));
+  }
+  return changes;
+}
+
+/**
  * What changed against the committed lock: the diff, and what only this run can know.
  *
  * - A pin displaced: the lock says what registry artifact runs, and the configuration now fetches
@@ -239,9 +283,11 @@ function unagreed(agreed: LockedUnaudited | undefined, now: LockedUnaudited, rea
  * - A server added that could not be audited. The diff only sees servers that were captured, so
  *   under `--allow-unreachable` a new server that refused the auditor -- one that exits when the
  *   client says it is nulladrift -- never appeared at all, and the build passed with it in it.
+ * - A pinned server that could not be read: how it is reached and what it runs, not its surface.
  */
 export function compareWithLock(committed: Lockfile, result: CaptureResult): Change[] {
-  const changes = diffLockfiles(committed, result.lock);
+  // A pin that could not be read this time is not gone; see `unreadPin`.
+  const changes = diffLockfiles(committed, result.lock).filter((change) => !(change.kind === "server.removed" && own(result.unaudited, change.server) !== undefined));
   for (const moved of result.displaced) {
     const was = `${moved.previous.name}${moved.previous.version ? `@${moved.previous.version}` : ""}`;
     changes.push({
@@ -254,7 +300,12 @@ export function compareWithLock(committed: Lockfile, result: CaptureResult): Cha
   }
   const failed = new Map(result.unreachable.map((failure) => [failure.server, failure.reason]));
   for (const [name, now] of Object.entries(result.unaudited)) {
-    if (own(committed.subjects, name) !== undefined || acknowledged(committed, name, now)) continue;
+    const pinned = own(committed.subjects, name);
+    if (pinned !== undefined) {
+      changes.push(...unreadPin(name, pinned, now, own(result.unauditedProvenance, name), failed.get(name) ?? "it did not answer"));
+      continue;
+    }
+    if (acknowledged(committed, name, now)) continue;
     changes.push({
       kind: "server.added",
       severity: SEVERITY["server.added"],

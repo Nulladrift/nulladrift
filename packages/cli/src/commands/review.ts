@@ -132,13 +132,25 @@ export async function runReview(options: ReviewOptions): Promise<ExitCode> {
         declined += 1;
         continue;
       }
+      const unread = own(result.lock.subjects, serverName) === undefined ? own(result.unaudited, serverName) : undefined;
+      /*
+       * A pinned server that could not be read keeps its pin. There is no surface to put in its
+       * place, and deleting it made the server new the next time it answered, so what it had
+       * changed in the meantime was never shown as a change.
+       */
+      if (unread !== undefined && own(committed.subjects, serverName) !== undefined) {
+        process.stdout.write(
+          `  ${yellow("not accepted: it could not be read, so there is nothing to pin in place of what was approved, and the pin is kept. Review it where it answers, or pin again with `nulladrift init --force`.")}\n`,
+        );
+        declined += 1;
+        continue;
+      }
       /*
        * Nothing to agree to: how the server is reached could not be read (WebSocket, no command, a
        * server named `__proto__`), and `check` never takes an agreement without a transport. Saying
        * "accepted" would be a promise the next run breaks.
        */
-      const unread = own(result.unaudited, serverName);
-      if (own(result.lock.subjects, serverName) === undefined && unread !== undefined && unread.transport === undefined) {
+      if (unread !== undefined && unread.transport === undefined) {
         process.stdout.write(`  ${yellow("not accepted: how this server is reached could not be read, so there is nothing to agree to. Fix or remove its definition.")}\n`);
         declined += 1;
         continue;
@@ -166,9 +178,9 @@ export async function runReview(options: ReviewOptions): Promise<ExitCode> {
       else delete unaudited[serverName];
       next.unaudited = Object.keys(unaudited).length > 0 ? unaudited : undefined;
 
-      // A rename leaves the old key behind; accepting the rename retires it.
+      // A rename leaves the old key behind; accepting the rename retires it, unless that name is still configured.
       for (const change of serverChanges) {
-        if (change.kind === "server.renamed" && typeof change.before === "string") delete next.subjects[change.before];
+        if (change.kind === "server.renamed" && typeof change.before === "string" && own(result.unaudited, change.before) === undefined) delete next.subjects[change.before];
       }
     }
   } finally {
