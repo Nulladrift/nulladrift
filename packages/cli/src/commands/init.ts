@@ -203,6 +203,11 @@ export async function runInit(options: InitOptions): Promise<ExitCode> {
   await maybeOfferTelemetry();
 
   if (result.unreachable.length > 0 && !options.allowUnreachable) return EXIT_INCOMPLETE;
+  /*
+   * Whatever the flag: it lets an unreachable server warn beside a lock, and there is no lock. A
+   * setup script took the 0 this returned for a baseline to commit.
+   */
+  if (!pinnedSomething) return EXIT_INCOMPLETE;
   if (result.partial.length > 0 && !options.allowPartial) return EXIT_INCOMPLETE;
   return EXIT_CLEAN;
 }
