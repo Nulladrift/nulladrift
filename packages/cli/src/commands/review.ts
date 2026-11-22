@@ -133,11 +133,13 @@ export async function runReview(options: ReviewOptions): Promise<ExitCode> {
         continue;
       }
       /*
-       * Reading a lock back drops a key named `__proto__`, so an agreement written under that name
-       * is one `check` never sees. Saying "accepted" would be a promise the next run breaks.
+       * Nothing to agree to: how the server is reached could not be read (WebSocket, no command, a
+       * server named `__proto__`), and `check` never takes an agreement without a transport. Saying
+       * "accepted" would be a promise the next run breaks.
        */
-      if (serverName === "__proto__") {
-        process.stdout.write(`  ${yellow("not accepted: a server named __proto__ cannot be kept in a lock. Rename it.")}\n`);
+      const unread = own(result.unaudited, serverName);
+      if (own(result.lock.subjects, serverName) === undefined && unread !== undefined && unread.transport === undefined) {
+        process.stdout.write(`  ${yellow("not accepted: how this server is reached could not be read, so there is nothing to agree to. Fix or remove its definition.")}\n`);
         declined += 1;
         continue;
       }
@@ -160,8 +162,7 @@ export async function runReview(options: ReviewOptions): Promise<ExitCode> {
       else delete next.subjects[serverName];
       // Accepting a server that could not be audited agrees to leave it unaudited, as reached now.
       const unaudited = { ...next.unaudited };
-      const now = own(result.unaudited, serverName);
-      if (!fresh && now !== undefined) setOwn(unaudited, serverName, now);
+      if (!fresh && unread !== undefined) setOwn(unaudited, serverName, unread);
       else delete unaudited[serverName];
       next.unaudited = Object.keys(unaudited).length > 0 ? unaudited : undefined;
 

@@ -169,6 +169,15 @@ export async function runInit(options: InitOptions): Promise<ExitCode> {
     lines.push(`  ${red("✗")} ${bold(visibleControls(failure.server))}  ${dim("not pinned")}`, `      ${visibleLines(failure.reason, "      ")}`);
   }
 
+  // Said now, or the first `check` after a successful `init` is where somebody finds out.
+  const unagreeable = Object.keys(result.unaudited).filter((name) => options.allowUnreachable && !Object.hasOwn(unaudited ?? {}, name));
+  if (unagreeable.length > 0) {
+    lines.push(
+      dim(`  note: ${unagreeable.map((name) => visibleControls(name)).join(", ")} cannot be left unaudited: how ${unagreeable.length === 1 ? "it is" : "they are"} reached could not be read, so`),
+      dim("        there is nothing to agree to. `check` will report it until the definition is fixed or removed."),
+    );
+  }
+
   // Said, so nobody thinks their own servers were audited when they were left out on purpose.
   if (result.discovery.userConfigsSkipped.length > 0) {
     lines.push(

@@ -1,7 +1,7 @@
 /** Shared orchestration: discover every configured server, talk to each one, build a lockfile. */
 import type { Discovery } from "./config/discover";
 import { discoverServers } from "./config/discover";
-import { isCredentialName, SEVERITY, sortChanges } from "@nulladrift/core";
+import { isCredentialName, SEVERITY, sortChanges, stableKey } from "@nulladrift/core";
 import { diffLockfiles } from "./diff";
 import type { Change } from "./diff/types";
 import { buildLockedServer, lockTransport } from "./lock/build";
@@ -168,10 +168,11 @@ export async function captureAll(options: CaptureOptions): Promise<CaptureResult
   }
 
   // Configs we understood but cannot audit (unsupported transport, unresolvable placeholder) are
-  // unreachable too: the audit is incomplete either way, and CI should treat them the same.
+  // unreachable too: the audit is incomplete either way, and CI should treat them the same. Each
+  // is written down as its file writes it, so an agreement to leave it out is to that definition.
   for (const skipped of discovery.skipped) {
     unreachable.push({ server: skipped.serverName, reason: skipped.message, kind: "unreachable" });
-    setOwn(unaudited, skipped.serverName, {});
+    setOwn(unaudited, skipped.serverName, skipped.transport ? { transport: skipped.transport } : {});
   }
   // A name the project defines two ways is audited under neither until it says which it means.
   for (const conflict of discovery.conflicts) {
@@ -206,10 +207,27 @@ export async function captureAll(options: CaptureOptions): Promise<CaptureResult
   };
 }
 
-/** Whether the lock already agreed to leave this server unaudited, reached the way it is now. */
+/**
+ * Whether the lock already agreed to leave this server unaudited, reached the way it is now.
+ *
+ * Only an agreement that says how: one without a transport matches nothing, on either side. Every
+ * lock before this release wrote `{}` for a server skipped at discovery, and `{}` matched `{}`
+ * whatever the definition had become since. So such an agreement is asked for once more, and a
+ * definition whose transport cannot be read at all (WebSocket, no command) cannot be agreed to.
+ */
 function acknowledged(committed: Lockfile, name: string, now: LockedUnaudited): boolean {
-  const agreed = own(committed.unaudited, name);
-  return agreed !== undefined && JSON.stringify(agreed.transport ?? null) === JSON.stringify(now.transport ?? null);
+  const agreed = own(committed.unaudited, name)?.transport;
+  return agreed !== undefined && now.transport !== undefined && stableKey(agreed) === stableKey(now.transport);
+}
+
+/** Why a server that could not be audited is not covered by what the lock agreed to. */
+function unagreed(agreed: LockedUnaudited | undefined, now: LockedUnaudited, reason: string): string {
+  if (now.transport === undefined) return `could not be audited, and how it is reached could not be read either, so it cannot be agreed to: ${reason}`;
+  if (agreed === undefined) return `new server, which could not be audited: ${reason}`;
+  if (agreed.transport === undefined) {
+    return `left unaudited by an agreement that does not say how it is reached, as an older mcp.lock's does, so nothing can tell whether it changed since; accept it with \`nulladrift review\` to record how. It could not be audited: ${reason}`;
+  }
+  return `a server left unaudited is now reached differently, and could not be audited: ${reason}`;
 }
 
 /**
@@ -241,7 +259,7 @@ export function compareWithLock(committed: Lockfile, result: CaptureResult): Cha
       kind: "server.added",
       severity: SEVERITY["server.added"],
       server: name,
-      summary: `${own(committed.unaudited, name) ? "a server left unaudited is now reached differently, and" : "new server, which"} could not be audited: ${failed.get(name) ?? "it did not answer"}`,
+      summary: unagreed(own(committed.unaudited, name), now, failed.get(name) ?? "it did not answer"),
     });
   }
   for (const name of result.conflicted) {
@@ -260,10 +278,12 @@ export function compareWithLock(committed: Lockfile, result: CaptureResult): Cha
  * The acknowledgements to write: every server this run could not audit, as it is reached now.
  * Only `init --allow-unreachable` and an accepted change in `review` write these; a plain `init`
  * that could not reach a server fails and says so rather than agreeing to it.
+ *
+ * Not one whose transport could not be read, which `check` would never take as agreed to (see
+ * `acknowledged`), and never `__proto__`: reading a lock back drops that key.
  */
 export function unauditedToRecord(result: CaptureResult, keep: (name: string) => boolean = () => true): Record<string, LockedUnaudited> | undefined {
-  // Never `__proto__`: reading a lock back drops that key, so the agreement would be one `check` never sees.
-  const entries = Object.entries(result.unaudited).filter(([name]) => name !== "__proto__" && keep(name));
+  const entries = Object.entries(result.unaudited).filter(([name, entry]) => entry.transport !== undefined && name !== "__proto__" && keep(name));
   return entries.length > 0 ? Object.fromEntries(entries) : undefined;
 }
 
