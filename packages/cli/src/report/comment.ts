@@ -13,6 +13,14 @@
  */
 const MARKER = "<!-- nulladrift:surface -->";
 
+/**
+ * Comments are read a page at a time, and only so many pages: a thousand comments. Reading only
+ * the first hundred missed this tool's own comment on a busy pull request, and every later run
+ * posted another one.
+ */
+const PER_PAGE = 100;
+const MAX_COMMENT_PAGES = 10;
+
 /** GitHub refuses a comment body longer than this, whole. */
 const MAX_COMMENT_CHARS = 65_536;
 
@@ -87,19 +95,23 @@ export async function upsertComment(
 ): Promise<"created" | "updated" | "forbidden" | "none"> {
   const marked = fitted(`${MARKER}\n${body}`);
 
-  const existing = await call(target, `/issues/${target.issue}/comments?per_page=100`);
-  if (existing.status === 403) return "forbidden";
-  if (!existing.ok) throw new Error(`could not read the comments (${existing.status})`);
-
   /*
    * Only a comment this token wrote. The first comment carrying the marker was taken, whoever
    * wrote it, so anybody could comment the marker first on a public pull request: the edit was
    * refused and the findings never appeared, or it was allowed and landed in a comment its
    * author could rewrite afterwards.
    */
-  const self = await identity(target);
-  const comments = (await existing.json()) as Array<{ id: number; body?: string; user?: { login?: string; type?: string } }>;
-  const mine = comments.find((comment) => comment.body?.startsWith(MARKER) && comment.user?.login === self);
+  let self: string | undefined;
+  let mine: { id: number } | undefined;
+  for (let page = 1; page <= MAX_COMMENT_PAGES && mine === undefined; page += 1) {
+    const existing = await call(target, `/issues/${target.issue}/comments?per_page=${PER_PAGE}&page=${page}`);
+    if (existing.status === 403) return "forbidden";
+    if (!existing.ok) throw new Error(`could not read the comments (${existing.status})`);
+    self ??= await identity(target);
+    const comments = (await existing.json()) as Array<{ id: number; body?: string; user?: { login?: string; type?: string } }>;
+    mine = comments.find((comment) => comment.body?.startsWith(MARKER) && comment.user?.login === self);
+    if (comments.length < PER_PAGE) break;
+  }
 
   if (mine) {
     const updated = await call(target, `/issues/comments/${mine.id}`, { method: "PATCH", body: JSON.stringify({ body: marked }) });
