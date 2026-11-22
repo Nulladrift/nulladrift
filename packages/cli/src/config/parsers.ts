@@ -12,7 +12,7 @@ import { z } from "zod";
 import { lockTransport } from "../lock/build";
 import type { ClientKind, LockedSource, LockedTransport } from "../lock/types";
 import type { ConfiguredServer, ConfiguredTransport } from "./types";
-import type { ExpandContext } from "./expand";
+import type { Expanded, ExpandContext } from "./expand";
 import { expand } from "./expand";
 
 /** Lenient on purpose: unknown keys are another client's extension, not our problem. */
@@ -106,10 +106,12 @@ function writtenTransport(entry: ServerEntry): ConfiguredTransport | undefined {
 function resolveTransport(name: string, entry: ServerEntry, context: ExpandContext): ConfiguredTransport {
   const unresolved: string[] = [];
   const refused: string[] = [];
+  const filled: Expanded["filled"] = [];
   const take = (input: string): string => {
     const result = expand(input, context);
     unresolved.push(...result.unresolved);
     refused.push(...result.refused);
+    filled.push(...result.filled);
     return result.value;
   };
 
@@ -171,6 +173,7 @@ function resolveTransport(name: string, entry: ServerEntry, context: ExpandConte
         "so the secret can only be sent there and not to an authorization server the MCP server chooses.",
     );
   }
+  if (filled.length > 0) transport.filled = filled;
 
   // Before anything connects: the server is never started with the run's credentials in reach.
   if (refused.length > 0) throw refusedCredentials(name, refused);

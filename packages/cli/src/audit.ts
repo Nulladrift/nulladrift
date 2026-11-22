@@ -1,7 +1,7 @@
 /** Shared orchestration: discover every configured server, talk to each one, build a lockfile. */
 import type { Discovery } from "./config/discover";
 import { discoverServers } from "./config/discover";
-import { isCredentialName, SEVERITY, sortChanges, stableKey } from "@nulladrift/core";
+import { isCredentialName, REDACTED, redactArgs, redactPath, SEVERITY, sortChanges, stableKey } from "@nulladrift/core";
 import { diffLockfiles } from "./diff";
 import type { Change } from "./diff/types";
 import { buildLockedServer, lockTransport } from "./lock/build";
@@ -338,23 +338,89 @@ export function unauditedToRecord(result: CaptureResult, keep: (name: string) =>
   return entries.length > 0 ? Object.fromEntries(entries) : undefined;
 }
 
+/** `decodeURIComponent`, for a comparison: a malformed escape is just text. */
+function decoded(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
+/**
+ * What the lock leaves out of an address (see sanitizeUrl): the userinfo, every query value, the
+ * fragment, and any path segment that is a key. Raw and decoded, since an error may quote either.
+ */
+function addressSecrets(address: string): string[] {
+  let url: URL;
+  try {
+    url = new URL(address);
+  } catch {
+    return [];
+  }
+  const out = [url.username, url.password, decoded(url.username), decoded(url.password)];
+  for (const [, value] of url.searchParams) out.push(value);
+  for (const pair of url.search.slice(1).split("&")) out.push(pair.slice(pair.indexOf("=") + 1));
+  if (url.hash.length > 1) out.push(url.hash.slice(1));
+  const kept = redactPath(url.pathname).split("/");
+  url.pathname.split("/").forEach((segment, index) => {
+    if (kept[index] !== segment) out.push(segment, decoded(segment));
+  });
+  return out;
+}
+
+/** The parts of `original` that `redacted` replaced, or all of it when the two do not line up. */
+function replacedParts(original: string, redacted: string): string[] {
+  const kept = redacted.split(REDACTED);
+  const parts: string[] = [];
+  let at = 0;
+  for (const [index, piece] of kept.entries()) {
+    const found =
+      index === 0 ? (original.startsWith(piece) ? 0 : -1)
+      : index === kept.length - 1 ? (original.endsWith(piece) && original.length - piece.length >= at ? original.length - piece.length : -1)
+      : original.indexOf(piece, at);
+    if (found < 0) return [original];
+    if (index > 0) parts.push(original.slice(at, found));
+    at = found + piece.length;
+  }
+  return parts;
+}
+
 /**
  * A failure reason with the values this run was given to reach the server taken out of it.
  *
  * Reasons quote the server and the libraries talking to it -- an error message, the last lines of
  * stderr -- and they are printed, posted on the pull request and sent in the reading. A server that
  * logs "invalid key sk-live-..." on the way out put the project's key into all three.
+ *
+ * Every place the lock leaves a value out, this does too. Environment and header values were the
+ * only ones, and a key handed over in the arguments (`--api-key ${MY_KEY}`) or the address (a path
+ * segment, the query, the userinfo) came back in the server's stderr or the error text.
  */
 export function withoutSecrets(reason: string, server: ConfiguredServer): string {
   const { transport } = server;
   const secrets: string[] = [];
+  /*
+   * Whatever a placeholder was filled with: the config kept it out of the file, so it stays out of
+   * here. A path from the environment -- a home directory, a checkout -- says where, not what.
+   */
+  for (const { name, value } of transport.filled ?? []) {
+    if (isCredentialName(name) || !/^(?:[./~]|[A-Za-z]:\\)/.test(value)) secrets.push(value, ...addressSecrets(value));
+  }
   if (transport.type === "stdio") {
     for (const [name, value] of Object.entries(transport.env)) {
       if (isCredentialName(name) || (value.length >= 16 && !/[\s/\\]/.test(value))) secrets.push(value);
     }
+    // A credential written into the arguments themselves, which the lock leaves out (redactArgs).
+    const redacted = redactArgs(transport.args);
+    transport.args.forEach((argument, index) => {
+      const kept = redacted[index];
+      if (kept !== undefined && kept !== argument) secrets.push(...replacedParts(argument, kept));
+    });
   } else {
     for (const value of Object.values(transport.headers)) secrets.push(value, ...value.split(/\s+/));
     if (transport.oauth?.clientSecret) secrets.push(transport.oauth.clientSecret);
+    secrets.push(...addressSecrets(transport.url));
   }
   let out = reason;
   // Longest first, so a whole header value goes before the token inside it.
