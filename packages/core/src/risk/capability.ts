@@ -17,6 +17,8 @@
  */
 
 /** Ordered worst-first; the order is the comparison. */
+import { alternatives, asObject, beginWalk, effectiveSchema, entriesOf, MAX_FACTS, MAX_VISIT_DEPTH } from "../lock/jsonschema";
+import type { JsonValue } from "../lock/types";
 import { objectOr, objectsIn, stringOr } from "./untrusted";
 
 export const CAPABILITY_SEVERITIES = ["critical", "high", "medium", "low"] as const;
@@ -152,21 +154,58 @@ function normalize(identifier: string): string {
 /*
  * Nested properties count. `tool({ opts: { command } })` is the same capability as
  * `tool({ command })`, and only the top level was examined, so one wrapping object hid it.
- * Depth is bounded because a schema is attacker-supplied and need not terminate.
+ *
+ * So does indirection. The walk read literal `properties` and `items`, and Pydantic, Zod and most
+ * OpenAPI generators put a nested model behind `$defs` by default: a `command` inside one, behind
+ * a root `$ref`, an `allOf` or a branch of an `anyOf` yielded no capability, and a policy denying
+ * process execution passed a tool that takes a shell command. Found in a security review. The
+ * walk now reads each node as the widening heuristic does, through `$ref` and `allOf`, and into
+ * every branch, array and map of values.
+ *
+ * A schema is attacker-supplied and need not terminate, so the walk has the heuristic's depth cap,
+ * and a ceiling on nodes and names read between them however many routes lead to them. Each name
+ * is kept once, in the order first met, which is the order evidence is taken from.
  */
-function argumentNames(inputSchema: unknown, depth = 0): string[] {
-  if (depth > 6 || typeof inputSchema !== "object" || inputSchema === null) return [];
-  const node = inputSchema as { properties?: unknown; items?: unknown };
-  const names: string[] = [];
-  const properties = node.properties;
-  if (typeof properties === "object" && properties !== null) {
-    for (const [name, child] of Object.entries(properties as Record<string, unknown>)) {
-      names.push(name);
-      names.push(...argumentNames(child, depth + 1));
+const MAX_ARGUMENT_READS = 10 * MAX_FACTS;
+
+function argumentNames(inputSchema: unknown): string[] {
+  const root = inputSchema as JsonValue;
+  const names = new Set<string>();
+  let budget = MAX_ARGUMENT_READS;
+
+  const walk = (node: JsonValue | undefined, depth: number): boolean => {
+    if (budget <= 0) return false;
+    budget -= 1;
+    const object = effectiveSchema(node, root);
+    if (!object) return true;
+    const deeper = depth < MAX_VISIT_DEPTH;
+    // False once the budget is spent, which ends the walk where it stands.
+    const into = (child: JsonValue | undefined): boolean => (deeper && child !== null && typeof child === "object" ? walk(child, depth + 1) : budget > 0);
+
+    const properties = asObject(object["properties"]);
+    if (properties) {
+      for (const [name, child] of entriesOf(properties)) {
+        if (--budget <= 0) return false;
+        names.add(name);
+        if (!into(child)) return false;
+      }
     }
-  }
-  if (node.items !== undefined) names.push(...argumentNames(node.items, depth + 1));
-  return names;
+    for (const keyword of ["items", "prefixItems"]) {
+      const value = object[keyword];
+      if (Array.isArray(value)) {
+        for (const child of value) if (!into(child)) return false;
+      } else if (!into(value)) return false;
+    }
+    if (!into(object["additionalProperties"])) return false;
+    const patternProperties = asObject(object["patternProperties"]);
+    if (patternProperties) for (const [, child] of entriesOf(patternProperties)) if (!into(child)) return false;
+    for (const branch of alternatives(object)) if (!into(branch.schema)) return false;
+    return true;
+  };
+
+  beginWalk(root);
+  walk(root, 0);
+  return [...names];
 }
 
 /**
