@@ -186,8 +186,9 @@ export async function runInit(options: InitOptions): Promise<ExitCode> {
     );
   }
 
+  // The name is the config's, and a pull request writes the config: escaped like server text.
   for (const shadow of result.discovery.shadowed) {
-    lines.push(dim(`  note: "${shadow.name}" is defined in both ${shadow.keptFrom} and ${shadow.alsoIn}; kept the first.`));
+    lines.push(dim(visibleControls(`  note: "${shadow.name}" is defined in both ${shadow.keptFrom} and ${shadow.alsoIn}; kept the first.`)));
   }
 
   lines.push(

@@ -12,7 +12,7 @@ import { auth } from "@modelcontextprotocol/client";
 import { discoverServers, portablePath } from "../config/discover";
 import type { ConfiguredServer } from "../config/types";
 import { EXIT_CLEAN, EXIT_INCOMPLETE, type ExitCode } from "../lib/exit";
-import { bold, dim, green, red } from "../lib/ui";
+import { bold, dim, green, red, visibleControls } from "../lib/ui";
 import { sanitizeUrl } from "../lock/normalize";
 import { credentialPath, DEFAULT_CALLBACK_PATH, FileTokenProvider } from "../mcp/oauth";
 import { rm, stat } from "node:fs/promises";
@@ -127,7 +127,8 @@ export async function runLogin(options: { projectRoot: string; configFiles: stri
 
   const found = await findServer(options.projectRoot, options.configFiles, options.serverName);
   if ("error" in found) {
-    process.stderr.write(`${red(found.error)}\n`);
+    // It lists names and commands from configs a cloned repository wrote: escaped, lines kept.
+    process.stderr.write(`${red(visibleControls(found.error, { multiline: true }))}\n`);
     return EXIT_INCOMPLETE;
   }
   const serverUrl = found.transport.type === "stdio" ? "" : found.transport.url;
@@ -139,7 +140,7 @@ export async function runLogin(options: { projectRoot: string; configFiles: stri
 
   try {
     // Without its query or userinfo: a URL that carries a key would otherwise print it.
-    process.stdout.write(`${bold(`Authorizing ${found.name}`)}\n${dim(sanitizeUrl(serverUrl))}\n`);
+    process.stdout.write(`${bold(`Authorizing ${visibleControls(found.name)}`)}\n${dim(visibleControls(sanitizeUrl(serverUrl)))}\n`);
 
     const started = await auth(authenticating, { serverUrl });
     if (started === "AUTHORIZED") {
@@ -154,7 +155,7 @@ export async function runLogin(options: { projectRoot: string; configFiles: stri
       return EXIT_INCOMPLETE;
     }
 
-    process.stdout.write(`${green(`✓ authorized ${found.name}`)}\n${dim(`tokens stored in ${credentialPath(serverUrl)} (owner-only)`)}\n`);
+    process.stdout.write(`${green(`✓ authorized ${visibleControls(found.name)}`)}\n${dim(`tokens stored in ${credentialPath(serverUrl)} (owner-only)`)}\n`);
     return EXIT_CLEAN;
   } catch (error) {
     process.stderr.write(`${red("login failed:")} ${(error as Error).message}\n`);
@@ -171,7 +172,8 @@ export async function runLogout(options: { projectRoot: string; configFiles: str
   }
   const found = await findServer(options.projectRoot, options.configFiles, options.serverName);
   if ("error" in found) {
-    process.stderr.write(`${red(found.error)}\n`);
+    // It lists names and commands from configs a cloned repository wrote: escaped, lines kept.
+    process.stderr.write(`${red(visibleControls(found.error, { multiline: true }))}\n`);
     return EXIT_INCOMPLETE;
   }
   const url = found.transport.type === "stdio" ? "" : found.transport.url;
@@ -184,7 +186,7 @@ export async function runLogout(options: { projectRoot: string; configFiles: str
   );
   await rm(path, { force: true });
   process.stdout.write(
-    `${dim(existed ? `stored credentials for ${found.name} (${sanitizeUrl(url)}) deleted` : `no credentials were stored for ${found.name} (${sanitizeUrl(url)})`)}\n`,
+    `${dim(visibleControls(existed ? `stored credentials for ${found.name} (${sanitizeUrl(url)}) deleted` : `no credentials were stored for ${found.name} (${sanitizeUrl(url)})`))}\n`,
   );
   return EXIT_CLEAN;
 }
