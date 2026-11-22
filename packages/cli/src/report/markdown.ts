@@ -13,14 +13,7 @@
 import { visibleControls } from "../lib/ui";
 import { serversThatShippedNothing } from "../diff/types";
 import type { Change, Severity } from "../diff/types";
-import type { AuditReport } from "./types";
-
-/** Pull request comments say which of the three it was, because the reader's next step differs. */
-const AUDIT_FAILURE_LABEL: Record<"auth" | "forbidden" | "unreachable", string> = {
-  auth: "refused the audit",
-  forbidden: "accepted the credentials and refused",
-  unreachable: "unreachable",
-};
+import { AUDIT_FAILURE_LABEL, type AuditReport } from "./types";
 
 const MARK: Record<Severity, string> = { high: "🔴", medium: "🟠", low: "⚪" };
 
