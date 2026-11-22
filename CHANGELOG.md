@@ -10,6 +10,10 @@ telemetry). Renaming a change kind breaks every consumer that matched on it.
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.10.1] - 2026-11-22
+
 ### Security
 
 - **A schema crafted to explode no longer holds `check` or the control plane for minutes.** Property
@@ -98,7 +102,6 @@ telemetry). Renaming a change kind breaks every consumer that matched on it.
   a server's history is `git log` on one file. The old single file is read once and replaced. A
   state file that cannot be read now costs that one server its baseline and is reported, where an
   unreadable corpus used to pass for a first run.
-
 ## [0.10.0] - 2026-11-12
 
 Found by using the product end to end: a laptop, a pipeline and the control plane, against the
