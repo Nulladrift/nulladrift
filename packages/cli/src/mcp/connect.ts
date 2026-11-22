@@ -230,11 +230,14 @@ export function buildTransport(
   }
 
   /*
-   * Spread after the default, so a config that sets its own `user-agent` keeps it: some servers
-   * key on it, and overriding a deliberate choice would audit a server under conditions the
-   * owner never configured.
+   * A config that sets its own `user-agent` keeps it: some servers key on it, and overriding a
+   * deliberate choice would audit a server under conditions the owner never configured. Header
+   * names are not case-sensitive, so the default is left out whatever case the config writes it
+   * in: spread after it as `User-Agent`, it was a second header, and the server received the two
+   * joined -- "nulladrift/0.10.0 (...), Custom/1.0" -- which is neither.
    */
-  const headers = { "user-agent": USER_AGENT, ...transport.headers };
+  const ownAgent = Object.keys(transport.headers).some((name) => name.toLowerCase() === "user-agent");
+  const headers = { ...(ownAgent ? {} : { "user-agent": USER_AGENT }), ...transport.headers };
   const url = new URL(transport.url);
 
   /*
