@@ -35,13 +35,22 @@ export function isEscalation(previous: LockedBehavior, next: LockedBehavior): bo
 }
 
 /*
- * Keywords whose value is data rather than a schema. A `required` array inside a `const` or a
- * `default` is part of a value the model is shown, and its order is the server's to choose:
- * sorting it there made `["backup", "delete"]` and `["delete", "backup"]` compare as the same.
+ * Keywords whose value is a schema or a list of schemas, and keywords whose value maps names to
+ * schemas. Only these are walked; every other value is data, kept as the server wrote it.
+ *
+ * A `required` array inside a `const` or a `default` is part of a value the model is shown, and
+ * its order is the server's to choose: sorting it there made `["backup", "delete"]` and
+ * `["delete", "backup"]` compare as the same. That was fixed by naming the five keywords that hold
+ * values, which left every keyword nobody had named -- `x-default`, `x-examples`, any vendor's
+ * extension -- walked as a schema and sorted the same way. A list of what is a schema does not
+ * have that gap: a keyword this has never heard of is data, which is what an unknown keyword is.
  */
-const DATA_KEYWORDS = new Set(["const", "default", "enum", "examples", "example"]);
+const SCHEMA_KEYWORDS = new Set([
+  "items", "prefixItems", "additionalItems", "contains", "allOf", "anyOf", "oneOf", "not", "if", "then", "else",
+  "additionalProperties", "unevaluatedProperties", "unevaluatedItems", "propertyNames", "contentSchema",
+]);
 /** Keywords whose value maps names to schemas: the keys are names, never keywords. */
-const NAMED_SCHEMAS = new Set(["properties", "patternProperties", "$defs", "definitions", "dependentSchemas"]);
+const NAMED_SCHEMAS = new Set(["properties", "patternProperties", "$defs", "definitions", "dependentSchemas", "dependencies"]);
 
 /**
  * Sorts the `required` keyword's array. Member order there is semantically insignificant and is
@@ -49,8 +58,8 @@ const NAMED_SCHEMAS = new Set(["properties", "patternProperties", "$defs", "defi
  * because order *is* significant in `prefixItems`, `allOf` and `icons`, and we only reorder where
  * we can show it is safe.
  *
- * Only where `required` is a keyword: not inside a value (`const`, `default`, `enum`,
- * `examples`), and not as the name of a property, which is a schema of its own.
+ * Only where `required` is a keyword of a schema: not inside a value (`const`, `default`, `enum`,
+ * `examples`, an `x-` extension), and not as the name of a property, which is a schema of its own.
  */
 export function normalizeSchema(value: JsonValue): JsonValue {
   return normalizeNode(value, false);
@@ -71,11 +80,9 @@ function normalizeNode(value: JsonValue, namesOnly: boolean): JsonValue {
       out[key] = [...(member as string[])].sort();
       continue;
     }
-    if (DATA_KEYWORDS.has(key)) {
-      out[key] = member;
-      continue;
-    }
-    out[key] = normalizeNode(member, NAMED_SCHEMAS.has(key));
+    if (NAMED_SCHEMAS.has(key)) out[key] = normalizeNode(member, true);
+    else if (SCHEMA_KEYWORDS.has(key)) out[key] = normalizeNode(member, false);
+    else out[key] = member;
   }
   return out;
 }
