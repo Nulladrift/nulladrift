@@ -77,8 +77,14 @@ async function call(target: CommentTarget, path: string, init: RequestInit = {})
  * Throws only on a response that means the comment is not there; a missing permission is the
  * common case in a fork, where `GITHUB_TOKEN` is read-only by design, and that is reported
  * rather than failed on: a build should not go red because a comment could not be posted.
+ *
+ * `create: false` only replaces: with no comment of its own there, nothing is posted ("none").
  */
-export async function upsertComment(target: CommentTarget, body: string): Promise<"created" | "updated" | "forbidden"> {
+export async function upsertComment(
+  target: CommentTarget,
+  body: string,
+  options: { create?: boolean } = {},
+): Promise<"created" | "updated" | "forbidden" | "none"> {
   const marked = fitted(`${MARKER}\n${body}`);
 
   const existing = await call(target, `/issues/${target.issue}/comments?per_page=100`);
@@ -101,6 +107,7 @@ export async function upsertComment(target: CommentTarget, body: string): Promis
     // Not ours to edit after all, or gone: a new comment rather than none.
     if (updated.status !== 403 && updated.status !== 404) throw new Error(`could not update the comment (${updated.status})`);
   }
+  if (options.create === false) return "none";
 
   const created = await call(target, `/issues/${target.issue}/comments`, { method: "POST", body: JSON.stringify({ body: marked }) });
   if (created.status === 403) return "forbidden";

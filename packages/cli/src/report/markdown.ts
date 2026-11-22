@@ -66,6 +66,21 @@ function row(change: Change): string {
 }
 
 /**
+ * What replaces the comment once a run has nothing to report.
+ *
+ * Nothing new is posted on a clean run, but the comment an earlier run left is corrected: a
+ * pull request whose surface matched the lock again still read "3 changes to what your agents can
+ * reach, 1 high", because a clean run never touched it.
+ */
+export function renderResolvedReport(report: AuditReport): string {
+  return [
+    "### Nothing to review: every server matches the lock",
+    "",
+    `An earlier run reported findings here. On this one, all ${report.serversChecked} server${report.serversChecked === 1 ? "" : "s"} matched what was approved, and none failed to answer.`,
+  ].join("\n");
+}
+
+/**
  * The comment body, or null when there is nothing worth saying.
  *
  * Null rather than "no changes found" on purpose: a bot that comments on every green pull request

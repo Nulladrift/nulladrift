@@ -8,7 +8,7 @@ import { renderHumanReport } from "../report/human";
 import { redactedNotes } from "../report/redacted";
 import { renderJsonReport } from "../report/json";
 import { renderSarifReport } from "../report/sarif";
-import { renderMarkdownReport } from "../report/markdown";
+import { renderMarkdownReport, renderResolvedReport } from "../report/markdown";
 import { targetFromEnvironment, upsertComment } from "../report/comment";
 import type { AuditReport } from "../report/types";
 import { reportIfChanged } from "../telemetry";
@@ -103,11 +103,12 @@ async function comment(report: AuditReport): Promise<void> {
     return;
   }
 
+  // Clean: nothing new is posted, and a comment an earlier run left is marked resolved.
   const body = renderMarkdownReport(report);
-  if (!body) return;
 
   try {
-    const outcome = await upsertComment(target, body);
+    const outcome = await upsertComment(target, body ?? renderResolvedReport(report), { create: body !== null });
+    if (outcome === "none") return;
     if (outcome === "forbidden") {
       process.stderr.write(
         `${yellow("--comment:")} the token cannot write comments on this repository. A pull request from a fork gets a read-only token; give the job \`pull-requests: write\` if it is not one.\n`,
