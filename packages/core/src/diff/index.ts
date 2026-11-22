@@ -187,6 +187,8 @@ function compareTool(name: string, before: LockedTool, after: LockedTool): Chang
    */
   const moved = [
     !same(before.title, after.title) ? "title" : "",
+    // A second title a client shows in place of the name, and the same finding for the same reason.
+    !same(before.annotations?.title, after.annotations?.title) ? "annotations.title" : "",
     !same(before.icons, after.icons) ? "icons" : "",
     !same(before.execution, after.execution) ? `how it may be run (${describeExecution(before.execution)} → ${describeExecution(after.execution)})` : "",
     !same(before.meta, after.meta) ? "_meta" : "",
@@ -503,11 +505,26 @@ function compareServer(name: string, before: LockedMcpServer, after: LockedMcpSe
   return changes;
 }
 
+/*
+ * A server by name, from the lock's own entries only. `subjects[name]` on a plain object answers
+ * for names nobody configured: `constructor`, `toString` and `hasOwnProperty` are on every
+ * object's prototype, so a new server called `constructor` was compared against a function, and
+ * the comparison threw. Found in a security review.
+ */
+function subjectNamed(lock: Lockfile, name: string): LockedMcpServer | undefined {
+  return Object.hasOwn(lock.subjects, name) ? lock.subjects[name] : undefined;
+}
+
 /**
  * A server renamed in config would naively read as a removal plus an addition: two alarming
  * findings for a cosmetic edit. Collapsing requires an identical transport *and* an identical
  * digest, so a rename that also changed capabilities stays a remove and an add -- which is what
  * it is, and hiding a capability change inside a cosmetic one is the failure mode worth avoiding.
+ *
+ * The package behind a server is outside its digest (see `compareProvenance`), so it is compared
+ * for a renamed pair too. It was not: renaming `fs` to `filesystem` in the same commit that put
+ * new bytes behind fs-server@1.0.0 reported a low-severity rename and nothing else, when the same
+ * bytes under the old name were a high substitution. Found in a security review.
  */
 function detectRenames(before: Lockfile, after: Lockfile, removed: string[], added: string[]): { changes: Change[]; renamed: Set<string> } {
   const changes: Change[] = [];
@@ -515,10 +532,10 @@ function detectRenames(before: Lockfile, after: Lockfile, removed: string[], add
   const availableAdds = [...added];
 
   for (const oldName of removed) {
-    const oldEntry = before.subjects[oldName];
+    const oldEntry = subjectNamed(before, oldName);
     if (!oldEntry) continue;
     const match = availableAdds.find((newName) => {
-      const candidate = after.subjects[newName];
+      const candidate = subjectNamed(after, newName);
       return candidate !== undefined && candidate.digest === oldEntry.digest && same(candidate.transport, oldEntry.transport);
     });
     if (!match) continue;
@@ -527,6 +544,8 @@ function detectRenames(before: Lockfile, after: Lockfile, removed: string[], add
     renamed.add(oldName);
     renamed.add(match);
     changes.push(change("server.renamed", match, `renamed from "${oldName}"; capabilities are unchanged`, { before: oldName, after: match }));
+    const newEntry = subjectNamed(after, match);
+    if (newEntry) changes.push(...compareProvenance(match, oldEntry, newEntry));
   }
   return { changes, renamed };
 }
@@ -542,17 +561,17 @@ export function diffLockfiles(before: Lockfile, after: Lockfile): Change[] {
 
   for (const name of added) {
     if (renamed.has(name)) continue;
-    const entry = after.subjects[name];
+    const entry = subjectNamed(after, name);
     const toolCount = entry?.tools?.length ?? 0;
     changes.push(change("server.added", name, `new server with ${toolCount} tool${toolCount === 1 ? "" : "s"}`, { after: entry }));
   }
   for (const name of removed) {
     if (renamed.has(name)) continue;
-    changes.push(change("server.removed", name, "server is no longer configured", { before: before.subjects[name] }));
+    changes.push(change("server.removed", name, "server is no longer configured", { before: subjectNamed(before, name) }));
   }
   for (const name of afterNames) {
-    const a = before.subjects[name];
-    const b = after.subjects[name];
+    const a = subjectNamed(before, name);
+    const b = subjectNamed(after, name);
     if (!a || !b) continue;
     changes.push(...compareServer(name, a, b));
   }
