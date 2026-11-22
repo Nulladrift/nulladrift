@@ -1,4 +1,5 @@
 import { countRedacted } from "../lock/credentials";
+import { visibleControls } from "../lib/ui";
 import type { Lockfile } from "../lock/types";
 
 /**
@@ -12,10 +13,13 @@ export function redactedLine(count: number): string {
   return `${values} left out of the lock. Write each as \${VAR} instead, and rotate any an earlier mcp.lock committed.`;
 }
 
-/** One note per server whose locked transport had something left out, for `check` and `push`. */
+/**
+ * One note per server whose locked transport had something left out, for `check` and `push`. The
+ * name is the config's, so a pull request's, and is escaped like any text this tool did not write.
+ */
 export function redactedNotes(lock: Lockfile): string[] {
   return Object.entries(lock.subjects).flatMap(([name, entry]) => {
     const count = countRedacted(entry.transport as { args?: string[]; url?: string });
-    return count > 0 ? [`${name}: ${redactedLine(count)}`] : [];
+    return count > 0 ? [`${visibleControls(name)}: ${redactedLine(count)}`] : [];
   });
 }

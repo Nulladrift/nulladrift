@@ -46,7 +46,9 @@ export function newSteering(committed: Lockfile, observed: Lockfile): ServerStee
   const found: ServerSteering[] = [];
 
   for (const [server, subject] of Object.entries(observed.subjects ?? {})) {
-    const before = new Set(signalsFor(committed.subjects?.[server]).map(identity));
+    // An own entry only: `subjects["constructor"]` is a function on any lock without that server.
+    const approved = committed.subjects && Object.hasOwn(committed.subjects, server) ? committed.subjects[server] : undefined;
+    const before = new Set(signalsFor(approved).map(identity));
     const signals = signalsFor(subject).filter((signal) => !before.has(identity(signal)));
     if (signals.length > 0) found.push({ server, signals });
   }

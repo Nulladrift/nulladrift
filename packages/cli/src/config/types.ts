@@ -21,6 +21,8 @@ export interface ConfiguredStdio {
    * CI checkout at another path reported as `server.transport.changed`.
    */
   asWritten?: { command: string; args: string[]; cwd?: string };
+  /** What `${VAR}` placeholders were filled with, to be kept out of anything printed. See `Expanded.filled`. */
+  filled?: Array<{ name: string; value: string }>;
 }
 
 /** OAuth settings as a client config states them. Secrets arrive expanded from the environment. */
@@ -43,6 +45,8 @@ export interface ConfiguredHttp {
   oauth?: ConfiguredOAuth;
   /** The URL as the config writes it, before `${VAR}` expansion. See ConfiguredStdio.asWritten. */
   asWritten?: { url: string };
+  /** What `${VAR}` placeholders were filled with, to be kept out of anything printed. See `Expanded.filled`. */
+  filled?: Array<{ name: string; value: string }>;
 }
 
 export type ConfiguredTransport = ConfiguredStdio | ConfiguredHttp;

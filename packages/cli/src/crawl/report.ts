@@ -74,8 +74,10 @@ export function summarize(history: History): DriftStats {
     comparisons += observation.comparisons;
     driftEvents += observation.driftEvents;
     if (observation.driftEvents > 0) serversEverDrifted += 1;
-    const span = Date.parse(observation.lastCheckedAt) - Date.parse(observation.firstSeenAt);
+    // The current like-for-like window, and any a re-baseline closed. See CAPTURE_REVISION.
+    const span = Date.parse(observation.lastCheckedAt) - Date.parse(observation.windowStart ?? observation.firstSeenAt);
     if (Number.isFinite(span) && span > 0) serverDays += span / MS_PER_DAY;
+    serverDays += observation.priorObservedDays ?? 0;
   }
 
   let persistent = 0;
@@ -128,7 +130,8 @@ function table(rows: Array<[string, string]>, headers: [string, string]): string
 export function renderMarkdown(history: History, stats: DriftStats): string {
   const last = history.runs.at(-1);
   const sortedKinds = Object.entries(stats.changeKinds).sort(([, a], [, b]) => b - a);
-  const measured = (last?.outcomes.stable ?? 0) + (last?.outcomes.drifted ?? 0) + (last?.outcomes.baseline ?? 0);
+  const rebaselined = last?.outcomes.rebaselined ?? 0;
+  const measured = (last?.outcomes.stable ?? 0) + (last?.outcomes.drifted ?? 0) + (last?.outcomes.baseline ?? 0) + rebaselined;
 
   const lines = [
     "# MCP capability drift in the wild",
@@ -192,6 +195,8 @@ export function renderMarkdown(history: History, stats: DriftStats): string {
     table(
       [
         ["Servers measured in the last run", String(measured)],
+        // Read and pinned again, not compared: their baselines came from a collector that recorded less.
+        ...(rebaselined > 0 ? ([["\u2003of those, re-baselined after a collector change (not compared)", String(rebaselined)]] as Array<[string, string]>) : []),
         ["Required credentials (not measurable anonymously)", String(stats.coverage.authRequired)],
         ["Unreachable", String(stats.coverage.unreachable)],
         ["stdio packages run in a container", String(stats.coverage.stdioSandboxed)],

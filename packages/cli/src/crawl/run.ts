@@ -1,19 +1,18 @@
 /** One pass over the corpus: capture every server, compare against the pinned snapshot. */
 import { mkdir } from "node:fs/promises";
-import { join } from "node:path";
 import { diffLockfiles } from "../diff";
 import type { Change } from "../diff/types";
 import { buildLockedServer } from "../lock/build";
-import { readLockfile, writeLockfile } from "../lock/io";
 import type { Lockfile, LockedMcpServer } from "../lock/types";
 import { LOCKFILE_VERSION } from "../lock/types";
-import { VERSION } from "../lib/version";
 import { captureSurface } from "../mcp/capture";
 import { isAuthFailure } from "../mcp/types";
+import { own, setOwn } from "../lib/own";
 import { discardFetch, runFetch } from "./sandbox";
 import type { Corpus, CrawlTarget } from "./registry";
 import type { FailureStreak, History, Outcome, RunRecord, ServerObservation } from "./state";
-import { CORPUS_LOCK, emptyHistory, PRUNE_AFTER_ABSENT_RUNS, readHistory, writeHistory } from "./state";
+import { CAPTURE_REVISION, emptyHistory, PRUNE_AFTER_ABSENT_RUNS, readHistory, writeHistory } from "./state";
+import { readCorpus, writeCorpus } from "./corpus";
 
 export interface CrawlOptions {
   stateDir: string;
@@ -33,6 +32,10 @@ export interface CrawlResult {
   history: History;
   /** Every change seen this pass, for the detailed section of the report. */
   changes: Change[];
+  /** Servers this run had a baseline for, read from the state directory before it started. */
+  baselines: number;
+  /** Corpus files that could not be read, so those servers started over. Should be empty. */
+  unreadable: string[];
   /** Subjects dropped from the corpus lock because the registry no longer lists them. */
   pruned: string[];
 }
@@ -142,12 +145,14 @@ export async function crawl(options: CrawlOptions): Promise<CrawlResult> {
   const at = now.toISOString();
 
   await mkdir(stateDir, { recursive: true });
-  const lockPath = join(stateDir, CORPUS_LOCK);
-  const previous: Lockfile = await readLockfile(lockPath).catch(() => ({
-    lockfileVersion: LOCKFILE_VERSION,
-    generatedBy: `nulladrift@${VERSION}`,
-    subjects: {},
-  }));
+  /*
+   * Read file by file. It used to be one lockfile read with `.catch(() => empty)`, so a state that
+   * could not be read looked exactly like a first run -- which is what every run looked like for
+   * a week while the state could not be saved. A file that cannot be read now costs that one
+   * server its baseline, and the count is reported.
+   */
+  const stored = await readCorpus(stateDir);
+  const previous: Lockfile = { lockfileVersion: LOCKFILE_VERSION, subjects: stored.subjects };
   const history = await readHistory(stateDir).catch(() => emptyHistory());
 
   let done = 0;
@@ -160,7 +165,7 @@ export async function crawl(options: CrawlOptions): Promise<CrawlResult> {
     hostOf,
     async (target): Promise<Captured> => {
       const result = await captureAny(target, timeoutMs);
-      const outcome: Outcome = result.failure ?? (previous.subjects[target.name] ? "stable" : "baseline");
+      const outcome: Outcome = result.failure ?? (own(previous.subjects, target.name) ? "stable" : "baseline");
       options.onProgress?.(++done, corpus.targets.length, target.name, outcome);
       return result;
     },
@@ -173,11 +178,16 @@ export async function crawl(options: CrawlOptions): Promise<CrawlResult> {
    */
   const fresh: Record<string, LockedMcpServer> = {};
   const comparable: Record<string, LockedMcpServer> = {};
+  /** Captured, with a baseline the current collector would not have recorded the same way. */
+  const rebaselined = new Set<string>();
   for (const result of captured) {
     if (!result.entry) continue;
-    fresh[result.target.name] = result.entry;
-    const prior = previous.subjects[result.target.name];
-    if (prior) comparable[result.target.name] = prior;
+    // Own members only: a registry can list a server called `constructor` as well as anybody.
+    setOwn(fresh, result.target.name, result.entry);
+    const prior = own(previous.subjects, result.target.name);
+    if (!prior) continue;
+    if ((own(history.servers, result.target.name)?.revision ?? 1) !== CAPTURE_REVISION) rebaselined.add(result.target.name);
+    else setOwn(comparable, result.target.name, prior);
   }
 
   const changes = diffLockfiles(
@@ -186,7 +196,7 @@ export async function crawl(options: CrawlOptions): Promise<CrawlResult> {
   );
   const driftedServers = [...new Set(changes.map((change) => change.server))].sort();
 
-  const outcomes: Record<Outcome, number> = { baseline: 0, stable: 0, drifted: 0, "auth-required": 0, unreachable: 0 };
+  const outcomes: Record<Outcome, number> = { baseline: 0, stable: 0, drifted: 0, rebaselined: 0, "auth-required": 0, unreachable: 0 };
   const protocols: Record<string, number> = {};
   const changeKinds: Record<string, number> = {};
   for (const change of changes) changeKinds[change.kind] = (changeKinds[change.kind] ?? 0) + 1;
@@ -200,12 +210,12 @@ export async function crawl(options: CrawlOptions): Promise<CrawlResult> {
        * months ago is indistinguishable from one that blinked once, and both quietly depress
        * the coverage the report publishes.
        */
-      const prior = history.failures[name];
+      const prior = own(history.failures, name);
       const streak: FailureStreak =
         prior === undefined || prior.kind !== result.failure
           ? { consecutive: 1, kind: result.failure, firstFailedAt: at, lastFailedAt: at }
           : { ...prior, consecutive: prior.consecutive + 1, lastFailedAt: at };
-      history.failures[name] = streak;
+      setOwn(history.failures, name, streak);
       continue;
     }
     delete history.failures[name];
@@ -214,19 +224,28 @@ export async function crawl(options: CrawlOptions): Promise<CrawlResult> {
     const revision = `${entry.protocol.era}/${entry.protocol.version}`;
     protocols[revision] = (protocols[revision] ?? 0) + 1;
 
-    const isBaseline = previous.subjects[name] === undefined;
+    const isBaseline = own(previous.subjects, name) === undefined;
+    const isRebaseline = rebaselined.has(name);
     const drifted = driftedServers.includes(name);
-    outcomes[isBaseline ? "baseline" : drifted ? "drifted" : "stable"] += 1;
+    outcomes[isBaseline ? "baseline" : isRebaseline ? "rebaselined" : drifted ? "drifted" : "stable"] += 1;
 
-    const observation: ServerObservation = history.servers[name] ?? { firstSeenAt: at, lastCheckedAt: at, comparisons: 0, driftEvents: 0 };
+    const observation: ServerObservation = own(history.servers, name) ?? { firstSeenAt: at, lastCheckedAt: at, comparisons: 0, driftEvents: 0 };
+    if (isRebaseline) {
+      // The window being closed was real observation and still counts; the gap to this reading is not.
+      const start = Date.parse(observation.windowStart ?? observation.firstSeenAt);
+      const end = Date.parse(observation.lastCheckedAt);
+      if (Number.isFinite(start) && Number.isFinite(end) && end > start) observation.priorObservedDays = (observation.priorObservedDays ?? 0) + (end - start) / 86_400_000;
+      observation.windowStart = at;
+    }
+    observation.revision = CAPTURE_REVISION;
     observation.lastCheckedAt = at;
     observation.protocol = revision;
-    if (!isBaseline) observation.comparisons += 1;
+    if (!isBaseline && !isRebaseline) observation.comparisons += 1;
     if (drifted) {
       observation.driftEvents += 1;
       observation.lastChangedAt = at;
     }
-    history.servers[name] = observation;
+    setOwn(history.servers, name, observation);
   }
 
   const run: RunRecord = { at, targets: corpus.targets.length, outcomes, changeKinds, protocols, corpus: corpus.stats, driftedServers };
@@ -251,9 +270,9 @@ export async function crawl(options: CrawlOptions): Promise<CrawlResult> {
     }
     if (corpus.stats.truncated) continue;
 
-    const absences = (history.absent[name] ?? 0) + 1;
+    const absences = (own(history.absent, name) ?? 0) + 1;
     if (absences < PRUNE_AFTER_ABSENT_RUNS) {
-      history.absent[name] = absences;
+      setOwn(history.absent, name, absences);
       continue;
     }
     // The observation in `history.servers` stays: it is the record of what was measured while
@@ -264,8 +283,8 @@ export async function crawl(options: CrawlOptions): Promise<CrawlResult> {
     pruned.push(name);
   }
 
-  await writeLockfile(lockPath, { lockfileVersion: LOCKFILE_VERSION, generatedBy: `nulladrift@${VERSION}`, subjects });
+  await writeCorpus(stateDir, subjects);
   await writeHistory(stateDir, history);
 
-  return { run, history, changes, pruned: pruned.sort() };
+  return { run, history, changes, pruned: pruned.sort(), baselines: Object.keys(stored.subjects).length, unreadable: stored.unreadable };
 }

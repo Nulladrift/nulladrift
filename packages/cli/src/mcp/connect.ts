@@ -12,7 +12,7 @@ import type { Transport } from "@modelcontextprotocol/client";
 import type { ConfiguredServer } from "../config/types";
 import { createAuthProvider } from "./oauth";
 import { USER_AGENT, VERSION } from "../lib/version";
-import { UnreachableServerError } from "./types";
+import { boundReason, MAX_REASON_CHARS, UnreachableServerError } from "./types";
 import { describeNetworkFailure } from "./network";
 
 export const DEFAULT_TIMEOUT_MS = 30_000;
@@ -230,11 +230,14 @@ export function buildTransport(
   }
 
   /*
-   * Spread after the default, so a config that sets its own `user-agent` keeps it: some servers
-   * key on it, and overriding a deliberate choice would audit a server under conditions the
-   * owner never configured.
+   * A config that sets its own `user-agent` keeps it: some servers key on it, and overriding a
+   * deliberate choice would audit a server under conditions the owner never configured. Header
+   * names are not case-sensitive, so the default is left out whatever case the config writes it
+   * in: spread after it as `User-Agent`, it was a second header, and the server received the two
+   * joined -- "nulladrift/0.10.0 (...), Custom/1.0" -- which is neither.
    */
-  const headers = { "user-agent": USER_AGENT, ...transport.headers };
+  const ownAgent = Object.keys(transport.headers).some((name) => name.toLowerCase() === "user-agent");
+  const headers = { ...(ownAgent ? {} : { "user-agent": USER_AGENT }), ...transport.headers };
   const url = new URL(transport.url);
 
   /*
@@ -251,6 +254,66 @@ export function buildTransport(
   if (transport.type === "sse") return new SSEClientTransport(url, { requestInit: { headers }, authProvider, ...custom });
 
   return new StreamableHTTPClientTransport(url, { requestInit: { headers }, authProvider, ...custom });
+}
+
+/** How long a server stopped at its deadline has after SIGTERM before it is killed. */
+const KILL_GRACE_MS = 1_000;
+
+/**
+ * Server processes that may still be running: signalled and not yet killed, being closed by the
+ * SDK (which forgets the pid as soon as it starts), or open.
+ */
+const signalled = new Set<number>();
+const closing = new Set<number>();
+const open = new Set<StdioClientTransport>();
+let exitHooked = false;
+
+function isRunning(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
+function signal(pid: number, name: NodeJS.Signals): void {
+  try {
+    process.kill(pid, name);
+  } catch {
+    // Already gone.
+  }
+}
+
+/**
+ * A server process stopped now: SIGTERM, then SIGKILL a second later if it is still there.
+ *
+ * Not the SDK's close, which waits two seconds for the server to leave on its own before it
+ * signals at all. `main` exits two seconds after it returns, so a stdio server that ignored the end
+ * of its input outlived the CLI and was re-parented to PID 1, on every CI run that met one. Its pid
+ * is held only until the SIGKILL, so it cannot outlast the process and name another one.
+ */
+function stopProcess(pid: number): void {
+  if (!isRunning(pid)) return;
+  signalled.add(pid);
+  signal(pid, "SIGTERM");
+  setTimeout(() => {
+    if (isRunning(pid)) signal(pid, "SIGKILL");
+    signalled.delete(pid);
+  }, KILL_GRACE_MS).unref();
+}
+
+/**
+ * Nothing this run started survives it. On exit, every server process still open or still being
+ * stopped is killed: `process.exit` does not wait for a grace period, and neither does this.
+ */
+function hookExit(): void {
+  if (exitHooked) return;
+  exitHooked = true;
+  process.on("exit", () => {
+    for (const pid of [...signalled, ...closing]) signal(pid, "SIGKILL");
+    for (const transport of open) if (transport.pid !== null) signal(transport.pid, "SIGKILL");
+  });
 }
 
 /**
@@ -283,7 +346,15 @@ export function diagnosticLines(stderr: string, limit = 3): string[] {
   return chosen.slice(0, limit).map((line) => line.trim());
 }
 
-export async function connect(server: ConfiguredServer, timeoutMs = DEFAULT_TIMEOUT_MS, options: { interactive?: boolean } = {}): Promise<Connection> {
+export async function connect(
+  server: ConfiguredServer,
+  timeoutMs = DEFAULT_TIMEOUT_MS,
+  options: {
+    interactive?: boolean;
+    /** Aborted when the caller gives up on the server: it is stopped there and then, process and all. */
+    signal?: AbortSignal;
+  } = {},
+): Promise<Connection> {
   let stderrBuffer = "";
   const captureStderr = (chunk: string): void => {
     stderrBuffer = (stderrBuffer + chunk).slice(-STDERR_KEEP_BYTES);
@@ -320,9 +391,19 @@ export async function connect(server: ConfiguredServer, timeoutMs = DEFAULT_TIME
   }
 
   let transport: Transport | undefined;
-  const guard = new SurfaceGuard(() => {
+  /*
+   * Stopped, not asked to leave: at the deadline, and when the guard stops reading a server. The
+   * process first, since closing the transport forgets which process it was; closing it as well
+   * ends a version probe in progress, whose disposable process the SDK then reaps itself.
+   */
+  const stop = (): void => {
+    if (transport instanceof StdioClientTransport) {
+      open.delete(transport);
+      if (transport.pid !== null) stopProcess(transport.pid);
+    }
     void transport?.close().catch(() => {});
-  });
+  };
+  const guard = new SurfaceGuard(stop);
   try {
     transport = buildTransport(server, captureStderr, { ...options, fetch: guardedFetch(guard) });
   } catch (error) {
@@ -330,17 +411,48 @@ export async function connect(server: ConfiguredServer, timeoutMs = DEFAULT_TIME
   }
   guardMessages(transport, guard);
 
+  const built = transport;
+  if (built instanceof StdioClientTransport) {
+    hookExit();
+    open.add(built);
+    /*
+     * The SDK starts the server's own process only once its probe has finished, which can be after
+     * the caller gave up: the deadline passing during the probe left nothing to stop yet, and then a
+     * process was started that nobody would.
+     */
+    const start = built.start.bind(built);
+    built.start = async () => {
+      await start();
+      if (options.signal?.aborted) {
+        stop();
+        throw new UnreachableServerError(server.name, "stopped: the deadline passed while it was starting");
+      }
+    };
+  }
+  options.signal?.addEventListener("abort", stop, { once: true });
+  /** The SDK's own close, which asks the server to leave; its pid kept so an exit mid-close still kills it. */
+  const close = async (): Promise<void> => {
+    options.signal?.removeEventListener("abort", stop);
+    const pid = built instanceof StdioClientTransport ? built.pid : null;
+    if (pid !== null) closing.add(pid);
+    if (built instanceof StdioClientTransport) open.delete(built);
+    await client.close().catch(() => {});
+    if (pid !== null) closing.delete(pid);
+  };
+
   try {
     await client.connect(transport, { timeout: timeoutMs });
   } catch (error) {
-    await client.close().catch(() => {});
+    if (options.signal?.aborted) stop();
+    await close();
     if (guard.refusal !== undefined) throw new UnreachableServerError(server.name, guard.refusal, error);
     const detail = stderrBuffer.trim();
     // The network's own reason, when there is one: "fetch failed" alone does not say what to fix.
     const network = describeNetworkFailure(error);
+    // Half the bound at most, so a long error body leaves room for the stderr that explains it.
     throw new UnreachableServerError(
       server.name,
-      `${(error as Error).message}${network ? ` (${network})` : ""}${detail ? `\n  server stderr: ${diagnosticLines(detail).join("\n  ")}` : ""}`,
+      `${boundReason((error as Error).message, MAX_REASON_CHARS / 2)}${network ? ` (${network})` : ""}${detail ? `\n  server stderr: ${diagnosticLines(detail).join("\n  ")}` : ""}`,
       error,
     );
   }
@@ -351,8 +463,6 @@ export async function connect(server: ConfiguredServer, timeoutMs = DEFAULT_TIME
     refused: () => guard.refusal,
     watchChanges: () => changes.clear(),
     changed: () => [...changes].sort(),
-    close: async () => {
-      await client.close().catch(() => {});
-    },
+    close,
   };
 }

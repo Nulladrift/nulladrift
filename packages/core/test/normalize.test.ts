@@ -71,6 +71,43 @@ describe("normalizeSchema", () => {
     expect(normalizeSchema({ enum: [{ required: ["b", "a"] }] })).toEqual({ enum: [{ required: ["b", "a"] }] });
   });
 
+  /*
+   * The same holds for any keyword that is not a schema: a vendor extension carries data, and a
+   * `required` inside `x-default` or `x-examples` is part of it. Every keyword was recursed into
+   * except the five named above, so those were sorted, and a server could reorder them unseen.
+   */
+  it.each(["x-default", "x-examples", "x-anything"])("leaves a `required` array inside `%s` as the server wrote it", (keyword) => {
+    const value = [{ required: ["delete", "backup"] }];
+    expect(normalizeSchema({ type: "object", [keyword]: value })).toEqual({ type: "object", [keyword]: value });
+    expect(normalizeSchema({ type: "object", [keyword]: { required: ["delete", "backup"] } })).toEqual({ type: "object", [keyword]: { required: ["delete", "backup"] } });
+  });
+
+  /*
+   * And it keeps sorting wherever a schema sits, because the sorted form is what every existing
+   * lock holds: a keyword missed here would make those locks drift on the first run after upgrade.
+   */
+  it.each([
+    ["items", { items: { required: ["b", "a"] } }, { items: { required: ["a", "b"] } }],
+    ["items as a tuple", { items: [{ required: ["b", "a"] }] }, { items: [{ required: ["a", "b"] }] }],
+    ["prefixItems", { prefixItems: [{ required: ["b", "a"] }] }, { prefixItems: [{ required: ["a", "b"] }] }],
+    ["allOf", { allOf: [{ required: ["b", "a"] }] }, { allOf: [{ required: ["a", "b"] }] }],
+    ["anyOf", { anyOf: [{ required: ["b", "a"] }] }, { anyOf: [{ required: ["a", "b"] }] }],
+    ["oneOf", { oneOf: [{ required: ["b", "a"] }] }, { oneOf: [{ required: ["a", "b"] }] }],
+    ["not", { not: { required: ["b", "a"] } }, { not: { required: ["a", "b"] } }],
+    ["if / then / else", { if: { required: ["b", "a"] }, then: { required: ["d", "c"] }, else: { required: ["f", "e"] } }, { if: { required: ["a", "b"] }, then: { required: ["c", "d"] }, else: { required: ["e", "f"] } }],
+    ["additionalProperties", { additionalProperties: { required: ["b", "a"] } }, { additionalProperties: { required: ["a", "b"] } }],
+    ["patternProperties", { patternProperties: { "^x": { required: ["b", "a"] } } }, { patternProperties: { "^x": { required: ["a", "b"] } } }],
+    ["$defs", { $defs: { A: { required: ["b", "a"] } } }, { $defs: { A: { required: ["a", "b"] } } }],
+    ["definitions", { definitions: { A: { required: ["b", "a"] } } }, { definitions: { A: { required: ["a", "b"] } } }],
+    ["dependentSchemas", { dependentSchemas: { a: { required: ["c", "b"] } } }, { dependentSchemas: { a: { required: ["b", "c"] } } }],
+    ["dependencies", { dependencies: { a: { required: ["c", "b"] } } }, { dependencies: { a: { required: ["b", "c"] } } }],
+    ["contains", { contains: { required: ["b", "a"] } }, { contains: { required: ["a", "b"] } }],
+    ["propertyNames", { propertyNames: { required: ["b", "a"] } }, { propertyNames: { required: ["a", "b"] } }],
+    ["unevaluatedProperties", { unevaluatedProperties: { required: ["b", "a"] } }, { unevaluatedProperties: { required: ["a", "b"] } }],
+  ])("still sorts `required` under %s", (_label, input, output) => {
+    expect(normalizeSchema(input as never)).toEqual(output);
+  });
+
   it("treats a property named `required` as a schema, not as the keyword", () => {
     expect(normalizeSchema({ properties: { required: { type: "array", required: ["b", "a"] } } })).toEqual({
       properties: { required: { type: "array", required: ["a", "b"] } },

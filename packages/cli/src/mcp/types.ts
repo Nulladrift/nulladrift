@@ -16,6 +16,25 @@ export interface CapturedSurface {
   coverage?: LockedCoverage;
 }
 
+/**
+ * How much of a failure a reason keeps.
+ *
+ * Nothing bounded it, and most of a reason is the server's own text. One answering 404 with a 5 MB
+ * body put all of it into the terminal, `--json`, the reading `push` sends, and the pull request
+ * comment, which GitHub refuses past 65,536 characters, so the findings were never posted.
+ */
+export const MAX_REASON_CHARS = 2_048;
+
+/**
+ * The start of `text`, cut where a word ends and saying how much was left out. At a word, so a key
+ * cut in half is not left in to be read in part: it is dropped, and the count says so.
+ */
+export function boundReason(text: string, limit = MAX_REASON_CHARS): string {
+  if (text.length <= limit) return text;
+  const kept = text.slice(0, limit).replace(/\S*$/, "").trimEnd();
+  return `${kept} … (${text.length - kept.length} more characters)`;
+}
+
 /** Why a server could not be captured. Separated from drift so CI can tell them apart. */
 export class UnreachableServerError extends Error {
   constructor(

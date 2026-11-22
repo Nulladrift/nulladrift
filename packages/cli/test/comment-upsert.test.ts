@@ -83,3 +83,42 @@ describe("the comment it replaces", () => {
     expect(writes(seen).map((request) => request.method)).toEqual(["PATCH", "POST"]);
   });
 });
+
+/*
+ * Only the first page of comments was read (`?per_page=100`), so on a pull request with more than a
+ * hundred, the comment this tool posted earlier was not found and a second one was posted, then a
+ * third, one per run. Found in an audit.
+ */
+describe("a busy pull request", () => {
+  async function paged(pages: Array<Array<{ id: number; body: string; user: { login: string; type: string } }>>) {
+    const seen: Seen[] = [];
+    const server: Server = createServer((request, response) => {
+      const url = new URL(request.url ?? "/", "http://localhost");
+      seen.push({ method: request.method ?? "GET", path: `${url.pathname}${url.search}` });
+      const json = (status: number, body: unknown) => response.writeHead(status, { "content-type": "application/json" }).end(JSON.stringify(body));
+      request.resume();
+      request.on("end", () => {
+        if (url.pathname === "/user") return json(403, {});
+        if (request.method === "GET") return json(200, pages[Number(url.searchParams.get("page") ?? "1") - 1] ?? []);
+        return json(request.method === "POST" ? 201 : 200, {});
+      });
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    servers.push(server);
+    return { seen, target: { api: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, repo: "acme/web", issue: 7, token: "t" } };
+  }
+  const others = (from: number, count: number) =>
+    Array.from({ length: count }, (_, index) => ({ id: from + index, body: "lgtm", user: { login: "reviewer", type: "User" } }));
+
+  it("finds its own comment past the first hundred, and replaces it", async () => {
+    const { seen, target } = await paged([others(1, 100), [...others(101, 20), { id: 500, body: `${MARKER}\nlast run`, user: { login: "github-actions[bot]", type: "Bot" } }]]);
+    expect(await upsertComment(target, "findings")).toBe("updated");
+    expect(writes(seen)).toEqual([{ method: "PATCH", path: "/repos/acme/web/issues/comments/500" }]);
+  });
+
+  it("stops reading after a bounded number of pages", async () => {
+    const { seen, target } = await paged(Array.from({ length: 50 }, (_, page) => others(page * 100 + 1, 100)));
+    expect(await upsertComment(target, "findings")).toBe("created");
+    expect(seen.filter((request) => request.method === "GET" && request.path.includes("/comments")).length).toBeLessThanOrEqual(10);
+  });
+});

@@ -12,8 +12,9 @@ import { crawl } from "../src/crawl/run";
 import { MIN_SERVER_DAYS, renderMarkdown, summarize } from "../src/crawl/report";
 import type { Corpus, CrawlTarget } from "../src/crawl/registry";
 import type { History } from "../src/crawl/state";
-import { PRUNE_AFTER_ABSENT_RUNS } from "../src/crawl/state";
+import { CAPTURE_REVISION, PRUNE_AFTER_ABSENT_RUNS, readHistory, writeHistory } from "../src/crawl/state";
 import { readLockfile } from "../src/lock/io";
+import { corpusFile, readCorpus } from "../src/crawl/corpus";
 import { isAuthFailure, UnreachableServerError } from "../src/mcp/types";
 
 const SERVER = fileURLToPath(new URL("./fixtures/servers/wire-server.mjs", import.meta.url));
@@ -107,22 +108,25 @@ describe("a crawl over time", () => {
       expect(second.run.outcomes.unreachable).toBe(1);
 
       // And its pinned entry survives, so a transient outage does not discard the baseline.
-      const lock = await readLockfile(join(state, "corpus.lock"));
+      const lock = await readCorpus(state);
       expect(lock.subjects["alpha"]?.tools?.length).toBeGreaterThan(0);
     },
     120_000,
   );
 
   it(
-    "keeps the corpus lock in the product's own format",
+    "keeps the corpus in the product's own format, one lockfile per server",
     async () => {
       const state = await stateDir();
       await crawl({ stateDir: state, corpus: corpusOf([target("alpha", "base"), target("beta", "base")]), now: new Date(T0), timeoutMs: 20_000 });
 
-      const text = await readFile(join(state, "corpus.lock"), "utf8");
-      expect(text).not.toMatch(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/);
-      const lock = await readLockfile(join(state, "corpus.lock"));
-      expect(Object.keys(lock.subjects).sort()).toEqual(["alpha", "beta"]);
+      for (const name of ["alpha", "beta"]) {
+        const text = await readFile(join(state, corpusFile(name)), "utf8");
+        // No timestamps: a server that did not change must leave its file byte-for-byte alone.
+        expect(text).not.toMatch(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/);
+        expect(Object.keys((await readLockfile(join(state, corpusFile(name)))).subjects)).toEqual([name]);
+      }
+      expect(Object.keys((await readCorpus(state)).subjects).sort()).toEqual(["alpha", "beta"]);
     },
     120_000,
   );
@@ -140,7 +144,7 @@ describe("a crawl over time", () => {
       const result = await crawl({ stateDir: state, corpus: corpusOf([withFallback]), now: new Date(T0), timeoutMs: 20_000 });
 
       expect(result.run.outcomes).toMatchObject({ baseline: 1, unreachable: 0 });
-      const lock = await readLockfile(join(state, "corpus.lock"));
+      const lock = await readCorpus(state);
       expect(lock.subjects["alpha"]?.tools?.length).toBeGreaterThan(0);
     },
     120_000,
@@ -175,12 +179,12 @@ describe("a crawl over time", () => {
         expect(last.pruned).toEqual([]);
       }
       // Still pinned on the last run before the threshold: a short walk is not a delisting.
-      expect((await readLockfile(join(state, "corpus.lock"))).subjects["alpha"]).toBeDefined();
+      expect((await readCorpus(state)).subjects["alpha"]).toBeDefined();
       expect(last.history.absent["alpha"]).toBe(PRUNE_AFTER_ABSENT_RUNS - 1);
 
       const final = await crawl({ stateDir: state, corpus: corpusOf([]), now: new Date(T0 + PRUNE_AFTER_ABSENT_RUNS * DAY) });
       expect(final.pruned).toEqual(["alpha"]);
-      expect((await readLockfile(join(state, "corpus.lock"))).subjects["alpha"]).toBeUndefined();
+      expect((await readCorpus(state)).subjects["alpha"]).toBeUndefined();
 
       // The observation survives the snapshot: it is the record the all-time rate is built from.
       expect(final.history.servers["alpha"]).toBeDefined();
@@ -199,7 +203,60 @@ describe("a crawl over time", () => {
         expect(result.pruned).toEqual([]);
       }
 
-      expect((await readLockfile(join(state, "corpus.lock"))).subjects["alpha"]).toBeDefined();
+      expect((await readCorpus(state)).subjects["alpha"]).toBeDefined();
+    },
+    120_000,
+  );
+});
+
+/*
+ * Found when the crawl first kept its state: the corpus was seeded from a reading taken before
+ * collector 0.8.0 recorded each tool's `execution`, and the next run reported 2,300 of 6,032
+ * servers as drifted in a day. The instrument had changed, not the servers.
+ */
+describe("a baseline captured by an older collector", () => {
+  /** Mark a server's pinned baseline as coming from capture revision 1. */
+  async function fromOlderCollector(state: string, name: string): Promise<void> {
+    const history = await readHistory(state);
+    history.servers[name] = { ...history.servers[name]!, revision: 1 };
+    await writeHistory(state, history);
+  }
+
+  it(
+    "is re-baselined, not compared, so the collector changing is not counted as the server changing",
+    async () => {
+      const state = await stateDir();
+      await crawl({ stateDir: state, corpus: corpusOf([target("alpha", "v-desc")]), now: new Date(T0), timeoutMs: 20_000 });
+      await fromOlderCollector(state, "alpha");
+
+      const rebased = await crawl({ stateDir: state, corpus: corpusOf([target("alpha", "base")]), now: new Date(T0 + DAY), timeoutMs: 20_000 });
+      expect(rebased.changes).toEqual([]);
+      expect(rebased.run.outcomes).toMatchObject({ rebaselined: 1, drifted: 0, stable: 0 });
+      expect(rebased.history.servers["alpha"]).toMatchObject({ revision: CAPTURE_REVISION, comparisons: 0, driftEvents: 0 });
+
+      // The next reading compares like with like again.
+      const next = await crawl({ stateDir: state, corpus: corpusOf([target("alpha", "base")]), now: new Date(T0 + 2 * DAY), timeoutMs: 20_000 });
+      expect(next.run.outcomes).toMatchObject({ stable: 1, rebaselined: 0 });
+      expect(next.history.servers["alpha"]?.comparisons).toBe(1);
+    },
+    120_000,
+  );
+
+  it(
+    "keeps the days it observed before the re-baseline, and does not count the gap across it",
+    async () => {
+      const state = await stateDir();
+      await crawl({ stateDir: state, corpus: corpusOf([target("alpha", "base")]), now: new Date(T0), timeoutMs: 20_000 });
+      await crawl({ stateDir: state, corpus: corpusOf([target("alpha", "base")]), now: new Date(T0 + DAY), timeoutMs: 20_000 });
+      await fromOlderCollector(state, "alpha");
+
+      // Five days pass with nothing compared, then a re-baseline.
+      const rebased = await crawl({ stateDir: state, corpus: corpusOf([target("alpha", "base")]), now: new Date(T0 + 6 * DAY), timeoutMs: 20_000 });
+      expect(summarize(rebased.history).serverDays).toBeCloseTo(1, 5);
+
+      const after = await crawl({ stateDir: state, corpus: corpusOf([target("alpha", "base")]), now: new Date(T0 + 7 * DAY), timeoutMs: 20_000 });
+      expect(summarize(after.history).serverDays).toBeCloseTo(2, 5);
+      expect(renderMarkdown(rebased.history, summarize(rebased.history))).toMatch(/re-baselined after a collector change \(not compared\) \| 1 \|/);
     },
     120_000,
   );

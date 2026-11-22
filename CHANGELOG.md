@@ -12,6 +12,96 @@ telemetry). Renaming a change kind breaks every consumer that matched on it.
 
 Nothing yet.
 
+## [0.10.1] - 2026-11-22
+
+### Security
+
+- **A schema crafted to explode no longer holds `check` or the control plane for minutes.** Property
+  names that spelled other properties' paths (112 bytes) took 82 seconds to classify, and 800
+  properties that were each the whole schema again (16 KB) held `init` for 87 seconds in the header
+  scan; the work is synchronous, so `--timeout` could not stop it, and the control plane runs the
+  same engine for every tenant. Work on a schema is now bounded by its size, and both take
+  milliseconds. Found in a code audit, as is everything in this release that names no other source.
+- **A pull request can no longer add a server named `constructor` and pass.** Lock lookups used
+  `subjects[name]`, which finds `Object.prototype`'s members, so a `constructor` server that exits
+  before it can be audited passed `check --allow-unreachable`, a skipped `__proto__` server
+  vanished, and a reachable one crashed the diff. Lookups are by own name, and each is
+  `server.added`.
+- **Leaving a server unaudited is an agreement to how it is reached.** A server skipped at discovery
+  (an `${input:…}` placeholder, a refused credential, `headersHelper`) was recorded as `{}`, which
+  matched any later definition, so a pull request could rewrite it to `bash -c "curl … | sh"` and
+  pass. It is now recorded as written. **An older lock's `{}` entry is reported once as
+  `server.added` and has to be accepted again with `review`.** A WebSocket or unreadable definition
+  cannot be agreed to.
+- **A policy denying a capability sees arguments behind `$ref`, `allOf` and `anyOf`.** A `command`
+  inside a Pydantic `$defs` model produced no capability, so `deniedCapabilities: ["process-exec"]`
+  passed a tool that takes a shell command. 296 of 92,512 published tools in the registry crawl now
+  show a capability they had hidden, so a policy that passed before may now fail.
+- **Removing an `anyOf`, `oneOf`, `then`, `else` or `items` schema is reported as a widening.** Lifting
+  a whole constraint read as a narrowing, and adding a `not` as a widening: `run_query` going from
+  two allowed tables to any string was `tool.input_schema.narrowed`, low; it is now `widened`, high.
+- **Renaming a server no longer hides new code behind it.** Renaming `fs` to `filesystem` in the
+  commit that changed the bytes behind `fs-server@1.0.0` reported only `server.renamed` (low); it now
+  also reports `server.artifact.substituted` (high).
+- **Keys passed in a server's arguments or address stay out of failure reasons.** Only environment
+  values, header values and the OAuth client secret were removed, so `--api-key ${MY_KEY}`, a key in
+  the URL path or query, or a password in the URL reached the terminal, `--json`, the PR comment and
+  `push`.
+- **A commit id in a self-hosted forge URL is kept, not redacted.** `github.acme-corp.com/raw/…/<sha>/`
+  had its commit replaced as a key, so swapping commits compared clean. Locks with that shape show
+  `server.transport.changed` once.
+
+### Fixed
+
+- **Constraints the widening check could not see are read the way they cut.** Removing `const`,
+  `pattern`, `format`, an exclusive bound, `minItems`/`maxItems`, `uniqueItems` or `multipleOf`,
+  loosening a schema-valued `additionalProperties`, adding `patternProperties`, and `integer` to
+  `number` were a bare `changed`, or a narrowing beside any other narrowing. A property named
+  `opts.mode` could overwrite the nested `opts.mode` it mimicked, and `allOf` let its first branch
+  win; it is now read as the intersection it is.
+- **A pinned server that does not answer is not "no longer configured".** It was `server.removed`, so
+  `--allow-unreachable` exited 1, and `review --accept-all` deleted the pin so the server came back as
+  new. It now warns, review keeps its pin, and a changed transport or artifact is still drift.
+- **A stdio server that ignores being closed no longer outlives the CLI.** It now gets SIGTERM at its
+  deadline and SIGKILL a second later, and any server process still running at exit is killed.
+- **A server that could not be read has a SARIF result**, as a `server.surface.unread` warning (a new
+  rule id; not a change kind).
+- **A failure reason is at most 2 KB**, and a PR comment too long for GitHub is cut at a line with a
+  note. A 5 MB 404 body went into every report, and GitHub refused the comment.
+- **A clean run corrects the PR comment an earlier run left**, replacing it with "Nothing to review",
+  and `check --comment` finds its own comment past the first hundred on a busy pull request.
+- **`init --allow-unreachable` fails when nothing could be pinned.** It wrote no lock and exited 0.
+- **A change to `annotations.title` is reported beside a description change**, like the top-level
+  title.
+- **The steering scan reads text in `$defs`, alternatives, `allOf`, maps, tuples and enum, const,
+  default and example values.**
+- **`required` inside a vendor extension keeps the server's order.** Sorting it there let a server
+  reorder data the model is shown without the digest changing. Locks with that shape drift once.
+- **A server that could not be audited, or was removed, is not listed as "changed without shipping
+  a new version".**
+- **Server names from the config are escaped in every note**, including `login` and `logout`.
+- **A configured `User-Agent` is sent as written**, not joined to nulladrift's.
+- **A tool's title change is reported when something else about the tool changed too.** The title,
+  icons, `_meta` and how a tool may be run were reported only when nothing else about the tool had
+  moved, so a title changed together with a description showed the description alone, and
+  accepting the change approved a title nobody was shown. They are now reported beside any other
+  finding, as `tool.changed`. Found by using the control plane end to end.
+- **`push` says when a server could not be read.** It sent the failure and printed nothing, so under
+  a policy that lets an unreachable server warn, the build passed as "clean" with no mention that a
+  server had not been looked at. It now names each one, whatever the control plane decides.
+- **The crawl does not count a new collector as the servers changing.** A baseline records the
+  capture revision it was read at, and one from an older revision is re-baselined rather than
+  compared: the run counts it apart, and the days observed before it still count toward the rate.
+  The first run to keep its state compared a reading taken before 0.8.0 began recording each
+  tool's `execution` with one taken after, and reported 2,300 of 6,032 servers as drifted in a
+  day.
+- **The crawl keeps what it measures.** Its state was one `corpus.lock` of every server, 305 MB at
+  6,215 servers, and GitHub refuses a file over 100 MB, so the commit that saves it failed every
+  day and each run started again from nothing. The corpus is now one `mcp.lock` per server under
+  `corpus/`, the largest a few megabytes; a day's commit carries only the servers that moved, and
+  a server's history is `git log` on one file. The old single file is read once and replaced. A
+  state file that cannot be read now costs that one server its baseline and is reported, where an
+  unreadable corpus used to pass for a first run.
 ## [0.10.0] - 2026-11-12
 
 Found by using the product end to end: a laptop, a pipeline and the control plane, against the

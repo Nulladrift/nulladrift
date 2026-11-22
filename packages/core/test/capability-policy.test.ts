@@ -93,3 +93,35 @@ describe("capabilityViolations is a rule about the surface, not about the diff",
     expect(capabilityViolations({ lockfileVersion: 1 } as unknown as Lockfile, ["process-exec"])).toEqual([]);
   });
 });
+
+/*
+ * Arguments behind indirection. The walk read literal `properties` and `items` only, and Pydantic,
+ * Zod and most OpenAPI generators put a nested model behind `$defs` by default. A `command`
+ * argument inside one yielded no capability at all, so a policy denying process execution passed
+ * a tool that takes a shell command. Found in a security review.
+ */
+describe("an argument behind $ref, allOf or an alternation is still an argument", () => {
+  const command = { type: "object", properties: { command: { type: "string" } } };
+  const shapes: Array<[string, unknown]> = [
+    ["a nested model in $defs", { type: "object", properties: { opts: { $ref: "#/$defs/Opts" } }, $defs: { Opts: command } }],
+    ["a root $ref", { type: "object", $ref: "#/$defs/Args", $defs: { Args: command } }],
+    ["an allOf branch", { type: "object", allOf: [{ properties: { command: { type: "string" } } }] }],
+    ["an anyOf branch", { type: "object", anyOf: [{ properties: { command: { type: "string" } } }] }],
+    ["a oneOf branch of a nested model", { type: "object", properties: { opts: { oneOf: [{ $ref: "#/$defs/Opts" }, { type: "null" }] } }, $defs: { Opts: command } }],
+    ["an array of models", { type: "object", properties: { steps: { type: "array", items: { $ref: "#/$defs/Opts" } } }, $defs: { Opts: command } }],
+    ["a map of models", { type: "object", properties: { jobs: { type: "object", additionalProperties: { $ref: "#/$defs/Opts" } } }, $defs: { Opts: command } }],
+  ];
+
+  it.each(shapes)("is found in %s, and a policy denying it fails", (_label, inputSchema) => {
+    const surface = { lockfileVersion: 2, subjects: { srv: { kind: "mcp-server", tools: [{ name: "do_task", inputSchema }] } } } as unknown as Lockfile;
+    const found = capabilityViolations(surface, ["process-exec"]);
+    expect(found).toHaveLength(1);
+    expect(found[0]?.evidence).toBe("arg:command");
+  });
+
+  it("does not loop on a definition that refers to itself", () => {
+    const recursive = { $ref: "#/$defs/Node", $defs: { Node: { type: "object", properties: { child: { $ref: "#/$defs/Node" }, name: { type: "string" } } } } };
+    const surface = { lockfileVersion: 2, subjects: { srv: { kind: "mcp-server", tools: [{ name: "tree", inputSchema: recursive }] } } } as unknown as Lockfile;
+    expect(capabilityViolations(surface, ["process-exec"])).toEqual([]);
+  });
+});

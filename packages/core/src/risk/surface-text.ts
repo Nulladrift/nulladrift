@@ -33,28 +33,69 @@ export interface SurfaceText {
  */
 const MAX_NODES = 20_000;
 
+/*
+ * Every place in a schema that holds another schema, and every value a model is shown.
+ *
+ * The walk followed `properties` and `items`, which is where a hand-written schema keeps its text
+ * and not where a generated one does: Pydantic puts a nested model in `$defs` and an optional
+ * argument in an `anyOf`, Zod an intersection in `allOf`. The same sentence moved into any of
+ * those, or into an enum value the model is offered as a choice, produced no finding. Found in a
+ * security review. The walk does not follow `$ref` -- a definition is reached where it is defined,
+ * once, rather than once per reference.
+ */
+const SINGLE_SCHEMAS = ["items", "additionalItems", "additionalProperties", "unevaluatedItems", "unevaluatedProperties", "contains", "propertyNames", "not", "if", "then", "else", "contentSchema"];
+const SCHEMA_LISTS = ["items", "prefixItems", "allOf", "anyOf", "oneOf"];
+const NAMED_SCHEMAS = ["properties", "patternProperties", "$defs", "definitions", "dependentSchemas"];
+const VALUES = ["enum", "const", "default", "examples"];
+
 function schemaText(root: unknown, rootPath: string, out: SurfaceText[]): void {
   const stack: Array<{ node: unknown; path: string }> = [{ node: root, path: rootPath }];
   const seen = new WeakSet<object>();
   let budget = MAX_NODES;
+  /*
+   * Values have a budget of their own. Counted against the nodes, a 20 000-member enum written
+   * first would spend the walk before it reached a description written after it.
+   */
+  let values = MAX_NODES;
 
   while (stack.length > 0 && budget-- > 0) {
     const { node, path } = stack.pop() as { node: unknown; path: string };
-    if (typeof node !== "object" || node === null) continue;
+    if (typeof node !== "object" || node === null || Array.isArray(node)) continue;
     if (seen.has(node)) continue;
     seen.add(node);
 
-    const schema = node as { description?: unknown; title?: unknown; properties?: unknown; items?: unknown };
-    if (typeof schema.description === "string") out.push({ field: path, text: schema.description });
-    if (typeof schema.title === "string") out.push({ field: `${path}.title`, text: schema.title });
+    const schema = node as Record<string, unknown>;
+    if (typeof schema["description"] === "string") out.push({ field: path, text: schema["description"] });
+    if (typeof schema["title"] === "string") out.push({ field: `${path}.title`, text: schema["title"] });
 
-    const properties = schema.properties;
-    if (typeof properties === "object" && properties !== null) {
-      for (const [name, child] of Object.entries(properties as Record<string, unknown>)) {
-        stack.push({ node: child, path: `${path}.${name}` });
+    // Strings the model is offered or shown as values.
+    for (const keyword of VALUES) {
+      const value = schema[keyword];
+      const strings = Array.isArray(value) ? value : [value];
+      for (const [index, entry] of strings.entries()) {
+        if (values <= 0) break;
+        if (typeof entry !== "string" || entry.length === 0) continue;
+        values -= 1;
+        out.push({ field: Array.isArray(value) ? `${path}.${keyword}[${index}]` : `${path}.${keyword}`, text: entry });
       }
     }
-    if (schema.items !== undefined) stack.push({ node: schema.items, path: `${path}[]` });
+
+    for (const keyword of NAMED_SCHEMAS) {
+      const named = schema[keyword];
+      if (typeof named !== "object" || named === null || Array.isArray(named)) continue;
+      const prefix = keyword === "properties" ? path : `${path}.${keyword}`;
+      for (const [name, child] of Object.entries(named as Record<string, unknown>)) stack.push({ node: child, path: `${prefix}.${name}` });
+    }
+    for (const keyword of SCHEMA_LISTS) {
+      const list = schema[keyword];
+      if (!Array.isArray(list)) continue;
+      list.forEach((child, index) => stack.push({ node: child, path: `${path}.${keyword}[${index}]` }));
+    }
+    for (const keyword of SINGLE_SCHEMAS) {
+      const child = schema[keyword];
+      if (child === undefined || Array.isArray(child)) continue;
+      stack.push({ node: child, path: keyword === "items" ? `${path}[]` : `${path}.${keyword}` });
+    }
   }
 }
 

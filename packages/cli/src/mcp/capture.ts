@@ -171,17 +171,20 @@ function readServerInfo(client: Client): LockedServerInfo | undefined {
  *
  * The per-request timeout stays, because it is what makes an individual call give up. This is
  * the ceiling on all of them together, and it closes the connection when it passes: stopping
- * only the wait left the listing running, and a stdio server running, behind it.
+ * only the wait left the listing running, and a stdio server running, behind it. That includes a
+ * deadline passing while it is still connecting, before there is a connection to close.
  */
 export async function captureSurface(server: ConfiguredServer, timeoutMs = DEFAULT_TIMEOUT_MS): Promise<CapturedSurface> {
   let connection: Awaited<ReturnType<typeof connect>> | undefined;
   let expired = false;
   let timer: NodeJS.Timeout | undefined;
   const late = (): UnreachableServerError => new UnreachableServerError(server.name, `did not finish within ${timeoutMs}ms`);
+  const giveUp = new AbortController();
 
   const deadline = new Promise<never>((_resolve, reject) => {
     timer = setTimeout(() => {
       expired = true;
+      giveUp.abort();
       void connection?.close();
       reject(late());
     }, timeoutMs);
@@ -189,7 +192,7 @@ export async function captureSurface(server: ConfiguredServer, timeoutMs = DEFAU
   });
 
   const work = (async () => {
-    const opened = await connect(server, timeoutMs);
+    const opened = await connect(server, timeoutMs, { signal: giveUp.signal });
     if (expired) {
       await opened.close();
       throw late();

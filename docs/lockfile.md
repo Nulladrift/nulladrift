@@ -298,7 +298,9 @@ such a server in `review` adds it.
 
 Under `--allow-unreachable`, a server that could not be audited passes only if it is listed here
 with the same transport. One that is not, or is reached differently than when it was agreed to,
-is `server.added`: without the list, a pull request could add a server that refused the
+is `server.added`. A server skipped at discovery is recorded as written too; an entry of `{}`,
+which older locks hold for such servers, agrees to nothing, and is reported once
+until it is accepted again in `review`: without the list, a pull request could add a server that refused the
 auditor -- one that exits when the client says it is nulladrift -- and pass with nothing in the
 report. The list pins nothing and is outside every digest.
 

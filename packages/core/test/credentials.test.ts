@@ -62,6 +62,33 @@ describe("redactPath and sanitizeUrl", () => {
     expect(redactArgs(["https://user:hunter2-secret@gitlab.com/acme/x.git"])).toEqual([`https://user:${REDACTED}@gitlab.com/acme/x.git`]);
   });
 
+  /*
+   * A self-hosted forge serves code by commit from a path that says so, on a host no list can
+   * name: `github.acme-corp.com/raw/acme/srv/<sha>/server.py`. The commit was replaced as a key
+   * there, so swapping it for another compared clean -- the case the code-host list was added for.
+   */
+  it("keeps a commit id under a raw, blob, tree or commit path on any host", () => {
+    const sha = "1f2e3d4c5b6a79881f2e3d4c5b6a79881f2e3d4c";
+    const sha256 = `${sha}${"0".repeat(24)}`;
+    const args = [
+      `https://github.acme-corp.com/raw/acme/srv/${sha}/server.py`,
+      `https://git.acme-corp.com/acme/srv/raw/commit/${sha}/server.py`,
+      `https://gitlab.acme-corp.com/acme/srv/-/raw/${sha}/server.py`,
+      `https://gitlab.acme-corp.com/acme/srv/-/blob/${sha256}/server.py`,
+      `https://git.acme-corp.com/acme/srv/src/commit/${sha}/server.py`,
+      `https://git.acme-corp.com/acme/srv/tree/${sha}`,
+    ];
+    expect(redactArgs(args)).toEqual(args);
+    const other = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef";
+    expect(redactArgs([`https://github.acme-corp.com/raw/acme/srv/${other}/server.py`])).not.toEqual(redactArgs([args[0] as string]));
+  });
+
+  it("still redacts a key-length hex segment under those words, and a commit-length one without them", () => {
+    expect(redactArgs(["https://mcp.example.com/raw/0123456789abcdef0123456789abcdef/sse"])).toEqual([`https://mcp.example.com/raw/${REDACTED}/sse`]);
+    expect(redactArgs(["https://mcp.example.com/api/1f2e3d4c5b6a79881f2e3d4c5b6a79881f2e3d4c/sse"])).toEqual([`https://mcp.example.com/api/${REDACTED}/sse`]);
+    expect(redactArgs(["https://mcp.example.com/raw/0f8fad5b-d9cb-469f-a165-70867728950e/sse"])).toEqual([`https://mcp.example.com/raw/${REDACTED}/sse`]);
+  });
+
   it("still treats a long hex segment as a key anywhere else", () => {
     expect(redactArgs(["https://mcp.example.com/u/1f2e3d4c5b6a79881f2e3d4c5b6a79881f2e3d4c/sse"])).toEqual([`https://mcp.example.com/u/${REDACTED}/sse`]);
   });

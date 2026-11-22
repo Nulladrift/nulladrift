@@ -315,6 +315,20 @@ export async function runPush(options: PushOptions): Promise<ExitCode> {
   process.stdout.write(lines.join("\n"));
 
   /*
+   * Said here whatever the control plane decided. A server that could not be read was sent and
+   * never mentioned, so under a policy that lets an unreachable server warn, the build passed with
+   * "clean" and nothing at all said one of its servers had not been looked at. Found by pushing a
+   * server that would not start.
+   */
+  if (result.unreachable.length > 0) {
+    process.stderr.write(
+      `${yellow("not read:")} ${result.unreachable.map((failure) => visibleControls(failure.server)).join(", ")} could not be reached, so ${
+        result.unreachable.length === 1 ? "it was" : "they were"
+      } not audited. Whether that fails the build is the control plane's policy.\n`,
+    );
+  }
+
+  /*
    * A reading pushed from a surface only partly read is sent, so the control plane has what was
    * seen, and is not called finished here: the same exit 2 `check` gives it, unless allowed.
    */

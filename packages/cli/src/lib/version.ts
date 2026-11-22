@@ -1,5 +1,5 @@
 /** Kept in step with package.json by a test, so the bundler never has to inline JSON. */
-export const VERSION = "0.10.0";
+export const VERSION = "0.10.1";
 
 /**
  * Sent on every outbound HTTP request: the registry walk and each remote server connection.
