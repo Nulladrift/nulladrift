@@ -169,6 +169,15 @@ export async function runInit(options: InitOptions): Promise<ExitCode> {
     lines.push(`  ${red("✗")} ${bold(visibleControls(failure.server))}  ${dim("not pinned")}`, `      ${visibleLines(failure.reason, "      ")}`);
   }
 
+  // Said now, or the first `check` after a successful `init` is where somebody finds out.
+  const unagreeable = Object.keys(result.unaudited).filter((name) => options.allowUnreachable && !Object.hasOwn(unaudited ?? {}, name));
+  if (unagreeable.length > 0) {
+    lines.push(
+      dim(`  note: ${unagreeable.map((name) => visibleControls(name)).join(", ")} cannot be left unaudited: how ${unagreeable.length === 1 ? "it is" : "they are"} reached could not be read, so`),
+      dim("        there is nothing to agree to. `check` will report it until the definition is fixed or removed."),
+    );
+  }
+
   // Said, so nobody thinks their own servers were audited when they were left out on purpose.
   if (result.discovery.userConfigsSkipped.length > 0) {
     lines.push(
@@ -177,8 +186,9 @@ export async function runInit(options: InitOptions): Promise<ExitCode> {
     );
   }
 
+  // The name is the config's, and a pull request writes the config: escaped like server text.
   for (const shadow of result.discovery.shadowed) {
-    lines.push(dim(`  note: "${shadow.name}" is defined in both ${shadow.keptFrom} and ${shadow.alsoIn}; kept the first.`));
+    lines.push(dim(visibleControls(`  note: "${shadow.name}" is defined in both ${shadow.keptFrom} and ${shadow.alsoIn}; kept the first.`)));
   }
 
   lines.push(
@@ -193,6 +203,11 @@ export async function runInit(options: InitOptions): Promise<ExitCode> {
   await maybeOfferTelemetry();
 
   if (result.unreachable.length > 0 && !options.allowUnreachable) return EXIT_INCOMPLETE;
+  /*
+   * Whatever the flag: it lets an unreachable server warn beside a lock, and there is no lock. A
+   * setup script took the 0 this returned for a baseline to commit.
+   */
+  if (!pinnedSomething) return EXIT_INCOMPLETE;
   if (result.partial.length > 0 && !options.allowPartial) return EXIT_INCOMPLETE;
   return EXIT_CLEAN;
 }

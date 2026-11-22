@@ -9,9 +9,10 @@
 import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { z } from "zod";
-import type { ClientKind, LockedSource } from "../lock/types";
+import { lockTransport } from "../lock/build";
+import type { ClientKind, LockedSource, LockedTransport } from "../lock/types";
 import type { ConfiguredServer, ConfiguredTransport } from "./types";
-import type { ExpandContext } from "./expand";
+import type { Expanded, ExpandContext } from "./expand";
 import { expand } from "./expand";
 
 /** Lenient on purpose: unknown keys are another client's extension, not our problem. */
@@ -39,6 +40,17 @@ const serverEntrySchema = z.looseObject({
 export type ServerEntry = z.infer<typeof serverEntrySchema>;
 
 export class UnsupportedServerError extends Error {
+  /**
+   * How the definition reaches its server, written down as the lock writes a pinned one, where
+   * that could be read: unexpanded, with literal credentials left out. Absent for a definition
+   * with no transport to read (WebSocket, no command, not a server definition at all).
+   *
+   * An agreement to leave the server unaudited is an agreement to this. It was `{}`, and `check`
+   * compared nothing with nothing: a pull request could rewrite an agreed server to `bash -c
+   * "curl ... | sh"`, keep the `${input:...}` placeholder that kept it from being run, and pass.
+   */
+  transport?: LockedTransport;
+
   constructor(
     readonly serverName: string,
     message: string,
@@ -67,13 +79,39 @@ function refusedCredentials(name: string, refused: string[]): UnsupportedServerE
   );
 }
 
+/**
+ * A definition as its file writes it, nothing expanded, for one this tool will not run. The same
+ * reading `resolveTransport` makes, so a server skipped today and one that fails to answer
+ * tomorrow are written down alike.
+ */
+function writtenTransport(entry: ServerEntry): ConfiguredTransport | undefined {
+  const declared = entry.type === "streamable-http" ? "http" : entry.type;
+  if (declared === "ws") return undefined;
+  if (declared === "http" || declared === "sse" || (declared === undefined && entry.url !== undefined)) {
+    if (entry.url === undefined) return undefined;
+    return { type: declared === "sse" ? "sse" : "http", url: entry.url, asWritten: { url: entry.url }, headers: scalarsToStrings(entry.headers) };
+  }
+  if (entry.command === undefined) return undefined;
+  const args = (entry.args ?? []).map((argument) => String(argument));
+  return {
+    type: "stdio",
+    command: entry.command,
+    args,
+    asWritten: { command: entry.command, args, ...(entry.cwd ? { cwd: entry.cwd } : {}) },
+    env: scalarsToStrings(entry.env),
+    cwd: entry.cwd,
+  };
+}
+
 function resolveTransport(name: string, entry: ServerEntry, context: ExpandContext): ConfiguredTransport {
   const unresolved: string[] = [];
   const refused: string[] = [];
+  const filled: Expanded["filled"] = [];
   const take = (input: string): string => {
     const result = expand(input, context);
     unresolved.push(...result.unresolved);
     refused.push(...result.refused);
+    filled.push(...result.filled);
     return result.value;
   };
 
@@ -135,6 +173,7 @@ function resolveTransport(name: string, entry: ServerEntry, context: ExpandConte
         "so the secret can only be sent there and not to an authorization server the MCP server chooses.",
     );
   }
+  if (filled.length > 0) transport.filled = filled;
 
   // Before anything connects: the server is never started with the run's credentials in reach.
   if (refused.length > 0) throw refusedCredentials(name, refused);
@@ -258,8 +297,10 @@ export async function parseServerMap(
       }
       servers.push({ name, source: { ...source }, transport });
     } catch (error) {
-      if (error instanceof UnsupportedServerError) skipped.push(error);
-      else throw error;
+      if (!(error instanceof UnsupportedServerError)) throw error;
+      const written = writtenTransport(entry.data);
+      if (written) error.transport = lockTransport({ name, source: { ...source }, transport: written });
+      skipped.push(error);
     }
   }
   return { servers, skipped };

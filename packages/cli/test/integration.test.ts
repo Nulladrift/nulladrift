@@ -322,6 +322,24 @@ describe("init then check", () => {
   );
 });
 
+/*
+ * Every server failed, so nothing was written; with --allow-unreachable the run still exited 0, and
+ * a setup script took that for a lock to commit. Found in an audit.
+ */
+describe("init with nothing it could pin", () => {
+  it(
+    "fails as incomplete even with --allow-unreachable, since no lock was written",
+    async () => {
+      const root = await workspace({ broken: { command: process.execPath, args: ["-e", "process.exit(1)"] } });
+      const init = await capturingStdout(() => withIsolatedHome(root, () => runInit(options(root, { allowUnreachable: true, timeoutMs: 5_000 }))));
+      expect(init.result).toBe(EXIT_INCOMPLETE);
+      expect(init.output).toContain("No lockfile was written");
+      await expect(readFile(join(root, "mcp.lock"), "utf8")).rejects.toThrow(/ENOENT/);
+    },
+    TIMEOUT_MS,
+  );
+});
+
 describe("init over an existing lock", () => {
   it(
     "refuses, rather than quietly re-baselining a lock somebody reviewed",

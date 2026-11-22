@@ -1,7 +1,7 @@
 /** Shared orchestration: discover every configured server, talk to each one, build a lockfile. */
 import type { Discovery } from "./config/discover";
 import { discoverServers } from "./config/discover";
-import { isCredentialName, SEVERITY, sortChanges } from "@nulladrift/core";
+import { isCredentialName, REDACTED, redactArgs, redactPath, SEVERITY, sortChanges, stableKey } from "@nulladrift/core";
 import { diffLockfiles } from "./diff";
 import type { Change } from "./diff/types";
 import { buildLockedServer, lockTransport } from "./lock/build";
@@ -12,7 +12,8 @@ import type { ConfiguredServer } from "./config/types";
 import { LOCKFILE_VERSION } from "./lock/types";
 import { captureSurface } from "./mcp/capture";
 import { DEFAULT_TIMEOUT_MS } from "./mcp/connect";
-import { UnreachableServerError, authFailureKind } from "./mcp/types";
+import { boundReason, UnreachableServerError, authFailureKind } from "./mcp/types";
+import { own, setOwn } from "./lib/own";
 import { VERSION } from "./lib/version";
 import type { Unreachable } from "./report/types";
 
@@ -61,6 +62,11 @@ export interface CaptureResult {
    * acknowledgement covers.
    */
   unaudited: Record<string, LockedUnaudited>;
+  /**
+   * What the servers that could not be audited run, where that was established before they were
+   * started. A pinned local file rewritten to exit at once is otherwise an outage, not a change.
+   */
+  unauditedProvenance: Record<string, LockedProvenance>;
   /** Names defined two ways; reported as unreachable, never acknowledged. */
   conflicted: string[];
   /**
@@ -84,7 +90,7 @@ async function provenanceOf(
   if (server.transport.type !== "stdio") return { unverified: false };
   const reference = referenceOf(server.transport, options.projectRoot);
   if (!reference) return { unverified: false };
-  const previous = options.previous?.subjects[server.name]?.provenance;
+  const previous = own(options.previous?.subjects, server.name)?.provenance;
 
   /*
    * A launcher that fetches from another registry, another index or a local install runs code the
@@ -128,12 +134,14 @@ export async function captureAll(options: CaptureOptions): Promise<CaptureResult
   const discovery = await discoverServers(options.projectRoot, options.configFiles, { userConfigs: options.userConfigs === true });
 
   const captured = await mapWithLimit(discovery.servers, options.concurrency ?? 4, async (server) => {
+    let established: Awaited<ReturnType<typeof provenanceOf>> | undefined;
     try {
       /*
        * What the server runs is read before it runs. Hashed after, a local file could put the
        * approved bytes back over itself once loaded, and the lock pinned the file it no longer was.
        */
-      const { provenance, unverified, displaced } = await provenanceOf(server, options);
+      established = await provenanceOf(server, options);
+      const { provenance, unverified, displaced } = established;
       // An image runs by the digest it was pinned at; see launchPinned. The lock keeps the config as written.
       const pinned = server.transport.type === "stdio" ? launchPinned(server.transport, provenance) : undefined;
       const surface = await captureSurface(pinned ? { ...server, transport: pinned } : server, options.timeoutMs ?? DEFAULT_TIMEOUT_MS);
@@ -142,9 +150,11 @@ export async function captureAll(options: CaptureOptions): Promise<CaptureResult
       return { name: server.name, entry: provenance ? { ...entry, provenance } : entry, unverified, displaced };
     } catch (error) {
       options.onServerDone?.(server.name, "failed");
-      const reason = withoutSecrets(error instanceof UnreachableServerError ? error.message : (error as Error).message, server);
+      // Cleaned first: a key cut in half by the bound would no longer match the key.
+      const reason = boundReason(withoutSecrets(error instanceof UnreachableServerError ? error.message : (error as Error).message, server));
       const kind = authFailureKind(error) ?? "unreachable";
-      return { name: server.name, failure: { server: server.name, reason, kind } satisfies Unreachable };
+      // Kept: what it runs can be compared with a pin even when it would not answer.
+      return { name: server.name, failure: { server: server.name, reason, kind } satisfies Unreachable, provenance: established?.provenance, displaced: established?.displaced };
     }
   });
 
@@ -153,24 +163,28 @@ export async function captureAll(options: CaptureOptions): Promise<CaptureResult
   const unverified: string[] = [];
   const displaced: CaptureResult["displaced"] = [];
   const unaudited: Record<string, LockedUnaudited> = {};
+  const unauditedProvenance: Record<string, LockedProvenance> = {};
   const configured = new Map(discovery.servers.map((server) => [server.name, server]));
   for (const result of captured) {
     if ("entry" in result && result.entry) {
-      subjects[result.name] = result.entry;
+      setOwn(subjects, result.name, result.entry);
       if (result.unverified) unverified.push(result.name);
       if (result.displaced) displaced.push({ server: result.name, ...result.displaced });
     } else if ("failure" in result && result.failure) {
       unreachable.push(result.failure);
       const server = configured.get(result.name);
-      unaudited[result.name] = server ? { transport: lockTransport(server) } : {};
+      setOwn(unaudited, result.name, server ? { transport: lockTransport(server) } : {});
+      if (result.provenance) setOwn(unauditedProvenance, result.name, result.provenance);
+      if (result.displaced) displaced.push({ server: result.name, ...result.displaced });
     }
   }
 
   // Configs we understood but cannot audit (unsupported transport, unresolvable placeholder) are
-  // unreachable too: the audit is incomplete either way, and CI should treat them the same.
+  // unreachable too: the audit is incomplete either way, and CI should treat them the same. Each
+  // is written down as its file writes it, so an agreement to leave it out is to that definition.
   for (const skipped of discovery.skipped) {
-    unreachable.push({ server: skipped.serverName, reason: skipped.message, kind: "unreachable" });
-    unaudited[skipped.serverName] = {};
+    unreachable.push({ server: skipped.serverName, reason: boundReason(skipped.message), kind: "unreachable" });
+    setOwn(unaudited, skipped.serverName, skipped.transport ? { transport: skipped.transport } : {});
   }
   // A name the project defines two ways is audited under neither until it says which it means.
   for (const conflict of discovery.conflicts) {
@@ -182,7 +196,7 @@ export async function captureAll(options: CaptureOptions): Promise<CaptureResult
   }
   // A --config file we could not make sense of is not "no servers"; it is an unfinished audit.
   for (const problem of discovery.problems) {
-    unreachable.push({ server: problem.file, reason: problem.reason, kind: "unreachable" });
+    unreachable.push({ server: problem.file, reason: boundReason(problem.reason), kind: "unreachable" });
   }
 
   return {
@@ -197,6 +211,7 @@ export async function captureAll(options: CaptureOptions): Promise<CaptureResult
     unverified: unverified.sort(),
     displaced,
     unaudited,
+    unauditedProvenance,
     conflicted: discovery.conflicts.map((conflict) => conflict.name),
     partial: Object.entries(subjects)
       .filter(([, entry]) => entry.coverage !== undefined)
@@ -205,10 +220,59 @@ export async function captureAll(options: CaptureOptions): Promise<CaptureResult
   };
 }
 
-/** Whether the lock already agreed to leave this server unaudited, reached the way it is now. */
+/**
+ * Whether the lock already agreed to leave this server unaudited, reached the way it is now.
+ *
+ * Only an agreement that says how: one without a transport matches nothing, on either side. Every
+ * lock before this release wrote `{}` for a server skipped at discovery, and `{}` matched `{}`
+ * whatever the definition had become since. So such an agreement is asked for once more, and a
+ * definition whose transport cannot be read at all (WebSocket, no command) cannot be agreed to.
+ */
 function acknowledged(committed: Lockfile, name: string, now: LockedUnaudited): boolean {
-  const agreed = committed.unaudited?.[name];
-  return agreed !== undefined && JSON.stringify(agreed.transport ?? null) === JSON.stringify(now.transport ?? null);
+  const agreed = own(committed.unaudited, name)?.transport;
+  return agreed !== undefined && now.transport !== undefined && stableKey(agreed) === stableKey(now.transport);
+}
+
+/** Why a server that could not be audited is not covered by what the lock agreed to. */
+function unagreed(agreed: LockedUnaudited | undefined, now: LockedUnaudited, reason: string): string {
+  if (now.transport === undefined) return `could not be audited, and how it is reached could not be read either, so it cannot be agreed to: ${reason}`;
+  if (agreed === undefined) return `new server, which could not be audited: ${reason}`;
+  if (agreed.transport === undefined) {
+    return `left unaudited by an agreement that does not say how it is reached, as an older mcp.lock's does, so nothing can tell whether it changed since; accept it with \`nulladrift review\` to record how. It could not be audited: ${reason}`;
+  }
+  return `a server left unaudited is now reached differently, and could not be audited: ${reason}`;
+}
+
+/**
+ * A pinned server, still configured, that could not be read on this run.
+ *
+ * Not `server.removed`, which is what the diff calls any pin missing from the reading: "no longer
+ * configured" failed a build `--allow-unreachable` said would warn, and `review --accept-all` then
+ * deleted the pin, so when the server answered again it came back as a new server rather than as
+ * the changes it had made. What can be compared without reading it still is: how it is reached,
+ * against the pin, and what it runs, against the pinned artifact.
+ */
+function unreadPin(name: string, pinned: LockedMcpServer, now: LockedUnaudited, runs: LockedProvenance | undefined, reason: string): Change[] {
+  const changes: Change[] = [];
+  if (now.transport === undefined || stableKey(now.transport) !== stableKey(pinned.transport)) {
+    changes.push({
+      kind: "server.transport.changed",
+      severity: SEVERITY["server.transport.changed"],
+      server: name,
+      summary: `the server is reached differently than when it was pinned, and could not be audited: ${reason}`,
+      before: pinned.transport,
+      after: now.transport,
+    });
+  }
+  if (runs !== undefined) {
+    /*
+     * Through the engine, so the artifact is held to the rules a captured server is. The surface is
+     * the pinned one with its digest marked unread: nobody saw it, so nothing may be said of it.
+     */
+    const unread: LockedMcpServer = { ...pinned, provenance: runs, digest: "unread" };
+    changes.push(...diffLockfiles({ lockfileVersion: LOCKFILE_VERSION, subjects: { [name]: pinned } }, { lockfileVersion: LOCKFILE_VERSION, subjects: { [name]: unread } }));
+  }
+  return changes;
 }
 
 /**
@@ -220,9 +284,11 @@ function acknowledged(committed: Lockfile, name: string, now: LockedUnaudited): 
  * - A server added that could not be audited. The diff only sees servers that were captured, so
  *   under `--allow-unreachable` a new server that refused the auditor -- one that exits when the
  *   client says it is nulladrift -- never appeared at all, and the build passed with it in it.
+ * - A pinned server that could not be read: how it is reached and what it runs, not its surface.
  */
 export function compareWithLock(committed: Lockfile, result: CaptureResult): Change[] {
-  const changes = diffLockfiles(committed, result.lock);
+  // A pin that could not be read this time is not gone; see `unreadPin`.
+  const changes = diffLockfiles(committed, result.lock).filter((change) => !(change.kind === "server.removed" && own(result.unaudited, change.server) !== undefined));
   for (const moved of result.displaced) {
     const was = `${moved.previous.name}${moved.previous.version ? `@${moved.previous.version}` : ""}`;
     changes.push({
@@ -235,16 +301,21 @@ export function compareWithLock(committed: Lockfile, result: CaptureResult): Cha
   }
   const failed = new Map(result.unreachable.map((failure) => [failure.server, failure.reason]));
   for (const [name, now] of Object.entries(result.unaudited)) {
-    if (committed.subjects[name] !== undefined || acknowledged(committed, name, now)) continue;
+    const pinned = own(committed.subjects, name);
+    if (pinned !== undefined) {
+      changes.push(...unreadPin(name, pinned, now, own(result.unauditedProvenance, name), failed.get(name) ?? "it did not answer"));
+      continue;
+    }
+    if (acknowledged(committed, name, now)) continue;
     changes.push({
       kind: "server.added",
       severity: SEVERITY["server.added"],
       server: name,
-      summary: `${committed.unaudited?.[name] ? "a server left unaudited is now reached differently, and" : "new server, which"} could not be audited: ${failed.get(name) ?? "it did not answer"}`,
+      summary: unagreed(own(committed.unaudited, name), now, failed.get(name) ?? "it did not answer"),
     });
   }
   for (const name of result.conflicted) {
-    if (committed.subjects[name] !== undefined) continue;
+    if (own(committed.subjects, name) !== undefined) continue;
     changes.push({
       kind: "server.added",
       severity: SEVERITY["server.added"],
@@ -259,10 +330,61 @@ export function compareWithLock(committed: Lockfile, result: CaptureResult): Cha
  * The acknowledgements to write: every server this run could not audit, as it is reached now.
  * Only `init --allow-unreachable` and an accepted change in `review` write these; a plain `init`
  * that could not reach a server fails and says so rather than agreeing to it.
+ *
+ * Not one whose transport could not be read, which `check` would never take as agreed to (see
+ * `acknowledged`), and never `__proto__`: reading a lock back drops that key.
  */
 export function unauditedToRecord(result: CaptureResult, keep: (name: string) => boolean = () => true): Record<string, LockedUnaudited> | undefined {
-  const entries = Object.entries(result.unaudited).filter(([name]) => keep(name));
+  const entries = Object.entries(result.unaudited).filter(([name, entry]) => entry.transport !== undefined && name !== "__proto__" && keep(name));
   return entries.length > 0 ? Object.fromEntries(entries) : undefined;
+}
+
+/** `decodeURIComponent`, for a comparison: a malformed escape is just text. */
+function decoded(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
+/**
+ * What the lock leaves out of an address (see sanitizeUrl): the userinfo, every query value, the
+ * fragment, and any path segment that is a key. Raw and decoded, since an error may quote either.
+ */
+function addressSecrets(address: string): string[] {
+  let url: URL;
+  try {
+    url = new URL(address);
+  } catch {
+    return [];
+  }
+  const out = [url.username, url.password, decoded(url.username), decoded(url.password)];
+  for (const [, value] of url.searchParams) out.push(value);
+  for (const pair of url.search.slice(1).split("&")) out.push(pair.slice(pair.indexOf("=") + 1));
+  if (url.hash.length > 1) out.push(url.hash.slice(1));
+  const kept = redactPath(url.pathname).split("/");
+  url.pathname.split("/").forEach((segment, index) => {
+    if (kept[index] !== segment) out.push(segment, decoded(segment));
+  });
+  return out;
+}
+
+/** The parts of `original` that `redacted` replaced, or all of it when the two do not line up. */
+function replacedParts(original: string, redacted: string): string[] {
+  const kept = redacted.split(REDACTED);
+  const parts: string[] = [];
+  let at = 0;
+  for (const [index, piece] of kept.entries()) {
+    const found =
+      index === 0 ? (original.startsWith(piece) ? 0 : -1)
+      : index === kept.length - 1 ? (original.endsWith(piece) && original.length - piece.length >= at ? original.length - piece.length : -1)
+      : original.indexOf(piece, at);
+    if (found < 0) return [original];
+    if (index > 0) parts.push(original.slice(at, found));
+    at = found + piece.length;
+  }
+  return parts;
 }
 
 /**
@@ -271,17 +393,35 @@ export function unauditedToRecord(result: CaptureResult, keep: (name: string) =>
  * Reasons quote the server and the libraries talking to it -- an error message, the last lines of
  * stderr -- and they are printed, posted on the pull request and sent in the reading. A server that
  * logs "invalid key sk-live-..." on the way out put the project's key into all three.
+ *
+ * Every place the lock leaves a value out, this does too. Environment and header values were the
+ * only ones, and a key handed over in the arguments (`--api-key ${MY_KEY}`) or the address (a path
+ * segment, the query, the userinfo) came back in the server's stderr or the error text.
  */
 export function withoutSecrets(reason: string, server: ConfiguredServer): string {
   const { transport } = server;
   const secrets: string[] = [];
+  /*
+   * Whatever a placeholder was filled with: the config kept it out of the file, so it stays out of
+   * here. A path from the environment -- a home directory, a checkout -- says where, not what.
+   */
+  for (const { name, value } of transport.filled ?? []) {
+    if (isCredentialName(name) || !/^(?:[./~]|[A-Za-z]:\\)/.test(value)) secrets.push(value, ...addressSecrets(value));
+  }
   if (transport.type === "stdio") {
     for (const [name, value] of Object.entries(transport.env)) {
       if (isCredentialName(name) || (value.length >= 16 && !/[\s/\\]/.test(value))) secrets.push(value);
     }
+    // A credential written into the arguments themselves, which the lock leaves out (redactArgs).
+    const redacted = redactArgs(transport.args);
+    transport.args.forEach((argument, index) => {
+      const kept = redacted[index];
+      if (kept !== undefined && kept !== argument) secrets.push(...replacedParts(argument, kept));
+    });
   } else {
     for (const value of Object.values(transport.headers)) secrets.push(value, ...value.split(/\s+/));
     if (transport.oauth?.clientSecret) secrets.push(transport.oauth.clientSecret);
+    secrets.push(...addressSecrets(transport.url));
   }
   let out = reason;
   // Longest first, so a whole header value goes before the token inside it.

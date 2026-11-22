@@ -166,7 +166,16 @@ describe("a config under review cannot reach the run's own credentials", () => {
   });
 
   it("still fills a credential the workflow gives a server on purpose", () => {
-    expect(expand("Bearer ${GITHUB_TOKEN} ${API_KEY}", context(ci))).toEqual({ value: "Bearer repo-token server-key", unresolved: [], refused: [] });
+    expect(expand("Bearer ${GITHUB_TOKEN} ${API_KEY}", context(ci))).toEqual({
+      value: "Bearer repo-token server-key",
+      unresolved: [],
+      refused: [],
+      // Recorded, so a reason that quotes them can be cleaned of them.
+      filled: [
+        { name: "GITHUB_TOKEN", value: "repo-token" },
+        { name: "API_KEY", value: "server-key" },
+      ],
+    });
   });
 
   it("skips the server, before anything connects, wherever the placeholder sits", async () => {

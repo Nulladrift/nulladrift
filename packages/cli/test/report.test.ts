@@ -116,6 +116,45 @@ describe("sarif output", () => {
 });
 
 /*
+ * A server that could not be read had no result at all, so a code-scanning view of a run that
+ * failed with exit 2 showed nothing but the drift it did find, and a view of a run that passed
+ * under --allow-unreachable showed a clean surface nobody had read. Found in an audit.
+ */
+describe("sarif output for a server that could not be read", () => {
+  const unread = (failures: AuditReport["unreachable"]) => JSON.parse(renderSarifReport({ ...report, changes: [], unreachable: failures })) as any;
+
+  it("is a result under its own rule, declared like every other", () => {
+    const run = unread([{ server: "payments", reason: "connect ECONNREFUSED", kind: "unreachable" }]).runs[0];
+    const rule = run.tool.driver.rules.find((entry: any) => entry.id === "server.surface.unread");
+    expect(rule?.defaultConfiguration.level).toBe("warning");
+    expect(run.results).toEqual([
+      expect.objectContaining({
+        ruleId: "server.surface.unread",
+        level: "warning",
+        message: { text: "payments: could not be read (unreachable). connect ECONNREFUSED" },
+        partialFingerprints: { "mcpAuditChange/v1": "payments/unread" },
+      }),
+    ]);
+  });
+
+  it("says which of the three it was, because the next step differs", () => {
+    const run = unread([
+      { server: "linear", reason: "HTTP 401", kind: "auth" },
+      { server: "github", reason: "HTTP 403", kind: "forbidden" },
+    ]).runs[0];
+    expect(run.results.map((result: any) => result.message.text)).toEqual([
+      "linear: could not be read (refused the audit). HTTP 401",
+      "github: could not be read (accepted the credentials and refused). HTTP 403",
+    ]);
+  });
+
+  it("declares no such rule when every server was read", () => {
+    const run = unread([]).runs[0];
+    expect(run.tool.driver.rules.map((entry: any) => entry.id)).not.toContain("server.surface.unread");
+  });
+});
+
+/*
  * GitHub code scanning resolves `artifactLocation.uri` against the repository root. This emitted
  * `report.lockPath` verbatim, which is absolute, so every alert arrived with no file attached to
  * it -- in the one feature whose pitch is that drift shows up in code scanning with no

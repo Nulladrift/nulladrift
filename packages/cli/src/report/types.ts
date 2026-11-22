@@ -17,6 +17,13 @@ export interface Unreachable {
   kind: "auth" | "forbidden" | "unreachable";
 }
 
+/** Which of the three it was, in words, wherever a reader is told: the next step differs for each. */
+export const AUDIT_FAILURE_LABEL: Record<Unreachable["kind"], string> = {
+  auth: "refused the audit",
+  forbidden: "accepted the credentials and refused",
+  unreachable: "unreachable",
+};
+
 export interface AuditReport {
   changes: Change[];
   /**

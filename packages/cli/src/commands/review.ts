@@ -12,6 +12,7 @@ import type { Change } from "../diff/types";
 import { readLockfile, writeLockfile } from "../lock/io";
 import type { Lockfile } from "../lock/types";
 import { EXIT_CLEAN, EXIT_DRIFT, EXIT_INCOMPLETE, type ExitCode } from "../lib/exit";
+import { own, setOwn } from "../lib/own";
 import { bold, dim, elideMiddle, green, red, truncate, yellow, visibleControls } from "../lib/ui";
 import type { CommonOptions } from "./options";
 
@@ -117,7 +118,7 @@ export async function runReview(options: ReviewOptions): Promise<ExitCode> {
 
   try {
     for (const [serverName, serverChanges] of grouped) {
-      const context = describeSurface(result.lock.subjects[serverName], committed.subjects[serverName]);
+      const context = describeSurface(own(result.lock.subjects, serverName), own(committed.subjects, serverName));
       process.stdout.write(
         `\n${bold(visibleControls(serverName))}\n${serverChanges.map(describe).join("\n")}\n${context.length > 0 ? `${context.join("\n")}\n` : ""}`,
       );
@@ -131,9 +132,32 @@ export async function runReview(options: ReviewOptions): Promise<ExitCode> {
         declined += 1;
         continue;
       }
+      const unread = own(result.lock.subjects, serverName) === undefined ? own(result.unaudited, serverName) : undefined;
+      /*
+       * A pinned server that could not be read keeps its pin. There is no surface to put in its
+       * place, and deleting it made the server new the next time it answered, so what it had
+       * changed in the meantime was never shown as a change.
+       */
+      if (unread !== undefined && own(committed.subjects, serverName) !== undefined) {
+        process.stdout.write(
+          `  ${yellow("not accepted: it could not be read, so there is nothing to pin in place of what was approved, and the pin is kept. Review it where it answers, or pin again with `nulladrift init --force`.")}\n`,
+        );
+        declined += 1;
+        continue;
+      }
+      /*
+       * Nothing to agree to: how the server is reached could not be read (WebSocket, no command, a
+       * server named `__proto__`), and `check` never takes an agreement without a transport. Saying
+       * "accepted" would be a promise the next run breaks.
+       */
+      if (unread !== undefined && unread.transport === undefined) {
+        process.stdout.write(`  ${yellow("not accepted: how this server is reached could not be read, so there is nothing to agree to. Fix or remove its definition.")}\n`);
+        declined += 1;
+        continue;
+      }
 
       accepted += 1;
-      let fresh = result.lock.subjects[serverName];
+      let fresh = own(result.lock.subjects, serverName);
       /*
        * A pin this run could not re-establish -- a registry that did not answer -- is kept. Taking
        * the fresh entry as it was deleted it: accepting an unrelated description change on a day
@@ -141,22 +165,22 @@ export async function runReview(options: ReviewOptions): Promise<ExitCode> {
        * published since, with nothing to compare it against. A pin displaced by the configuration
        * is a change of its own, reported and accepted as one, so that case keeps no pin.
        */
-      const pin = committed.subjects[serverName]?.provenance;
+      const pin = own(committed.subjects, serverName)?.provenance;
       const displaced = result.displaced.some((moved) => moved.server === serverName);
       if (fresh && fresh.provenance === undefined && pin !== undefined && result.unverified.includes(serverName) && !displaced) {
         fresh = { ...fresh, provenance: pin };
       }
-      if (fresh) next.subjects[serverName] = fresh;
+      if (fresh) setOwn(next.subjects, serverName, fresh);
       else delete next.subjects[serverName];
       // Accepting a server that could not be audited agrees to leave it unaudited, as reached now.
       const unaudited = { ...next.unaudited };
-      if (!fresh && result.unaudited[serverName] !== undefined) unaudited[serverName] = result.unaudited[serverName];
+      if (!fresh && unread !== undefined) setOwn(unaudited, serverName, unread);
       else delete unaudited[serverName];
       next.unaudited = Object.keys(unaudited).length > 0 ? unaudited : undefined;
 
-      // A rename leaves the old key behind; accepting the rename retires it.
+      // A rename leaves the old key behind; accepting the rename retires it, unless that name is still configured.
       for (const change of serverChanges) {
-        if (change.kind === "server.renamed" && typeof change.before === "string") delete next.subjects[change.before];
+        if (change.kind === "server.renamed" && typeof change.before === "string" && own(result.unaudited, change.before) === undefined) delete next.subjects[change.before];
       }
     }
   } finally {

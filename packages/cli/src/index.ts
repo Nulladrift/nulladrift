@@ -149,7 +149,8 @@ main()
     process.exitCode = code;
     /*
      * A stdio server that ignores being closed can hold the event loop open. The timer is
-     * unref'd, so it never delays a clean exit, but it does fire if something is still hanging.
+     * unref'd, so it never delays a clean exit, but it does fire if something is still hanging;
+     * a server process still running then is killed on the way out (see `hookExit` in connect).
      */
     setTimeout(() => process.exit(code), 2_000).unref();
   })

@@ -13,14 +13,7 @@
 import { visibleControls } from "../lib/ui";
 import { serversThatShippedNothing } from "../diff/types";
 import type { Change, Severity } from "../diff/types";
-import type { AuditReport } from "./types";
-
-/** Pull request comments say which of the three it was, because the reader's next step differs. */
-const AUDIT_FAILURE_LABEL: Record<"auth" | "forbidden" | "unreachable", string> = {
-  auth: "refused the audit",
-  forbidden: "accepted the credentials and refused",
-  unreachable: "unreachable",
-};
+import { AUDIT_FAILURE_LABEL, type AuditReport } from "./types";
 
 const MARK: Record<Severity, string> = { high: "🔴", medium: "🟠", low: "⚪" };
 
@@ -70,6 +63,21 @@ function code(text: string): string {
 function row(change: Change): string {
   const where = change.member ? `${change.server}/${change.member}` : change.server;
   return `| ${MARK[change.severity]} ${change.severity} | ${code(where)} | ${plain(change.kind)} | ${plain(change.summary)} |`;
+}
+
+/**
+ * What replaces the comment once a run has nothing to report.
+ *
+ * Nothing new is posted on a clean run, but the comment an earlier run left is corrected: a
+ * pull request whose surface matched the lock again still read "3 changes to what your agents can
+ * reach, 1 high", because a clean run never touched it.
+ */
+export function renderResolvedReport(report: AuditReport): string {
+  return [
+    "### Nothing to review: every server matches the lock",
+    "",
+    `An earlier run reported findings here. On this one, all ${report.serversChecked} server${report.serversChecked === 1 ? "" : "s"} matched what was approved, and none failed to answer.`,
+  ].join("\n");
 }
 
 /**

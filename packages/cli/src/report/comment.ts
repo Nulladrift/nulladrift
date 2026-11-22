@@ -13,6 +13,28 @@
  */
 const MARKER = "<!-- nulladrift:surface -->";
 
+/**
+ * Comments are read a page at a time, and only so many pages: a thousand comments. Reading only
+ * the first hundred missed this tool's own comment on a busy pull request, and every later run
+ * posted another one.
+ */
+const PER_PAGE = 100;
+const MAX_COMMENT_PAGES = 10;
+
+/** GitHub refuses a comment body longer than this, whole. */
+const MAX_COMMENT_CHARS = 65_536;
+
+/**
+ * The body, cut at a line to fit, and saying so. A long report -- dozens of servers that could not
+ * be read, each with its reason -- was refused outright, so a pull request got no findings at all.
+ */
+function fitted(body: string): string {
+  if (body.length <= MAX_COMMENT_CHARS) return body;
+  const note = "\n\n_The rest of this report was cut short to fit a comment; the job log has all of it._";
+  const room = body.slice(0, MAX_COMMENT_CHARS - note.length);
+  return `${room.slice(0, Math.max(room.lastIndexOf("\n"), 0))}${note}`;
+}
+
 export interface CommentTarget {
   api: string;
   repo: string;
@@ -63,13 +85,15 @@ async function call(target: CommentTarget, path: string, init: RequestInit = {})
  * Throws only on a response that means the comment is not there; a missing permission is the
  * common case in a fork, where `GITHUB_TOKEN` is read-only by design, and that is reported
  * rather than failed on: a build should not go red because a comment could not be posted.
+ *
+ * `create: false` only replaces: with no comment of its own there, nothing is posted ("none").
  */
-export async function upsertComment(target: CommentTarget, body: string): Promise<"created" | "updated" | "forbidden"> {
-  const marked = `${MARKER}\n${body}`;
-
-  const existing = await call(target, `/issues/${target.issue}/comments?per_page=100`);
-  if (existing.status === 403) return "forbidden";
-  if (!existing.ok) throw new Error(`could not read the comments (${existing.status})`);
+export async function upsertComment(
+  target: CommentTarget,
+  body: string,
+  options: { create?: boolean } = {},
+): Promise<"created" | "updated" | "forbidden" | "none"> {
+  const marked = fitted(`${MARKER}\n${body}`);
 
   /*
    * Only a comment this token wrote. The first comment carrying the marker was taken, whoever
@@ -77,9 +101,17 @@ export async function upsertComment(target: CommentTarget, body: string): Promis
    * refused and the findings never appeared, or it was allowed and landed in a comment its
    * author could rewrite afterwards.
    */
-  const self = await identity(target);
-  const comments = (await existing.json()) as Array<{ id: number; body?: string; user?: { login?: string; type?: string } }>;
-  const mine = comments.find((comment) => comment.body?.startsWith(MARKER) && comment.user?.login === self);
+  let self: string | undefined;
+  let mine: { id: number } | undefined;
+  for (let page = 1; page <= MAX_COMMENT_PAGES && mine === undefined; page += 1) {
+    const existing = await call(target, `/issues/${target.issue}/comments?per_page=${PER_PAGE}&page=${page}`);
+    if (existing.status === 403) return "forbidden";
+    if (!existing.ok) throw new Error(`could not read the comments (${existing.status})`);
+    self ??= await identity(target);
+    const comments = (await existing.json()) as Array<{ id: number; body?: string; user?: { login?: string; type?: string } }>;
+    mine = comments.find((comment) => comment.body?.startsWith(MARKER) && comment.user?.login === self);
+    if (comments.length < PER_PAGE) break;
+  }
 
   if (mine) {
     const updated = await call(target, `/issues/comments/${mine.id}`, { method: "PATCH", body: JSON.stringify({ body: marked }) });
@@ -87,6 +119,7 @@ export async function upsertComment(target: CommentTarget, body: string): Promis
     // Not ours to edit after all, or gone: a new comment rather than none.
     if (updated.status !== 403 && updated.status !== 404) throw new Error(`could not update the comment (${updated.status})`);
   }
+  if (options.create === false) return "none";
 
   const created = await call(target, `/issues/${target.issue}/comments`, { method: "POST", body: JSON.stringify({ body: marked }) });
   if (created.status === 403) return "forbidden";
