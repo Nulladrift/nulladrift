@@ -12,7 +12,7 @@ import type { Change, ChangeKind, Severity } from "../diff/types";
 import { CHANGE_KINDS, SEVERITY } from "../diff/types";
 import { helpUriFor, publishedDocsUrl } from "../lib/meta";
 import { VERSION } from "../lib/version";
-import type { AuditReport } from "./types";
+import { AUDIT_FAILURE_LABEL, type AuditReport } from "./types";
 
 const LEVEL: Record<Severity, "error" | "warning" | "note"> = {
   high: "error",
@@ -45,6 +45,13 @@ const STEERING_RULE = "steering.passage.arrived";
 const UNVERIFIED_RULE = "server.artifact.unverified";
 /** A server whose listing could not be read in full. A warning: it decides the exit code unless allowed. */
 const PARTIAL_RULE = "server.surface.partial";
+/*
+ * A server that could not be read at all, or a config that could not be. It had no result, so a
+ * code-scanning view of a run that exited 2 showed only the drift it did find, and one of a run
+ * passed under --allow-unreachable showed a clean surface nobody had read. A warning, like a
+ * partial read, for the same reason.
+ */
+const UNREAD_RULE = "server.surface.unread";
 
 const RULE_HELP: Partial<Record<ChangeKind, string>> = {
   "tool.capability.gained":
@@ -92,6 +99,7 @@ export function renderSarifReport(report: AuditReport, options: { steering?: boo
   const steering = options.steering ? (report.steering ?? []) : [];
   const unverified = report.unverified ?? [];
   const partial = report.partial ?? [];
+  const unread = report.unreachable;
 
   /*
    * One shape for all three sources. Without it the three `map`s infer three different literal
@@ -136,6 +144,15 @@ export function renderSarifReport(report: AuditReport, options: { steering?: boo
           name: "ServerSurfacePartial",
           shortDescription: { text: "A server's surface could not be read in full" },
           fullDescription: { text: "The listing did not end within the page limit, or the server said it changed while being read on every pass. Compared as far as it was read; the audit did not finish." },
+          defaultConfiguration: { level: "warning" as const },
+        }]
+      : []),
+    ...(unread.length > 0
+      ? [{
+          id: UNREAD_RULE,
+          name: "ServerSurfaceUnread",
+          shortDescription: { text: "A server's surface could not be read" },
+          fullDescription: { text: "The server did not answer, refused the audit, or its configuration could not be used, so its surface was not compared. The audit did not finish, which fails it unless --allow-unreachable makes that a warning." },
           defaultConfiguration: { level: "warning" as const },
         }]
       : []),
@@ -206,6 +223,13 @@ export function renderSarifReport(report: AuditReport, options: { steering?: boo
             message: { text: `${entry.server}: could not be read in full. ${entry.reasons.join("; ")}` },
             locations: at(entry.server, entry.server),
             partialFingerprints: { "mcpAuditChange/v1": `${entry.server}/partial` },
+          })),
+          ...unread.map<SarifResult>((failure) => ({
+            ruleId: UNREAD_RULE,
+            level: "warning",
+            message: { text: `${failure.server}: could not be read (${AUDIT_FAILURE_LABEL[failure.kind]}). ${failure.reason}` },
+            locations: at(failure.server, failure.server),
+            partialFingerprints: { "mcpAuditChange/v1": `${failure.server}/unread` },
           })),
           ...unverified.map<SarifResult>((server) => ({
             ruleId: UNVERIFIED_RULE,

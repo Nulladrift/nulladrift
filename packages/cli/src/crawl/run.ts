@@ -7,6 +7,7 @@ import type { Lockfile, LockedMcpServer } from "../lock/types";
 import { LOCKFILE_VERSION } from "../lock/types";
 import { captureSurface } from "../mcp/capture";
 import { isAuthFailure } from "../mcp/types";
+import { own, setOwn } from "../lib/own";
 import { discardFetch, runFetch } from "./sandbox";
 import type { Corpus, CrawlTarget } from "./registry";
 import type { FailureStreak, History, Outcome, RunRecord, ServerObservation } from "./state";
@@ -164,7 +165,7 @@ export async function crawl(options: CrawlOptions): Promise<CrawlResult> {
     hostOf,
     async (target): Promise<Captured> => {
       const result = await captureAny(target, timeoutMs);
-      const outcome: Outcome = result.failure ?? (previous.subjects[target.name] ? "stable" : "baseline");
+      const outcome: Outcome = result.failure ?? (own(previous.subjects, target.name) ? "stable" : "baseline");
       options.onProgress?.(++done, corpus.targets.length, target.name, outcome);
       return result;
     },
@@ -181,11 +182,12 @@ export async function crawl(options: CrawlOptions): Promise<CrawlResult> {
   const rebaselined = new Set<string>();
   for (const result of captured) {
     if (!result.entry) continue;
-    fresh[result.target.name] = result.entry;
-    const prior = previous.subjects[result.target.name];
+    // Own members only: a registry can list a server called `constructor` as well as anybody.
+    setOwn(fresh, result.target.name, result.entry);
+    const prior = own(previous.subjects, result.target.name);
     if (!prior) continue;
-    if ((history.servers[result.target.name]?.revision ?? 1) !== CAPTURE_REVISION) rebaselined.add(result.target.name);
-    else comparable[result.target.name] = prior;
+    if ((own(history.servers, result.target.name)?.revision ?? 1) !== CAPTURE_REVISION) rebaselined.add(result.target.name);
+    else setOwn(comparable, result.target.name, prior);
   }
 
   const changes = diffLockfiles(
@@ -208,12 +210,12 @@ export async function crawl(options: CrawlOptions): Promise<CrawlResult> {
        * months ago is indistinguishable from one that blinked once, and both quietly depress
        * the coverage the report publishes.
        */
-      const prior = history.failures[name];
+      const prior = own(history.failures, name);
       const streak: FailureStreak =
         prior === undefined || prior.kind !== result.failure
           ? { consecutive: 1, kind: result.failure, firstFailedAt: at, lastFailedAt: at }
           : { ...prior, consecutive: prior.consecutive + 1, lastFailedAt: at };
-      history.failures[name] = streak;
+      setOwn(history.failures, name, streak);
       continue;
     }
     delete history.failures[name];
@@ -222,12 +224,12 @@ export async function crawl(options: CrawlOptions): Promise<CrawlResult> {
     const revision = `${entry.protocol.era}/${entry.protocol.version}`;
     protocols[revision] = (protocols[revision] ?? 0) + 1;
 
-    const isBaseline = previous.subjects[name] === undefined;
+    const isBaseline = own(previous.subjects, name) === undefined;
     const isRebaseline = rebaselined.has(name);
     const drifted = driftedServers.includes(name);
     outcomes[isBaseline ? "baseline" : isRebaseline ? "rebaselined" : drifted ? "drifted" : "stable"] += 1;
 
-    const observation: ServerObservation = history.servers[name] ?? { firstSeenAt: at, lastCheckedAt: at, comparisons: 0, driftEvents: 0 };
+    const observation: ServerObservation = own(history.servers, name) ?? { firstSeenAt: at, lastCheckedAt: at, comparisons: 0, driftEvents: 0 };
     if (isRebaseline) {
       // The window being closed was real observation and still counts; the gap to this reading is not.
       const start = Date.parse(observation.windowStart ?? observation.firstSeenAt);
@@ -243,7 +245,7 @@ export async function crawl(options: CrawlOptions): Promise<CrawlResult> {
       observation.driftEvents += 1;
       observation.lastChangedAt = at;
     }
-    history.servers[name] = observation;
+    setOwn(history.servers, name, observation);
   }
 
   const run: RunRecord = { at, targets: corpus.targets.length, outcomes, changeKinds, protocols, corpus: corpus.stats, driftedServers };
@@ -268,9 +270,9 @@ export async function crawl(options: CrawlOptions): Promise<CrawlResult> {
     }
     if (corpus.stats.truncated) continue;
 
-    const absences = (history.absent[name] ?? 0) + 1;
+    const absences = (own(history.absent, name) ?? 0) + 1;
     if (absences < PRUNE_AFTER_ABSENT_RUNS) {
-      history.absent[name] = absences;
+      setOwn(history.absent, name, absences);
       continue;
     }
     // The observation in `history.servers` stays: it is the record of what was measured while

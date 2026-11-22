@@ -10,8 +10,73 @@ telemetry). Renaming a change kind breaks every consumer that matched on it.
 
 ## [Unreleased]
 
+### Security
+
+- **A schema crafted to explode no longer holds `check` or the control plane for minutes.** Property
+  names that spelled other properties' paths (112 bytes) took 82 seconds to classify, and 800
+  properties that were each the whole schema again (16 KB) held `init` for 87 seconds in the header
+  scan; the work is synchronous, so `--timeout` could not stop it, and the control plane runs the
+  same engine for every tenant. Work on a schema is now bounded by its size, and both take
+  milliseconds. Found in a code audit, as is everything in this release that names no other source.
+- **A pull request can no longer add a server named `constructor` and pass.** Lock lookups used
+  `subjects[name]`, which finds `Object.prototype`'s members, so a `constructor` server that exits
+  before it can be audited passed `check --allow-unreachable`, a skipped `__proto__` server
+  vanished, and a reachable one crashed the diff. Lookups are by own name, and each is
+  `server.added`.
+- **Leaving a server unaudited is an agreement to how it is reached.** A server skipped at discovery
+  (an `${input:…}` placeholder, a refused credential, `headersHelper`) was recorded as `{}`, which
+  matched any later definition, so a pull request could rewrite it to `bash -c "curl … | sh"` and
+  pass. It is now recorded as written. **An older lock's `{}` entry is reported once as
+  `server.added` and has to be accepted again with `review`.** A WebSocket or unreadable definition
+  cannot be agreed to.
+- **A policy denying a capability sees arguments behind `$ref`, `allOf` and `anyOf`.** A `command`
+  inside a Pydantic `$defs` model produced no capability, so `deniedCapabilities: ["process-exec"]`
+  passed a tool that takes a shell command. 296 of 92,512 published tools in the registry crawl now
+  show a capability they had hidden, so a policy that passed before may now fail.
+- **Removing an `anyOf`, `oneOf`, `then`, `else` or `items` schema is reported as a widening.** Lifting
+  a whole constraint read as a narrowing, and adding a `not` as a widening: `run_query` going from
+  two allowed tables to any string was `tool.input_schema.narrowed`, low; it is now `widened`, high.
+- **Renaming a server no longer hides new code behind it.** Renaming `fs` to `filesystem` in the
+  commit that changed the bytes behind `fs-server@1.0.0` reported only `server.renamed` (low); it now
+  also reports `server.artifact.substituted` (high).
+- **Keys passed in a server's arguments or address stay out of failure reasons.** Only environment
+  values, header values and the OAuth client secret were removed, so `--api-key ${MY_KEY}`, a key in
+  the URL path or query, or a password in the URL reached the terminal, `--json`, the PR comment and
+  `push`.
+- **A commit id in a self-hosted forge URL is kept, not redacted.** `github.acme-corp.com/raw/…/<sha>/`
+  had its commit replaced as a key, so swapping commits compared clean. Locks with that shape show
+  `server.transport.changed` once.
+
 ### Fixed
 
+- **Constraints the widening check could not see are read the way they cut.** Removing `const`,
+  `pattern`, `format`, an exclusive bound, `minItems`/`maxItems`, `uniqueItems` or `multipleOf`,
+  loosening a schema-valued `additionalProperties`, adding `patternProperties`, and `integer` to
+  `number` were a bare `changed`, or a narrowing beside any other narrowing. A property named
+  `opts.mode` could overwrite the nested `opts.mode` it mimicked, and `allOf` let its first branch
+  win; it is now read as the intersection it is.
+- **A pinned server that does not answer is not "no longer configured".** It was `server.removed`, so
+  `--allow-unreachable` exited 1, and `review --accept-all` deleted the pin so the server came back as
+  new. It now warns, review keeps its pin, and a changed transport or artifact is still drift.
+- **A stdio server that ignores being closed no longer outlives the CLI.** It now gets SIGTERM at its
+  deadline and SIGKILL a second later, and any server process still running at exit is killed.
+- **A server that could not be read has a SARIF result**, as a `server.surface.unread` warning (a new
+  rule id; not a change kind).
+- **A failure reason is at most 2 KB**, and a PR comment too long for GitHub is cut at a line with a
+  note. A 5 MB 404 body went into every report, and GitHub refused the comment.
+- **A clean run corrects the PR comment an earlier run left**, replacing it with "Nothing to review",
+  and `check --comment` finds its own comment past the first hundred on a busy pull request.
+- **`init --allow-unreachable` fails when nothing could be pinned.** It wrote no lock and exited 0.
+- **A change to `annotations.title` is reported beside a description change**, like the top-level
+  title.
+- **The steering scan reads text in `$defs`, alternatives, `allOf`, maps, tuples and enum, const,
+  default and example values.**
+- **`required` inside a vendor extension keeps the server's order.** Sorting it there let a server
+  reorder data the model is shown without the digest changing. Locks with that shape drift once.
+- **A server that could not be audited, or was removed, is not listed as "changed without shipping
+  a new version".**
+- **Server names from the config are escaped in every note**, including `login` and `logout`.
+- **A configured `User-Agent` is sent as written**, not joined to nulladrift's.
 - **A tool's title change is reported when something else about the tool changed too.** The title,
   icons, `_meta` and how a tool may be run were reported only when nothing else about the tool had
   moved, so a title changed together with a description showed the description alone, and

@@ -20,6 +20,14 @@ export interface Expanded {
   unresolved: string[];
   /** Placeholders naming this run's own credentials, which are never filled. See `isRunCredential`. */
   refused: string[];
+  /**
+   * What each placeholder filled from the environment was filled with, by the variable's name.
+   * Not a default written in the config, and not a folder this tool supplied (`${workspaceFolder}`).
+   *
+   * Kept so it can be taken out of anything printed. The expanded string is what a server is
+   * started with, and a server that rejects `--api-key ${MY_KEY}` says so on stderr, key and all.
+   */
+  filled: Array<{ name: string; value: string }>;
 }
 
 const PLACEHOLDER = /\$\{([^}]+)\}/g;
@@ -58,6 +66,7 @@ export function isRunCredential(name: string): boolean {
 export function expand(input: string, context: ExpandContext): Expanded {
   const unresolved: string[] = [];
   const refused: string[] = [];
+  const filled: Expanded["filled"] = [];
 
   const value = input.replace(PLACEHOLDER, (match, body: string) => {
     // `${NAME}`, `${env:NAME}` and `${NAME:-default}` all read NAME, so all three are refused.
@@ -83,7 +92,10 @@ export function expand(input: string, context: ExpandContext): Expanded {
     if (body.startsWith("env:")) {
       const name = body.slice(4);
       const found = context.env[name];
-      if (found !== undefined) return found;
+      if (found !== undefined) {
+        filled.push({ name, value: found });
+        return found;
+      }
       unresolved.push(match);
       return match;
     }
@@ -91,16 +103,22 @@ export function expand(input: string, context: ExpandContext): Expanded {
     const defaultAt = body.indexOf(":-");
     if (defaultAt !== -1) {
       const name = body.slice(0, defaultAt);
-      return context.env[name] ?? body.slice(defaultAt + 2);
+      const found = context.env[name];
+      if (found === undefined) return body.slice(defaultAt + 2);
+      filled.push({ name, value: found });
+      return found;
     }
 
     const found = context.env[body];
-    if (found !== undefined) return found;
+    if (found !== undefined) {
+      filled.push({ name: body, value: found });
+      return found;
+    }
     unresolved.push(match);
     return match;
   });
 
-  return { value, unresolved, refused };
+  return { value, unresolved, refused, filled };
 }
 
 export function expandAll(inputs: string[], context: ExpandContext): Expanded {
@@ -109,5 +127,6 @@ export function expandAll(inputs: string[], context: ExpandContext): Expanded {
     value: results.map((result) => result.value).join("\u0000"),
     unresolved: results.flatMap((result) => result.unresolved),
     refused: results.flatMap((result) => result.refused),
+    filled: results.flatMap((result) => result.filled),
   };
 }
