@@ -12,6 +12,7 @@ import type { Change } from "../diff/types";
 import { readLockfile, writeLockfile } from "../lock/io";
 import type { Lockfile } from "../lock/types";
 import { EXIT_CLEAN, EXIT_DRIFT, EXIT_INCOMPLETE, type ExitCode } from "../lib/exit";
+import { own, setOwn } from "../lib/own";
 import { bold, dim, elideMiddle, green, red, truncate, yellow, visibleControls } from "../lib/ui";
 import type { CommonOptions } from "./options";
 
@@ -117,7 +118,7 @@ export async function runReview(options: ReviewOptions): Promise<ExitCode> {
 
   try {
     for (const [serverName, serverChanges] of grouped) {
-      const context = describeSurface(result.lock.subjects[serverName], committed.subjects[serverName]);
+      const context = describeSurface(own(result.lock.subjects, serverName), own(committed.subjects, serverName));
       process.stdout.write(
         `\n${bold(visibleControls(serverName))}\n${serverChanges.map(describe).join("\n")}\n${context.length > 0 ? `${context.join("\n")}\n` : ""}`,
       );
@@ -131,9 +132,18 @@ export async function runReview(options: ReviewOptions): Promise<ExitCode> {
         declined += 1;
         continue;
       }
+      /*
+       * Reading a lock back drops a key named `__proto__`, so an agreement written under that name
+       * is one `check` never sees. Saying "accepted" would be a promise the next run breaks.
+       */
+      if (serverName === "__proto__") {
+        process.stdout.write(`  ${yellow("not accepted: a server named __proto__ cannot be kept in a lock. Rename it.")}\n`);
+        declined += 1;
+        continue;
+      }
 
       accepted += 1;
-      let fresh = result.lock.subjects[serverName];
+      let fresh = own(result.lock.subjects, serverName);
       /*
        * A pin this run could not re-establish -- a registry that did not answer -- is kept. Taking
        * the fresh entry as it was deleted it: accepting an unrelated description change on a day
@@ -141,16 +151,17 @@ export async function runReview(options: ReviewOptions): Promise<ExitCode> {
        * published since, with nothing to compare it against. A pin displaced by the configuration
        * is a change of its own, reported and accepted as one, so that case keeps no pin.
        */
-      const pin = committed.subjects[serverName]?.provenance;
+      const pin = own(committed.subjects, serverName)?.provenance;
       const displaced = result.displaced.some((moved) => moved.server === serverName);
       if (fresh && fresh.provenance === undefined && pin !== undefined && result.unverified.includes(serverName) && !displaced) {
         fresh = { ...fresh, provenance: pin };
       }
-      if (fresh) next.subjects[serverName] = fresh;
+      if (fresh) setOwn(next.subjects, serverName, fresh);
       else delete next.subjects[serverName];
       // Accepting a server that could not be audited agrees to leave it unaudited, as reached now.
       const unaudited = { ...next.unaudited };
-      if (!fresh && result.unaudited[serverName] !== undefined) unaudited[serverName] = result.unaudited[serverName];
+      const now = own(result.unaudited, serverName);
+      if (!fresh && now !== undefined) setOwn(unaudited, serverName, now);
       else delete unaudited[serverName];
       next.unaudited = Object.keys(unaudited).length > 0 ? unaudited : undefined;
 

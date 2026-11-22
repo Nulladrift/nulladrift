@@ -13,6 +13,7 @@ import { LOCKFILE_VERSION } from "./lock/types";
 import { captureSurface } from "./mcp/capture";
 import { DEFAULT_TIMEOUT_MS } from "./mcp/connect";
 import { UnreachableServerError, authFailureKind } from "./mcp/types";
+import { own, setOwn } from "./lib/own";
 import { VERSION } from "./lib/version";
 import type { Unreachable } from "./report/types";
 
@@ -84,7 +85,7 @@ async function provenanceOf(
   if (server.transport.type !== "stdio") return { unverified: false };
   const reference = referenceOf(server.transport, options.projectRoot);
   if (!reference) return { unverified: false };
-  const previous = options.previous?.subjects[server.name]?.provenance;
+  const previous = own(options.previous?.subjects, server.name)?.provenance;
 
   /*
    * A launcher that fetches from another registry, another index or a local install runs code the
@@ -156,13 +157,13 @@ export async function captureAll(options: CaptureOptions): Promise<CaptureResult
   const configured = new Map(discovery.servers.map((server) => [server.name, server]));
   for (const result of captured) {
     if ("entry" in result && result.entry) {
-      subjects[result.name] = result.entry;
+      setOwn(subjects, result.name, result.entry);
       if (result.unverified) unverified.push(result.name);
       if (result.displaced) displaced.push({ server: result.name, ...result.displaced });
     } else if ("failure" in result && result.failure) {
       unreachable.push(result.failure);
       const server = configured.get(result.name);
-      unaudited[result.name] = server ? { transport: lockTransport(server) } : {};
+      setOwn(unaudited, result.name, server ? { transport: lockTransport(server) } : {});
     }
   }
 
@@ -170,7 +171,7 @@ export async function captureAll(options: CaptureOptions): Promise<CaptureResult
   // unreachable too: the audit is incomplete either way, and CI should treat them the same.
   for (const skipped of discovery.skipped) {
     unreachable.push({ server: skipped.serverName, reason: skipped.message, kind: "unreachable" });
-    unaudited[skipped.serverName] = {};
+    setOwn(unaudited, skipped.serverName, {});
   }
   // A name the project defines two ways is audited under neither until it says which it means.
   for (const conflict of discovery.conflicts) {
@@ -207,7 +208,7 @@ export async function captureAll(options: CaptureOptions): Promise<CaptureResult
 
 /** Whether the lock already agreed to leave this server unaudited, reached the way it is now. */
 function acknowledged(committed: Lockfile, name: string, now: LockedUnaudited): boolean {
-  const agreed = committed.unaudited?.[name];
+  const agreed = own(committed.unaudited, name);
   return agreed !== undefined && JSON.stringify(agreed.transport ?? null) === JSON.stringify(now.transport ?? null);
 }
 
@@ -235,16 +236,16 @@ export function compareWithLock(committed: Lockfile, result: CaptureResult): Cha
   }
   const failed = new Map(result.unreachable.map((failure) => [failure.server, failure.reason]));
   for (const [name, now] of Object.entries(result.unaudited)) {
-    if (committed.subjects[name] !== undefined || acknowledged(committed, name, now)) continue;
+    if (own(committed.subjects, name) !== undefined || acknowledged(committed, name, now)) continue;
     changes.push({
       kind: "server.added",
       severity: SEVERITY["server.added"],
       server: name,
-      summary: `${committed.unaudited?.[name] ? "a server left unaudited is now reached differently, and" : "new server, which"} could not be audited: ${failed.get(name) ?? "it did not answer"}`,
+      summary: `${own(committed.unaudited, name) ? "a server left unaudited is now reached differently, and" : "new server, which"} could not be audited: ${failed.get(name) ?? "it did not answer"}`,
     });
   }
   for (const name of result.conflicted) {
-    if (committed.subjects[name] !== undefined) continue;
+    if (own(committed.subjects, name) !== undefined) continue;
     changes.push({
       kind: "server.added",
       severity: SEVERITY["server.added"],
@@ -261,7 +262,8 @@ export function compareWithLock(committed: Lockfile, result: CaptureResult): Cha
  * that could not reach a server fails and says so rather than agreeing to it.
  */
 export function unauditedToRecord(result: CaptureResult, keep: (name: string) => boolean = () => true): Record<string, LockedUnaudited> | undefined {
-  const entries = Object.entries(result.unaudited).filter(([name]) => keep(name));
+  // Never `__proto__`: reading a lock back drops that key, so the agreement would be one `check` never sees.
+  const entries = Object.entries(result.unaudited).filter(([name]) => name !== "__proto__" && keep(name));
   return entries.length > 0 ? Object.fromEntries(entries) : undefined;
 }
 
