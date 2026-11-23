@@ -12,6 +12,32 @@ telemetry). Renaming a change kind breaks every consumer that matched on it.
 
 Nothing yet.
 
+## [0.12.0] - 2026-11-23
+
+### Changed
+
+- **Naming a server's version in its command is a low change, not a high one.** 0.11.0 began
+  advising `@modelcontextprotocol/server-memory@2.2.1` in place of a bare package name.
+  Following that advice edits the command, which `server.transport.changed` reported at high
+  severity, as a configured name pointing at a different command. So did every upgrade of the pin
+  after it, while the same release behind an unpinned command was a medium
+  `server.artifact.changed`: the advised setup was the one where every release was a high
+  finding. Now, when provenance names the same package on both sides, nothing else in the
+  command, environment or working directory changed, and the new spelling names one exact
+  release (`name@2.2.1`, `name==2026.11.18`, `image@sha256:...`), the change is low and says which
+  release the command asks for. The release is still reported on its own, by
+  `server.artifact.changed` or `server.artifact.substituted`, and so is anything its surface
+  changed. Unpinning, a range or a tag, a different package, any other edit to the command, and a
+  change without provenance on both sides stay high. The kind is unchanged. SARIF reports these as
+  a note, and a control plane policy that blocks builds on high severity no longer blocks on them.
+
+### Fixed
+
+- **A pinned server is no longer said to have changed without shipping a release.** Naming the
+  version in the config listed the server under "changed without shipping a new version", though
+  only the config had moved. And an upgrade counted as a release only when the server's own
+  `serverInfo.version` moved, which many servers never change; the package moving to another
+  version, as provenance records it, now counts too.
 ## [0.11.0] - 2026-11-23
 
 ### Added

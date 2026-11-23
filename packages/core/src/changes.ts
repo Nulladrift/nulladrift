@@ -150,14 +150,28 @@ export function sortChanges(changes: Change[]): Change[] {
  * that could not be audited arrives as `server.added` with nothing behind it, and one that is
  * gone has nothing now; both were listed as having changed without a release, which describes a
  * surface nobody saw.
+ *
+ * Nor is a command that now names an exact release of its own package, the one transport change
+ * the engine reports at low severity: that is the config moving, not the server. And a version is
+ * shipped when the package behind the server moved to another one, whatever `serverInfo` says,
+ * since plenty of servers report a version that never changes.
  */
 export function serversThatShippedNothing(changes: readonly Change[]): string[] {
   const moved = new Set<string>();
   const versioned = new Set<string>();
   for (const change of changes) {
     const uncaptured = change.kind === "server.removed" || (change.kind === "server.added" && change.after === undefined);
-    if (!uncaptured) moved.add(change.server);
-    if (change.kind === "server.identity.changed") versioned.add(change.server);
+    const relaunch = change.kind === "server.transport.changed" && change.severity === "low";
+    if (!uncaptured && !relaunch) moved.add(change.server);
+    if (change.kind === "server.identity.changed" || releaseMoved(change)) versioned.add(change.server);
   }
   return [...moved].filter((server) => !versioned.has(server)).sort();
+}
+
+function releaseMoved(change: Change): boolean {
+  if (change.kind !== "server.artifact.changed") return false;
+  const version = (side: unknown) => (typeof side === "object" && side !== null && "version" in side && typeof side.version === "string" ? side.version : undefined);
+  const was = version(change.before);
+  const now = version(change.after);
+  return was !== undefined && now !== undefined && was !== now;
 }

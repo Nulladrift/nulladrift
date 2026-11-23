@@ -6,6 +6,7 @@ import type {
   LockedResource,
   LockedResourceTemplate,
   LockedMcpServer,
+  LockedProvenance,
   LockedTool,
   Lockfile,
 } from "../lock/types";
@@ -403,6 +404,85 @@ function orderless(entry: LockedMcpServer): string {
   });
 }
 
+/**
+ * The package a launch argument names, with how it asks for a release taken off, or nothing when
+ * the argument is not a plain registry spec for that ecosystem.
+ *
+ * Deliberately narrow. A qualifier with a `:` or a `/` in it is a URL, a path, a git reference or
+ * an npm alias, any of which can point at code from somewhere else under the same name, so those
+ * are not read as a version at all.
+ */
+function unversioned(arg: string, ecosystem: LockedProvenance["ecosystem"]): { base: string; name: string; exact: boolean } | undefined {
+  switch (ecosystem) {
+    case "npm": {
+      const at = arg.lastIndexOf("@");
+      if (at <= 0) return { base: arg, name: arg, exact: false };
+      const qualifier = arg.slice(at + 1);
+      if (!/^[\w.^~<>=| *+-]+$/.test(qualifier)) return undefined;
+      return { base: arg.slice(0, at), name: arg.slice(0, at), exact: /^\d+\.\d+\.\d+(?:-[\w.-]+)?(?:\+[\w.-]+)?$/.test(qualifier) };
+    }
+    case "pypi": {
+      const match = /^([A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?)(\[[^\]]*\])?(?:\s*(===?|>=|<=|~=|!=|>|<|@)\s*([^\s:/]+))?$/.exec(arg.trim());
+      if (!match) return undefined;
+      const [, name, extras, operator, value] = match;
+      return {
+        // PEP 503: case, `-`, `_` and `.` do not tell two packages apart. Extras stay in the base: they install more.
+        base: `${name}${extras ?? ""}`,
+        name: name!.replace(/[-_.]+/g, "-").toLowerCase(),
+        // `==` and uv's `@` name one release; every other operator names a set of them.
+        exact: (operator === "==" || operator === "===" || operator === "@") && /^\d[\w.!+-]*$/.test(value ?? ""),
+      };
+    }
+    case "oci": {
+      const match = /^([^@\s]+?)(?::[\w][\w.-]{0,127})?(@sha256:[a-f0-9]{64})?$/.exec(arg);
+      if (!match || match[1]!.includes("@")) return undefined;
+      // A tag can be moved to other bytes. Only a digest names one image.
+      return { base: match[1]!, name: match[1]!, exact: match[2] !== undefined };
+    }
+    case "file":
+      return undefined;
+  }
+}
+
+/**
+ * When the only difference in how a server is launched is which release of its own package the
+ * command asks for, the two spellings; otherwise nothing.
+ *
+ * Pinning `npx -y some-server` to `npx -y some-server@2.2.1`, which `init` and `check` advise, and
+ * every upgrade of a pinned server after it, edit the command. Reported at the severity of a
+ * command pointing somewhere else, that made the advised setup the one where every release is a
+ * high-severity finding, while the same release behind an unpinned command was a medium one. The
+ * release itself is not this change's to report: provenance names the package and version on both
+ * sides, and `server.artifact.changed` or `server.artifact.substituted` says what moved.
+ *
+ * So both sides must have provenance for the same package, the commands must match in every other
+ * argument, the environment and the working directory, and the one argument that differs must
+ * name that package on both sides with nothing but the version changed. The new spelling must
+ * also name one exact release: going the other way, from a pin to a range, a tag or nothing, lets
+ * the next release in without anybody editing the config, and that is not a change to wave
+ * through. Anything else is a different launch and keeps its severity.
+ */
+function versionOnlyRelaunch(before: LockedMcpServer, after: LockedMcpServer): { was: string; now: string } | undefined {
+  const was = before.provenance;
+  const now = after.provenance;
+  if (!was || !now || was.ecosystem !== now.ecosystem || was.name !== now.name) return undefined;
+  if (before.transport.type !== "stdio" || after.transport.type !== "stdio") return undefined;
+  const wasArgs = before.transport.args ?? [];
+  const nowArgs = after.transport.args ?? [];
+  if (wasArgs.length !== nowArgs.length) return undefined;
+
+  const differ = wasArgs.flatMap((arg, i) => (arg === nowArgs[i] ? [] : [i]));
+  if (differ.length !== 1) return undefined;
+  const at = differ[0]!;
+  const placeholder = (args: string[]) => args.map((arg, i) => (i === at ? "" : arg));
+  if (!same({ ...before.transport, args: placeholder(wasArgs) }, { ...after.transport, args: placeholder(nowArgs) })) return undefined;
+
+  const wasSpec = unversioned(wasArgs[at]!, was.ecosystem);
+  const nowSpec = unversioned(nowArgs[at]!, now.ecosystem);
+  if (!wasSpec || !nowSpec || !nowSpec.exact || wasSpec.base !== nowSpec.base || nowSpec.name !== now.name) return undefined;
+  return { was: wasArgs[at]!, now: nowArgs[at]! };
+}
+
 function compareServer(name: string, before: LockedMcpServer, after: LockedMcpServer): Change[] {
   /*
    * Provenance first, and outside the short-circuit: the attack it exists for is new code behind
@@ -413,7 +493,16 @@ function compareServer(name: string, before: LockedMcpServer, after: LockedMcpSe
   const changes: Change[] = [...provenance];
 
   if (!same(before.transport, after.transport)) {
-    changes.push(change("server.transport.changed", name, "the server is reached differently than when it was pinned", { before: before.transport, after: after.transport }));
+    const relaunch = versionOnlyRelaunch(before, after);
+    if (relaunch === undefined) {
+      changes.push(change("server.transport.changed", name, "the server is reached differently than when it was pinned", { before: before.transport, after: after.transport }));
+    } else {
+      const summary =
+        provenance.length === 0
+          ? `the command now asks for ${relaunch.now} instead of ${relaunch.was}: the release that was already running, named exactly, so the next one published will not replace it`
+          : `the command now asks for ${relaunch.now} instead of ${relaunch.was}: the same package, and what the release changed is reported beside this`;
+      changes.push(change("server.transport.changed", name, summary, { severity: "low", before: before.transport, after: after.transport }));
+    }
   }
   if (!same(before.serverInfo, after.serverInfo)) {
     const from = before.serverInfo?.version ?? "unknown";
