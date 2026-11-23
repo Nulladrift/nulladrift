@@ -10,6 +10,10 @@ telemetry). Renaming a change kind breaks every consumer that matched on it.
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.12.0] - 2026-11-23
+
 ### Changed
 
 - **Naming a server's version in its command is a low change, not a high one.** 0.11.0 began
@@ -34,7 +38,6 @@ telemetry). Renaming a change kind breaks every consumer that matched on it.
   only the config had moved. And an upgrade counted as a release only when the server's own
   `serverInfo.version` moved, which many servers never change; the package moving to another
   version, as provenance records it, now counts too.
-
 ## [0.11.0] - 2026-11-23
 
 ### Added
