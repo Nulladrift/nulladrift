@@ -10,6 +10,10 @@ telemetry). Renaming a change kind breaks every consumer that matched on it.
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.11.0] - 2026-11-23
+
 ### Added
 
 - **`init`, `check` and `push` say when a server runs whatever version was published last.**
@@ -23,7 +27,6 @@ telemetry). Renaming a change kind breaks every consumer that matched on it.
   no version; an image warns only with no tag or `latest`, and a local file never does. Exit codes
   and verdicts are unchanged. `check --sarif` reports it as `server.artifact.floating`, a note (a
   new rule id; not a change kind); `--json` is unchanged.
-
 ## [0.10.1] - 2026-11-22
 
 ### Security
