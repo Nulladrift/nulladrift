@@ -125,7 +125,7 @@
         {
           "name": "naulon_check_answer",
           "title": "Check a whole text against the papers it cites (free)",
-          "description": "Check a whole answer or draft in one call: send the text with its citations and its reference list. For each reference, up to 100, it says whether the work exists and carries a retraction or other notice. For each sentence that cites one, up to 3 a reference, it returns that paper's own paragraphs that share the sentence's terms, best first, up to 3. It ranks by words and runs no model: it does NOT say whether a paper supports a sentence. Read the passages and decide. A sentence is tied to a reference only by an identifier in it, a numbered marker such as [2], or an author and year that one list entry answers; other sentences are not checked. naulon holds the text of open biomedical and life-science papers; for any other, `claim.status` says none is held. For one sentence, with or without its paper, call naulon_check_claim. For references alone, call naulon_check_citations. It is free. Calls are limited per caller: a refused call says how many seconds to wait.",
+          "description": "Check a whole answer or draft: the text with its citations and reference list. For each reference, up to 100, whether the work exists and carries a retraction or other notice. For each sentence that cites one, up to 3 a reference, that paper's paragraphs sharing its terms, best first, up to 3. It ranks by words and runs no model: it does NOT say whether a paper supports a sentence. Read the passages and decide. `list`: uncited entries, citations naming no entry, duplicates. A sentence is tied to a reference only by an identifier in it, a numbered marker such as [2], or an author and year that one list entry answers; others are not checked. naulon holds the text of open biomedical and life-science papers; for any other, `claim.status` says none is held. For one sentence, with or without its paper, call naulon_check_claim. For references alone, call naulon_check_citations. It is free. Calls are limited per caller: a refused call says how many seconds to wait.",
           "inputSchema": {
             "$schema": "http://json-schema.org/draft-07/schema#",
             "properties": {
@@ -167,13 +167,107 @@
                 "description": "In-text citations that name no listed reference. Above zero, the text needs its reference list for those to be checked.",
                 "type": "number"
               },
+              "list": {
+                "additionalProperties": false,
+                "description": "The reference list as a whole, read from the text by the same scan as `references`; no lookup and no model.",
+                "properties": {
+                  "dangling": {
+                    "description": "In-text citations that name no entry: a number past the list, or an author and year no entry carries.",
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "mark": {
+                          "type": "string"
+                        },
+                        "sentence": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["mark", "sentence"],
+                      "type": "object"
+                    },
+                    "type": "array"
+                  },
+                  "duplicates": {
+                    "description": "Works listed more than once.",
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "labels": {
+                          "items": {
+                            "type": ["number", "null"]
+                          },
+                          "type": "array"
+                        },
+                        "reference": {
+                          "type": "number"
+                        },
+                        "text": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["labels", "reference", "text"],
+                      "type": "object"
+                    },
+                    "type": "array"
+                  },
+                  "entries": {
+                    "description": "Entries in the text's reference list. Zero when no list was found: then nothing below is reported.",
+                    "type": "number"
+                  },
+                  "load": {
+                    "description": "Per reference, the sentences citing it and how many cite nothing else: the sentences that lose their only source if that paper is retracted.",
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "alone": {
+                          "type": "number"
+                        },
+                        "reference": {
+                          "type": "number"
+                        },
+                        "sentences": {
+                          "type": "number"
+                        }
+                      },
+                      "required": ["alone", "reference", "sentences"],
+                      "type": "object"
+                    },
+                    "type": "array"
+                  },
+                  "uncited": {
+                    "description": "Entries no in-text citation reaches. Cite them where they belong or take them out.",
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "label": {
+                          "description": "The entry's own number in the list, when it has one.",
+                          "type": ["number", "null"]
+                        },
+                        "reference": {
+                          "description": "Index into `references`.",
+                          "type": "number"
+                        },
+                        "text": {
+                          "type": "string"
+                        }
+                      },
+                      "required": ["label", "reference", "text"],
+                      "type": "object"
+                    },
+                    "type": "array"
+                  }
+                },
+                "required": ["dangling", "duplicates", "entries", "load", "uncited"],
+                "type": "object"
+              },
               "more": {
                 "description": "References found past the first 100 and not checked.",
                 "type": "number"
               },
-              "provenAnswer": {
+              "provenQuotes": {
                 "additionalProperties": false,
-                "description": "Present when an alternative was offered and the papers run is open: the same subject as an answer whose every quote is proven. `how` says how to reach it from this server.",
+                "description": "Present when an alternative was offered and the papers run is open: quotes on the same subject, each proven against its paper, for you to write from. `how` says how to reach it from this server.",
                 "properties": {
                   "how": {
                     "type": "string"
@@ -386,6 +480,18 @@
                         {
                           "additionalProperties": false,
                           "properties": {
+                            "grade": {
+                              "anyOf": [
+                                {
+                                  "enum": ["supports", "partly", "does_not_support", "contradicts", "cannot_assess"],
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "naulon's grade scale: supports, partly, does_not_support, contradicts, cannot_assess. Set when the outcome needs no reading: does_not_support when the full text shares no term with the claim, cannot_assess when the text needed was not read. Null when passages came back: nobody has read them, so grade the claim yourself on this same scale, and say cannot_assess rather than does_not_support when only the abstract was read."
+                            },
                             "paper": {
                               "anyOf": [
                                 {
@@ -450,6 +556,18 @@
                               "description": "True when the paper was noted for fetching, so its full text may be held later.",
                               "type": "boolean"
                             },
+                            "reason": {
+                              "anyOf": [
+                                {
+                                  "enum": ["not_held", "no_text", "no_open_copy", "unknown_paper", "unresolved", "abstract_only", "retracted", "withdrawn", "not_a_paper", "wrong_work"],
+                                  "type": "string"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "Why the grade is cannot_assess. Null with any other grade."
+                            },
                             "searched": {
                               "anyOf": [
                                 {
@@ -463,8 +581,8 @@
                               "description": "Which text of the paper was read. Null when none was."
                             },
                             "status": {
-                              "description": "passages: text was found. absent: the text read shares no term with the claim. not_held: no text of this paper is held yet. no_open_copy: none can be, the paper has no open copy that may be shown. unknown_paper: no index knows this identifier. retracted, withdrawn: the paper cannot support a claim. papers_unavailable: paper text is switched off on this fleet.",
-                              "enum": ["passages", "absent", "not_held", "no_open_copy", "unknown_paper", "retracted", "withdrawn", "papers_unavailable"],
+                              "description": "passages: text was found. absent: the text read shares no term with the claim. not_held: no text of this paper is held yet. no_open_copy: none can be, the paper has no open copy that may be shown. unknown_paper: no index knows this identifier. unresolved: the lookup or the read did not finish, so nothing is known; ask again. retracted, withdrawn: the paper cannot support a claim. not_a_paper: its record names a book, a chapter, a report or another work that is not a paper, so no text of it is read. papers_unavailable: paper text is switched off on this fleet.",
+                              "enum": ["passages", "absent", "not_held", "no_open_copy", "unknown_paper", "unresolved", "retracted", "withdrawn", "not_a_paper", "papers_unavailable"],
                               "type": "string"
                             },
                             "termsMatched": {
@@ -475,6 +593,41 @@
                               "description": "How many distinct terms the claim has. Under half matched is a weak match.",
                               "type": "number"
                             },
+                            "textVersion": {
+                              "anyOf": [
+                                {
+                                  "additionalProperties": false,
+                                  "properties": {
+                                    "fetchedAt": {
+                                      "description": "The hour it was read, ISO.",
+                                      "type": "string"
+                                    },
+                                    "licence": {
+                                      "description": "The licence the copy is under, as a party with authority over it states.",
+                                      "type": "string"
+                                    },
+                                    "sha256": {
+                                      "description": "sha256 of the text as read: the same hash later means the same text.",
+                                      "type": "string"
+                                    },
+                                    "source": {
+                                      "description": "What served the text.",
+                                      "type": "string"
+                                    },
+                                    "url": {
+                                      "description": "The open copy that was read. Each passage links it.",
+                                      "type": "string"
+                                    }
+                                  },
+                                  "required": ["fetchedAt", "licence", "sha256", "source", "url"],
+                                  "type": "object"
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ],
+                              "description": "Set when the full text was read from the paper's open copy at the moment of this call, because naulon does not hold it. Null for held text, for an abstract and when none was read."
+                            },
                             "wordsNotFound": {
                               "description": "Words of the claim that appear nowhere in the text read. Empty when no text was read.",
                               "items": {
@@ -483,7 +636,7 @@
                               "type": "array"
                             }
                           },
-                          "required": ["paper", "passages", "queued", "searched", "status", "termsMatched", "termsTotal", "wordsNotFound"],
+                          "required": ["grade", "paper", "passages", "queued", "reason", "searched", "status", "termsMatched", "termsTotal", "textVersion", "wordsNotFound"],
                           "type": "object"
                         },
                         {
@@ -519,7 +672,7 @@
                 "type": "array"
               }
             },
-            "required": ["inText", "more", "references", "retryAfterSec", "sentences"],
+            "required": ["inText", "list", "more", "references", "retryAfterSec", "sentences"],
             "type": "object"
           },
           "annotations": {
@@ -537,7 +690,7 @@
           "execution": {
             "taskSupport": "forbidden"
           },
-          "digest": "sha256:ded30f5c1fe5d191a1ce57a14e5f3c069073819cac807a4af0b372da6e17fa43"
+          "digest": "sha256:a237a4b7fc69fb59d9a5337141eb90558c2d5816a6ecb2cb9808aa0a0a99f13b"
         },
         {
           "name": "naulon_check_citations",
@@ -581,9 +734,9 @@
                 "required": ["text", "untrusted"],
                 "type": "object"
               },
-              "provenAnswer": {
+              "provenQuotes": {
                 "additionalProperties": false,
-                "description": "Present when an alternative was offered and the papers run is open: the same subject as an answer whose every quote is proven. `how` says how to reach it from this server.",
+                "description": "Present when an alternative was offered and the papers run is open: quotes on the same subject, each proven against its paper, for you to write from. `how` says how to reach it from this server.",
                 "properties": {
                   "how": {
                     "type": "string"
@@ -801,12 +954,12 @@
           "execution": {
             "taskSupport": "forbidden"
           },
-          "digest": "sha256:409d2c7481cf78e96964d6814efcf7e25e40215a53b03a8ee27f38fec4085e5c"
+          "digest": "sha256:9c394ad0d881efc15bce972b60e8fc0256ec01f549af52eace7c5fc5f21a038b"
         },
         {
           "name": "naulon_check_claim",
           "title": "Find what a paper says about a claim (free)",
-          "description": "Hold ONE sentence against the paper it cites. Returns its paragraphs that share the sentence's terms, best first, up to 5, each linked to its place on the paper's page. With no `paper`, held papers are searched by its words: up to 5 come back in `papers`, each with up to 3 paragraphs. It ranks by words and runs no model: it does NOT say whether the paper supports the claim. Read the passages and decide. naulon holds open biomedical and life-science papers; for any other, `status` says none is held. `searched` says which text was read: `absent` from an abstract is about the abstract only. `wordsNotFound` lists the claim's words that text never uses, so you can ask again in its terms. For a whole text, call naulon_check_answer. To check references for retractions, call naulon_check_citations. For the paper's record and licence, call naulon_lookup. To find sources on a topic, call naulon_search or naulon_discover. Free, limited per caller: a refused call says how many seconds to wait.",
+          "description": "Hold ONE sentence against the paper it cites. Returns its paragraphs that share its terms, best first, up to 5, each linked to its place on the page. With no `paper`, held papers are searched by its words: up to 5 come back in `papers`, each with up to 3 paragraphs. It ranks by words, runs no model and does NOT say whether the paper supports the claim. Read them and grade it; `grade` is set when none is needed. A paper naulon does not hold is looked up and its open copy read; `status` says when none can be. `searched` says which text was read: `absent` from an abstract is about the abstract only. `wordsNotFound` lists the claim's words that text never uses, so you can ask again in its terms. For a whole text, call naulon_check_answer. To check references for retractions, call naulon_check_citations. For the paper's record and licence, call naulon_lookup. To find sources on a topic, call naulon_search or naulon_discover. Free, limited per caller: a refused call says how long to wait.",
           "inputSchema": {
             "$schema": "http://json-schema.org/draft-07/schema#",
             "properties": {
@@ -849,6 +1002,18 @@
                 "required": ["text", "untrusted"],
                 "type": "object"
               },
+              "grade": {
+                "anyOf": [
+                  {
+                    "enum": ["supports", "partly", "does_not_support", "contradicts", "cannot_assess"],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "naulon's grade scale: supports, partly, does_not_support, contradicts, cannot_assess. Set when the outcome needs no reading: does_not_support when the full text shares no term with the claim, cannot_assess when the text needed was not read. Null when passages came back: nobody has read them, so grade the claim yourself on this same scale, and say cannot_assess rather than does_not_support when only the abstract was read."
+              },
               "paper": {
                 "anyOf": [
                   {
@@ -889,6 +1054,18 @@
                 "items": {
                   "additionalProperties": false,
                   "properties": {
+                    "grade": {
+                      "anyOf": [
+                        {
+                          "enum": ["supports", "partly", "does_not_support", "contradicts", "cannot_assess"],
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "naulon's grade scale: supports, partly, does_not_support, contradicts, cannot_assess. Set when the outcome needs no reading: does_not_support when the full text shares no term with the claim, cannot_assess when the text needed was not read. Null when passages came back: nobody has read them, so grade the claim yourself on this same scale, and say cannot_assess rather than does_not_support when only the abstract was read."
+                    },
                     "paper": {
                       "anyOf": [
                         {
@@ -953,6 +1130,18 @@
                       "description": "True when the paper was noted for fetching, so its full text may be held later.",
                       "type": "boolean"
                     },
+                    "reason": {
+                      "anyOf": [
+                        {
+                          "enum": ["not_held", "no_text", "no_open_copy", "unknown_paper", "unresolved", "abstract_only", "retracted", "withdrawn", "not_a_paper", "wrong_work"],
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "Why the grade is cannot_assess. Null with any other grade."
+                    },
                     "searched": {
                       "anyOf": [
                         {
@@ -966,8 +1155,8 @@
                       "description": "Which text of the paper was read. Null when none was."
                     },
                     "status": {
-                      "description": "passages: text was found. absent: the text read shares no term with the claim. not_held: no text of this paper is held yet. no_open_copy: none can be, the paper has no open copy that may be shown. unknown_paper: no index knows this identifier. retracted, withdrawn: the paper cannot support a claim. papers_unavailable: paper text is switched off on this fleet.",
-                      "enum": ["passages", "absent", "not_held", "no_open_copy", "unknown_paper", "retracted", "withdrawn", "papers_unavailable"],
+                      "description": "passages: text was found. absent: the text read shares no term with the claim. not_held: no text of this paper is held yet. no_open_copy: none can be, the paper has no open copy that may be shown. unknown_paper: no index knows this identifier. unresolved: the lookup or the read did not finish, so nothing is known; ask again. retracted, withdrawn: the paper cannot support a claim. not_a_paper: its record names a book, a chapter, a report or another work that is not a paper, so no text of it is read. papers_unavailable: paper text is switched off on this fleet.",
+                      "enum": ["passages", "absent", "not_held", "no_open_copy", "unknown_paper", "unresolved", "retracted", "withdrawn", "not_a_paper", "papers_unavailable"],
                       "type": "string"
                     },
                     "termsMatched": {
@@ -978,6 +1167,41 @@
                       "description": "How many distinct terms the claim has. Under half matched is a weak match.",
                       "type": "number"
                     },
+                    "textVersion": {
+                      "anyOf": [
+                        {
+                          "additionalProperties": false,
+                          "properties": {
+                            "fetchedAt": {
+                              "description": "The hour it was read, ISO.",
+                              "type": "string"
+                            },
+                            "licence": {
+                              "description": "The licence the copy is under, as a party with authority over it states.",
+                              "type": "string"
+                            },
+                            "sha256": {
+                              "description": "sha256 of the text as read: the same hash later means the same text.",
+                              "type": "string"
+                            },
+                            "source": {
+                              "description": "What served the text.",
+                              "type": "string"
+                            },
+                            "url": {
+                              "description": "The open copy that was read. Each passage links it.",
+                              "type": "string"
+                            }
+                          },
+                          "required": ["fetchedAt", "licence", "sha256", "source", "url"],
+                          "type": "object"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "Set when the full text was read from the paper's open copy at the moment of this call, because naulon does not hold it. Null for held text, for an abstract and when none was read."
+                    },
                     "wordsNotFound": {
                       "description": "Words of the claim that appear nowhere in the text read. Empty when no text was read.",
                       "items": {
@@ -986,7 +1210,7 @@
                       "type": "array"
                     }
                   },
-                  "required": ["paper", "passages", "queued", "searched", "status", "termsMatched", "termsTotal", "wordsNotFound"],
+                  "required": ["grade", "paper", "passages", "queued", "reason", "searched", "status", "termsMatched", "termsTotal", "textVersion", "wordsNotFound"],
                   "type": "object"
                 },
                 "type": "array"
@@ -1033,6 +1257,18 @@
                 "description": "True when the paper was noted for fetching, so its full text may be held later.",
                 "type": "boolean"
               },
+              "reason": {
+                "anyOf": [
+                  {
+                    "enum": ["not_held", "no_text", "no_open_copy", "unknown_paper", "unresolved", "abstract_only", "retracted", "withdrawn", "not_a_paper", "wrong_work"],
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Why the grade is cannot_assess. Null with any other grade."
+              },
               "retryAfterSec": {
                 "description": "Seconds until your paper reads open again. Null unless `papersPastAllowance` is above zero.",
                 "type": ["number", "null"]
@@ -1050,8 +1286,8 @@
                 "description": "Which text was read. corpus: no paper was named, so the papers naulon holds were searched and each one found is in `papers`. Null when none was read."
               },
               "status": {
-                "description": "passages: text was found. absent: the text read shares no term with the claim. not_held: no text of this paper is held yet. no_open_copy: none can be, the paper has no open copy that may be shown. unknown_paper: no index knows this identifier. retracted, withdrawn: the paper cannot support a claim. papers_unavailable: paper text is switched off on this fleet. With no paper named, absent: every paper the search found was read and none addresses the claim. none_readable: the search found papers and none has text that may be shown, which says nothing about the claim.",
-                "enum": ["passages", "absent", "not_held", "no_open_copy", "unknown_paper", "retracted", "withdrawn", "papers_unavailable", "none_readable"],
+                "description": "passages: text was found. absent: the text read shares no term with the claim. not_held: no text of this paper is held yet. no_open_copy: none can be, the paper has no open copy that may be shown. unknown_paper: no index knows this identifier. unresolved: the lookup or the read did not finish, so nothing is known; ask again. retracted, withdrawn: the paper cannot support a claim. not_a_paper: its record names a book, a chapter, a report or another work that is not a paper, so no text of it is read. papers_unavailable: paper text is switched off on this fleet. With no paper named, absent: every paper the search found was read and none addresses the claim. none_readable: the search found papers and none has text that may be shown, which says nothing about the claim.",
+                "enum": ["passages", "absent", "not_held", "no_open_copy", "unknown_paper", "unresolved", "retracted", "withdrawn", "not_a_paper", "papers_unavailable", "none_readable"],
                 "type": "string"
               },
               "termsMatched": {
@@ -1062,6 +1298,41 @@
                 "description": "How many distinct terms the claim has. Under half matched is a weak match.",
                 "type": "number"
               },
+              "textVersion": {
+                "anyOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "fetchedAt": {
+                        "description": "The hour it was read, ISO.",
+                        "type": "string"
+                      },
+                      "licence": {
+                        "description": "The licence the copy is under, as a party with authority over it states.",
+                        "type": "string"
+                      },
+                      "sha256": {
+                        "description": "sha256 of the text as read: the same hash later means the same text.",
+                        "type": "string"
+                      },
+                      "source": {
+                        "description": "What served the text.",
+                        "type": "string"
+                      },
+                      "url": {
+                        "description": "The open copy that was read. Each passage links it.",
+                        "type": "string"
+                      }
+                    },
+                    "required": ["fetchedAt", "licence", "sha256", "source", "url"],
+                    "type": "object"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "description": "Set when the full text was read from the paper's open copy at the moment of this call, because naulon does not hold it. Null for held text, for an abstract and when none was read."
+              },
               "wordsNotFound": {
                 "description": "Words of the claim that appear nowhere in the text read. Empty when no text was read.",
                 "items": {
@@ -1070,7 +1341,7 @@
                 "type": "array"
               }
             },
-            "required": ["paper", "papers", "papersNotShown", "papersPastAllowance", "papersUnread", "passages", "queued", "retryAfterSec", "searched", "status", "termsMatched", "termsTotal", "wordsNotFound"],
+            "required": ["grade", "paper", "papers", "papersNotShown", "papersPastAllowance", "papersUnread", "passages", "queued", "reason", "retryAfterSec", "searched", "status", "termsMatched", "termsTotal", "textVersion", "wordsNotFound"],
             "type": "object"
           },
           "annotations": {
@@ -1088,7 +1359,7 @@
           "execution": {
             "taskSupport": "forbidden"
           },
-          "digest": "sha256:f9a42fbb9597db54992f64a2f851a420701bc522e21c626982de3ce91279c918"
+          "digest": "sha256:033c63f019d8e9e55c73281812443a36cc0d5be9a59472f90a56cc100a48ca93"
         },
         {
           "name": "naulon_check_references",
@@ -1201,8 +1472,12 @@
                   {
                     "additionalProperties": false,
                     "properties": {
+                      "byDoi": {
+                        "description": "Read references naulon holds no work for that name a DOI. A notice Crossref published on that DOI flags it; finding none proves nothing, so such a reference is not counted as checked.",
+                        "type": "number"
+                      },
                       "checked": {
-                        "description": "Matched references whose work the notice sources answered for. Only these can be called clean.",
+                        "description": "References the notice sources answered for, held or by DOI. Only these can be called clean.",
                         "type": "number"
                       },
                       "matched": {
@@ -1218,7 +1493,7 @@
                         "type": "number"
                       }
                     },
-                    "required": ["checked", "matched", "read", "total"],
+                    "required": ["byDoi", "checked", "matched", "read", "total"],
                     "type": "object"
                   },
                   {
@@ -1251,7 +1526,7 @@
           "execution": {
             "taskSupport": "forbidden"
           },
-          "digest": "sha256:6158ef3f52409ac0d22e3a64b13661f317358b1a75de670c2b1e3fe3e452bb04"
+          "digest": "sha256:de1a035a85f018d02e69cc3b44414e72222f14a4e5dcd0ea0320073a1fec26b1"
         },
         {
           "name": "naulon_discover",
@@ -1730,15 +2005,10 @@
         {
           "name": "naulon_retrieve",
           "title": "Preview open research papers for a question (free)",
-          "description": "Preview RESEARCH PAPERS for a question: list the open CC0, CC BY, CC BY-SA or public-domain papers an answer could quote, and the price of each way to run it. `answer` is an answer written only from quotes proven against the papers; `retrieve` is the proven quotes alone. It is free, it runs neither and it returns no paper text. For publishers' articles on a question, with a verdict on each, call naulon_search. For one paper's record by its DOI or PMID, call naulon_lookup. To check whether references were retracted, call naulon_check_citations. Each call searches the paper corpus. Calls are limited per caller: a refused call says how many seconds to wait. With no quotable paper, `works` still lists what was found and each price in `fees` is null. `mode` changes nothing: both prices are always returned. Prices only: nothing on this server buys. How buying works: https://naulon.app/docs/for-buyers",
+          "description": "Preview RESEARCH PAPERS for a question: list the open CC0, CC BY, CC BY-SA or public-domain papers a run could quote, and the price of a run, which returns quotes proven against the papers for your own model to write from. The preview is free, it runs nothing and it returns no paper text. For publishers' articles on a question, with a verdict on each, call naulon_search. For one paper's record by its DOI or PMID, call naulon_lookup. To check whether references were retracted, call naulon_check_citations. Each call searches the paper corpus, and when it holds few matches an outside index too: `searched` says which, and lists what the index named beyond the held papers, never quoted or priced. Calls are limited per caller: a refused call says how many seconds to wait. With no quotable paper, `works` still lists what was found and `fee` is null. Prices only: nothing on this server buys. How buying works: https://naulon.app/docs/for-buyers",
           "inputSchema": {
             "$schema": "http://json-schema.org/draft-07/schema#",
             "properties": {
-              "mode": {
-                "description": "Optional and only echoed back in `mode`. Both modes are priced whichever you send, so leave it out.",
-                "enum": ["answer", "retrieve"],
-                "type": "string"
-              },
               "question": {
                 "description": "The question, as you would ask it of the papers (at most 4000 characters).",
                 "maxLength": 4000,
@@ -1770,59 +2040,29 @@
                 "required": ["text", "untrusted"],
                 "type": "object"
               },
-              "fees": {
-                "additionalProperties": false,
-                "description": "The price of each mode. Null when no price is decided.",
-                "properties": {
-                  "answer": {
-                    "anyOf": [
-                      {
-                        "additionalProperties": false,
-                        "properties": {
-                          "network": {
-                            "type": "string"
-                          },
-                          "testnet": {
-                            "type": "boolean"
-                          },
-                          "usdc": {
-                            "type": "number"
-                          }
-                        },
-                        "required": ["network", "testnet", "usdc"],
-                        "type": "object"
+              "fee": {
+                "anyOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "network": {
+                        "type": "string"
                       },
-                      {
-                        "type": "null"
+                      "testnet": {
+                        "type": "boolean"
+                      },
+                      "usdc": {
+                        "type": "number"
                       }
-                    ]
+                    },
+                    "required": ["network", "testnet", "usdc"],
+                    "type": "object"
                   },
-                  "retrieve": {
-                    "anyOf": [
-                      {
-                        "additionalProperties": false,
-                        "properties": {
-                          "network": {
-                            "type": "string"
-                          },
-                          "testnet": {
-                            "type": "boolean"
-                          },
-                          "usdc": {
-                            "type": "number"
-                          }
-                        },
-                        "required": ["network", "testnet", "usdc"],
-                        "type": "object"
-                      },
-                      {
-                        "type": "null"
-                      }
-                    ]
+                  {
+                    "type": "null"
                   }
-                },
-                "required": ["answer", "retrieve"],
-                "type": "object"
+                ],
+                "description": "The price of a run. Null when nothing is quotable, so nothing is priced."
               },
               "how": {
                 "description": "Running it is a paid call made outside this server; this says where buying is explained.",
@@ -1831,10 +2071,86 @@
               "message": {
                 "type": "string"
               },
-              "mode": {
-                "description": "Echo of the requested mode. Both prices are always returned.",
-                "enum": ["answer", "retrieve"],
-                "type": "string"
+              "searched": {
+                "description": "What was searched. `held`: only the papers naulon holds, so a paper outside that set was not considered and finding nothing here does not mean nothing was published. `held_and_outside`: the held papers, then an outside index for the same words; what it named beyond the held set is listed, never sold.",
+                "oneOf": [
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "heldAsOf": {
+                        "description": "ISO time the held set was last added to. Null when the date could not be read.",
+                        "type": ["string", "null"]
+                      },
+                      "scope": {
+                        "const": "held",
+                        "type": "string"
+                      }
+                    },
+                    "required": ["heldAsOf", "scope"],
+                    "type": "object"
+                  },
+                  {
+                    "additionalProperties": false,
+                    "properties": {
+                      "heldAsOf": {
+                        "description": "ISO time the held set was last added to. Null when the date could not be read.",
+                        "type": ["string", "null"]
+                      },
+                      "outside": {
+                        "additionalProperties": false,
+                        "properties": {
+                          "index": {
+                            "description": "The outside index that answered.",
+                            "enum": ["openalex", "crossref", "europepmc", "arxiv", "semanticscholar", "doaj", "openaire"],
+                            "type": "string"
+                          },
+                          "works": {
+                            "description": "Works the index named for the same words that are not among the held works considered. naulon holds no text of them here: none was read, quoted or priced, and no fee covers them.",
+                            "items": {
+                              "additionalProperties": false,
+                              "properties": {
+                                "open": {
+                                  "description": "The index says an open copy exists. Null when it does not say. Not checked by naulon.",
+                                  "type": ["boolean", "null"]
+                                },
+                                "title": {
+                                  "description": "The index's title for the work. UNTRUSTED text.",
+                                  "type": ["string", "null"]
+                                },
+                                "url": {
+                                  "description": "The work's DOI landing page.",
+                                  "type": "string"
+                                },
+                                "venue": {
+                                  "description": "UNTRUSTED text.",
+                                  "type": ["string", "null"]
+                                },
+                                "work": {
+                                  "description": "The work's key (`doi:10...`). A claim check takes it as the paper and reads the open copy on demand.",
+                                  "type": "string"
+                                },
+                                "year": {
+                                  "type": ["number", "null"]
+                                }
+                              },
+                              "required": ["open", "title", "url", "venue", "work", "year"],
+                              "type": "object"
+                            },
+                            "type": "array"
+                          }
+                        },
+                        "required": ["index", "works"],
+                        "type": "object"
+                      },
+                      "scope": {
+                        "const": "held_and_outside",
+                        "type": "string"
+                      }
+                    },
+                    "required": ["heldAsOf", "outside", "scope"],
+                    "type": "object"
+                  }
+                ]
               },
               "why": {
                 "enum": ["switched_off", "nothing", "unavailable", "search_failed", "rate_limited"],
@@ -1870,7 +2186,7 @@
                 "type": "array"
               }
             },
-            "required": ["fees", "how", "works"],
+            "required": ["fee", "how", "works"],
             "type": "object"
           },
           "annotations": {
@@ -1888,7 +2204,7 @@
           "execution": {
             "taskSupport": "forbidden"
           },
-          "digest": "sha256:798eb20fc3dd53fbfdd2dc9c4c360db9630045ecb2cda89b5a3322f2d313ac91"
+          "digest": "sha256:c618deb1ab15cf360afdf669f117617e4e8f27bc3756d1338ade200b0bd233bb"
         },
         {
           "name": "naulon_search",
@@ -1961,6 +2277,52 @@
               },
               "next": {
                 "type": "string"
+              },
+              "outside": {
+                "additionalProperties": false,
+                "description": "Papers an outside index names for the question that naulon does not hold, listed when few held papers matched. They are not rows: none has a key, a price or a verdict, and nothing here reads one.",
+                "properties": {
+                  "index": {
+                    "description": "The outside index that answered.",
+                    "type": "string"
+                  },
+                  "works": {
+                    "description": "Works the index named for the same words that are not among the held works considered. naulon holds no text of them here: none was read, quoted or priced, and no fee covers them.",
+                    "items": {
+                      "additionalProperties": false,
+                      "properties": {
+                        "open": {
+                          "description": "The index says an open copy exists. Null when it does not say. Not checked by naulon.",
+                          "type": ["boolean", "null"]
+                        },
+                        "title": {
+                          "description": "The index's title for the work. UNTRUSTED text.",
+                          "type": ["string", "null"]
+                        },
+                        "url": {
+                          "description": "The work's DOI landing page.",
+                          "type": "string"
+                        },
+                        "venue": {
+                          "description": "UNTRUSTED text.",
+                          "type": ["string", "null"]
+                        },
+                        "work": {
+                          "description": "The work's key (`doi:10...`). A claim check takes it as the paper and reads the open copy on demand.",
+                          "type": "string"
+                        },
+                        "year": {
+                          "type": ["number", "null"]
+                        }
+                      },
+                      "required": ["open", "title", "url", "venue", "work", "year"],
+                      "type": "object"
+                    },
+                    "type": "array"
+                  }
+                },
+                "required": ["index", "works"],
+                "type": "object"
               },
               "papers": {
                 "items": {
@@ -2218,7 +2580,7 @@
           "execution": {
             "taskSupport": "forbidden"
           },
-          "digest": "sha256:28b7beb4fe649ec65ef15b5e203c349ee289a9b4164b92c061872694e4fb6714"
+          "digest": "sha256:799850e52dc990a58038d23ca4051592f9a898528401ac51949e19c245b5633a"
         },
         {
           "name": "naulon_trace_passage",
@@ -2314,7 +2676,7 @@
           "digest": "sha256:aba1a0b283ee419bead3d1dd4784c4647bcbedd3eaeaf7784f920178dec75d21"
         }
       ],
-      "digest": "sha256:cd140afb7d0f44cf603c9b358f1178ad685abfebb9e5c091e68da5e2cc6479e4"
+      "digest": "sha256:432b33c581cd87b8fc12ed80488af82a32ed628345a777f261c5398d9e83e1fb"
     }
   }
 }

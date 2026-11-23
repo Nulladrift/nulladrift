@@ -32,7 +32,7 @@
           "listChanged": false
         }
       },
-      "instructions": "Plan Data API: clean, multi-year data on U.S. retirement plans (401(k), 403(b), pension and other plans), built from\nthe Department of Labor's public Form 5500 filings, plan years 2021 onward. A plan is identified by its sponsor's EIN\nplus its 3-digit plan number (pn).\n\nTypical flow: search_plans (by company name) -> get_plan with a result's ein and pn -> get_plan_history or\nget_plan_fees for detail. find_plan_changes lists recordkeeper switches, new plans, mergers and terminations across\nplans; a recordkeeper move caused by a sale of the old recordkeeper's business is its own event type\n(recordkeeper_sold), not a switch. list_prospects lists many plans at once by industry, place and size, with sponsor address, participants,\nassets and inception date. get_coverage (free) lists what the data covers and every limitation.\n\nEvery answer is JSON with `data` and `meta`; `meta.coverage_notes` says what that record can't show. In general: small\nplans (about 9 in 10) file no Schedule C, so they have no recordkeeper, advisor or fee breakdown; Schedule C omits\nproviders paid under $5,000, fees the employer pays directly (so many advisors don't appear) and fund expense ratios;\nthe investment lineup isn't in the data; participant counts use a new definition from plan year 2023; governmental\nplans (public universities, school districts, state pensions) and most church plans don't file a Form 5500, so\nthey aren't here. Each tool\nreturns what the Plan Data API's HTTP endpoint named in its description returns: hints that mention an endpoint\n(GET /search...) mean the matching tool here.\n\nNothing here is investment, legal, tax or fiduciary advice; the terms of use are at the API's /terms.\n\nPayments: each paid tool costs a fixed price per call (search_plans $0.01, get_plan $0.03, get_plan_history $0.25, get_plan_fees $0.10, find_plan_changes $0.25, list_prospects $0.25; get_coverage free), in USDC on Base (mainnet) (eip155:8453), with x402 over MCP. Called without payment, a paid tool returns isError with the x402 PaymentRequired object; an x402 MCP client signs the payment, sends it in _meta[\"x402/payment\"] and repeats the call. Errors and empty results aren't charged: the receipt in _meta[\"x402/payment-response\"] then shows amount 0 and no transaction. No crypto wallet? Buy prepaid credits by card at https://api.form5500data.com/buy and connect with the header 'Authorization: Bearer <key>': each paid tool then takes its price from the key's balance (same prices and rules), with no x402 needed. Simplest, in an app with MCP sign-in (Claude and others): add https://api.form5500data.com/connect instead of /mcp; the app opens a page where the person pays by card and is then connected, with no key. An app connected that way pays each tool from that balance automatically (nothing to send), and get_account (free) shows the balance and a link to add credit.",
+      "instructions": "Plan Data API: clean, multi-year data on U.S. retirement plans (401(k), 403(b), pension and other plans), built from\nthe Department of Labor's public Form 5500 filings, plan years 2021 onward. A plan is identified by its sponsor's EIN\nplus its 3-digit plan number (pn).\n\nTypical flow: search_plans (by company name) -> get_plan with a result's ein and pn -> get_plan_history or\nget_plan_fees for detail. get_plan_lineup lists the plan's funds with tickers, for about 1,040 large plans so far.\nfind_plan_changes lists recordkeeper switches, new plans, mergers and terminations across\nplans; a recordkeeper move caused by a sale of the old recordkeeper's business is its own event type\n(recordkeeper_sold), not a switch. list_prospects lists many plans at once by industry, place and size, with sponsor address, participants,\nassets and inception date. get_coverage (free) lists what the data covers and every limitation.\n\nEvery answer is JSON with `data` and `meta`; `meta.coverage_notes` says what that record can't show. In general: small\nplans (about 9 in 10) file no Schedule C, so they have no recordkeeper, advisor or fee breakdown; Schedule C omits\nproviders paid under $5,000, fees the employer pays directly (so many advisors don't appear) and fund expense ratios;\nthe investment lineup isn't in DOL's structured data, so get_plan_lineup reads it from the filing's PDF, for about\n1,040 large plans so far (plan year 2024); participant counts use a new definition from plan year 2023; governmental\nplans (public universities, school districts, state pensions) and most church plans don't file a Form 5500, so\nthey aren't here. Each tool\nreturns what the Plan Data API's HTTP endpoint named in its description returns: hints that mention an endpoint\n(GET /search...) mean the matching tool here.\n\nNothing here is investment, legal, tax or fiduciary advice; the terms of use are at the API's /terms.\n\nPayments: each paid tool costs a fixed price per call (search_plans $0.01, get_plan $0.03, get_plan_history $0.25, get_plan_fees $0.10, get_plan_lineup $0.25, find_plan_changes $0.25, list_prospects $0.25; get_coverage free), in USDC on Base (mainnet) (eip155:8453), with x402 over MCP. Called without payment, a paid tool returns isError with the x402 PaymentRequired object; an x402 MCP client signs the payment, sends it in _meta[\"x402/payment\"] and repeats the call. Errors and empty results aren't charged: the receipt in _meta[\"x402/payment-response\"] then shows amount 0 and no transaction. No crypto wallet? Buy prepaid credits by card at https://api.form5500data.com/buy and connect with the header 'Authorization: Bearer <key>': each paid tool then takes its price from the key's balance (same prices and rules), with no x402 needed. Simplest, in an app with MCP sign-in (Claude and others): add https://api.form5500data.com/connect instead of /mcp; the app opens a page where the person pays by card and is then connected, with no key. An app connected that way pays each tool from that balance automatically (nothing to send), and get_account (free) shows the balance and a link to add credit.",
       "tools": [
         {
           "name": "find_plan_changes",
@@ -477,6 +477,72 @@
           "digest": "sha256:6526bd22a58480eb87474312cf6593cd1ee6afd4ed61667051f1506911179231"
         },
         {
+          "name": "get_plan_lineup",
+          "title": "Investment lineup: every fund on the plan's Schedule of Assets, with ticker, name and dollars",
+          "description": "Every holding on the plan's Schedule of Assets (the list of investments attached to the Form 5500 as a\nPDF), largest first: each fund's ticker and name, share class, fund family, vehicle type (mutual fund,\ncollective trust, separate account...), year-end dollars and share of the holdings. `fields` asks for\ntickers only or names only.\n\nFund names and tickers are matched to the SEC's fund list, each with a `certainty`: sure, less sure or much\nless sure (check before relying on it). Collective trusts and other non-registered holdings have no ticker\n(`why_no_ticker` says why). A pooled separate account shows the fund it invests in, with `held_through`.\n`check` says how the reading tied to Schedule H and the schedule's printed total; `asset_mix` gives the\nSchedule H totals for context.\n\nLineups so far cover about 1,040 large plans (plan year 2024), chiefly plans with $1 billion or more. Other\nplans answer `lineup_not_available`, which isn't charged. Nor is a lineup whose `check.status` is review (the\nautomatic checks didn't fully confirm it), or a master trust plan's, which lists only the master trust\ninterest. For fees use `get_plan_fees`.\n\nPrice: $0.25 per call, paid in USDC on Base (mainnet) with x402 (MCP transport), or from card credits (an app signed in at /connect, or an 'Authorization: Bearer <key>' header). Without payment the tool returns the payment requirements. Errors and empty results aren't charged.\n\nSame data as GET /lineup of the Plan Data API.",
+          "inputSchema": {
+            "properties": {
+              "ein": {
+                "description": "Sponsor EIN (9 digits, dashes allowed).",
+                "title": "Ein",
+                "type": "string"
+              },
+              "fields": {
+                "default": "both",
+                "description": "What each fund carries: both (the default) = ticker and name; ticker = tickers only (the name fields are null); name = names only (the ticker is null).",
+                "enum": ["both", "ticker", "name"],
+                "title": "Fields",
+                "type": "string"
+              },
+              "plan_year": {
+                "anyOf": [
+                  {
+                    "maximum": 2100,
+                    "minimum": 2000,
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Plan year of the lineup. Default: the latest year with one.",
+                "title": "Plan Year"
+              },
+              "pn": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Plan number (1-999). Optional when the EIN has one plan.",
+                "title": "Pn"
+              }
+            },
+            "required": ["ein"],
+            "title": "get_plan_lineupArguments",
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Investment lineup: every fund on the plan's Schedule of Assets, with ticker, name and dollars"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:40e6fc1b31d915e7cc87f669af533a0327ee38cd390d9e29d72c4f45660abb09"
+        },
+        {
           "name": "list_prospects",
           "title": "Bulk list of plans by industry, place and size: address, industry, participants, assets, inception date, recordkeeper",
           "description": "A list of plans for prospecting or research, many per call: plan and sponsor name, mailing address,\nEIN and plan number, industry, plan type, effective (inception) date, participants and net assets at the\nend of the latest plan year, form type, recordkeeper and primary advisor last seen on Schedule C, and the\nfiling's ACK ID.\n\nFilter by industry, place (state, city, ZIP), size, plan type, effective date or recordkeeper. Large\n(long-form) filers only unless `filer_size` says otherwise. Use `search_plans` instead to find one company's\nplan by name, and `get_plan` for everything about one plan. Paging stops at offset 500: narrow the\nfilters to see more.\n\nPrice: $0.25 per call, paid in USDC on Base (mainnet) with x402 (MCP transport), or from card credits (an app signed in at /connect, or an 'Authorization: Bearer <key>' header). Without payment the tool returns the payment requirements. Errors and empty results aren't charged.\n\nSame data as GET /prospects of the Plan Data API.",
@@ -892,7 +958,7 @@
           "digest": "sha256:45068d2fc175afb38e5abab98397b5a4a4b3cddaaadde1b73f6ad82088f7769c"
         }
       ],
-      "digest": "sha256:68b558da1f6f219a853da376d38d72c574ef68af22a0c0d688fc337898382fbb"
+      "digest": "sha256:f5e1ba12fd9d14585853372122391928be1731c0cc7e1948684fc7e503615e69"
     }
   }
 }

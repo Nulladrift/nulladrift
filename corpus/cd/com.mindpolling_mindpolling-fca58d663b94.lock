@@ -39,7 +39,7 @@
           "listChanged": true
         }
       },
-      "instructions": "Mind Polling polls AI models the way pollsters poll people: a poll asks fixed questions of chosen models on a schedule and records every answer. Public polls need no key: list_polls, then get_results. For the account holder's own polls, the MCP client must send their API key as Authorization: Bearer mp_live_... (made at https://mindpolling.com/app/settings/api); call get_me first. create_poll is free; estimate_poll says what running costs; run_poll_now and start_poll spend the account's balance and must carry max_cost_usd, so confirm the amount with the person first. Results can be read as they stood at a past moment with as_of. Errors carry a code, a suggestion and next_steps. Guide: https://mindpolling.com/docs/api.md.",
+      "instructions": "Mind Polling polls AI models the way pollsters poll people: a poll asks fixed questions of chosen models on a schedule and records every answer. Public polls need no key: list_polls, then get_results. For someone without an account, price_poll prices a poll and draft_poll gives them a private link to it, filled in, which they open, check and start themselves. For the account holder's own polls, the MCP client must send their API key as Authorization: Bearer mp_live_... (made at https://mindpolling.com/app/settings/api); call get_me first. create_poll is free; estimate_poll says what running costs; run_poll_now and start_poll spend the account's balance and must carry max_cost_usd, so confirm the amount with the person first. Results can be read as they stood at a past moment with as_of. Errors carry a code, a suggestion and next_steps. When something blocks you or answers wrong, say so with give_feedback (never include a key or a private link). Guide: https://mindpolling.com/docs/api.md.",
       "tools": [
         {
           "name": "create_poll",
@@ -77,7 +77,7 @@
                   }
                 ],
                 "default": null,
-                "description": "The last day it runs, at most 90 days after start_date."
+                "description": "The last day it runs, on or after start_date. A poll may run for as long as its owner chooses."
               },
               "index_name": {
                 "default": "",
@@ -506,7 +506,7 @@
             "openWorld": false,
             "readOnly": false
           },
-          "digest": "sha256:14e9767fb9ed22c68e3fbc8237bd6782275940272c96b2850f24dddc1e52c75a"
+          "digest": "sha256:09a1c20e8d277c433f2c0a3abbaf6829b8285567f723fef3ef0e98216be61009"
         },
         {
           "name": "create_webhook",
@@ -600,6 +600,473 @@
             "readOnly": false
           },
           "digest": "sha256:f6d1f4f457b5b1e27a94fecaa88a12cf2f4724ccbc9cc10e099dc4b6f6897483"
+        },
+        {
+          "name": "draft_poll",
+          "title": "Draft a poll for a person",
+          "description": "Draft a poll for a person who has no Mind Polling account: send the definition create_poll takes, and get a private link that opens the builder with it filled in once they sign in or sign up. Nothing runs and nothing is charged until they save it, add funds and start it themselves. Tell them to check every question and model before saving. The link works for 30 days and opens the draft for anyone signed in who has it, so give it only to your person and never post it. A retried call makes a second draft, which simply expires. With an API key, use create_poll instead. (POST /api/v1/drafts)",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "change_note": {
+                "default": "",
+                "description": "Why this version differs from the last, kept in the poll's history.",
+                "maxLength": 500,
+                "type": "string"
+              },
+              "delivery": {
+                "description": "realtime (the default), or batch: scheduled runs ask the models that can be batched (Anthropic) through the providers' batch APIs, cheaper, with answers arriving up to 2 hours after the run starts; run_poll_now is always real time. OpenAI and Google models are asked at their flex tier, the same price, in real time, either way. Left out: unchanged.",
+                "enum": ["realtime", "batch"],
+                "type": "string"
+              },
+              "description": {
+                "default": "",
+                "description": "What the poll is for, or empty.",
+                "maxLength": 2000,
+                "type": "string"
+              },
+              "end_date": {
+                "anyOf": [
+                  {
+                    "format": "date",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "The last day it runs, on or after start_date. A poll may run for as long as its owner chooses."
+              },
+              "index_name": {
+                "default": "",
+                "description": "A name for the composite of the poll's Better-Worse index questions, such as \"AI Economy Index\"; empty for \"Composite Better-Worse index\". Shown only when two or more questions have the index.",
+                "maxLength": 80,
+                "type": "string"
+              },
+              "mentions": {
+                "description": "Free-text questions only: up to 6 names per question whose mention the results count, per model, as the share of answers that name each (and the share that name none of them), with a 95% range. A name counts once per answer, for any reason, warnings included. Left out: unchanged (none for a new poll).",
+                "items": {
+                  "properties": {
+                    "names": {
+                      "description": "Up to 6 names for the question, each with the other forms that count as it.",
+                      "items": {
+                        "properties": {
+                          "case": {
+                            "description": "as written (the default): a name that begins with a capital must begin with one in the reply, so a brand that is also a common word is not counted for the word; any: any case.",
+                            "enum": ["as written", "any"],
+                            "type": "string"
+                          },
+                          "name": {
+                            "description": "The name as it is usually written, such as Alaska Airlines.",
+                            "maxLength": 80,
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "variants": {
+                            "default": [],
+                            "description": "Other forms that count as it, such as Alaska Air.",
+                            "items": {
+                              "maxLength": 80,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "maxItems": 10,
+                            "type": "array"
+                          }
+                        },
+                        "required": ["name"],
+                        "type": "object"
+                      },
+                      "maxItems": 6,
+                      "minItems": 1,
+                      "type": "array"
+                    },
+                    "question": {
+                      "description": "The question's position, from 0.",
+                      "maximum": 9007199254740991,
+                      "minimum": 0,
+                      "type": "integer"
+                    }
+                  },
+                  "required": ["names", "question"],
+                  "type": "object"
+                },
+                "maxItems": 50,
+                "type": "array"
+              },
+              "panel": {
+                "description": "1 to 30 models to ask, each once.",
+                "items": {
+                  "properties": {
+                    "model": {
+                      "description": "The model id, as list_models gives it.",
+                      "maxLength": 120,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "provider": {
+                      "description": "The provider, as list_models gives it.",
+                      "enum": ["anthropic", "openai", "google", "xai", "openrouter", "stub"],
+                      "type": "string"
+                    },
+                    "reasoning_effort": {
+                      "anyOf": [
+                        {
+                          "maxLength": 20,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "default": null,
+                      "description": "The reasoning setting to send, or null for the model's lowest."
+                    },
+                    "search": {
+                      "default": false,
+                      "description": "Whether the model may search the web, at the poll's search_depth. Only where list_models offers that depth.",
+                      "type": "boolean"
+                    },
+                    "temperature": {
+                      "anyOf": [
+                        {
+                          "maximum": 2,
+                          "minimum": 0,
+                          "type": "number"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "default": null,
+                      "description": "The temperature to send, or null for the provider's default."
+                    }
+                  },
+                  "required": ["model", "provider"],
+                  "type": "object"
+                },
+                "maxItems": 30,
+                "minItems": 1,
+                "type": "array"
+              },
+              "questions": {
+                "description": "1 to 50 questions, in order.",
+                "items": {
+                  "properties": {
+                    "answer_type": {
+                      "description": "choice (pick one option), scale (a whole number between scale_min and scale_max), number, or free_text.",
+                      "enum": ["choice", "scale", "number", "free_text"],
+                      "type": "string"
+                    },
+                    "measure": {
+                      "anyOf": [
+                        {
+                          "enum": ["diffusion"],
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "diffusion: results also show a -100 to +100 Better-Worse index, the share answering Better less the share answering Worse (0 is balanced: as many Better as Worse answers, or all About the same). Only on a choice question whose options are exactly Better, About the same and Worse, in that order; null otherwise."
+                    },
+                    "number_max": {
+                      "default": null,
+                      "description": "Number questions: the highest answer accepted, or null.",
+                      "type": ["number", "null"]
+                    },
+                    "number_min": {
+                      "default": null,
+                      "description": "Number questions: the lowest answer accepted, or null.",
+                      "type": ["number", "null"]
+                    },
+                    "number_unit": {
+                      "default": "",
+                      "description": "Number questions: the unit, such as US dollars or %, or empty.",
+                      "maxLength": 20,
+                      "type": "string"
+                    },
+                    "options": {
+                      "default": [],
+                      "description": "Choice questions: 2 to 12 options, shown in a fresh random order on every call.",
+                      "items": {
+                        "maxLength": 300,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "maxItems": 12,
+                      "type": "array"
+                    },
+                    "scale_max": {
+                      "anyOf": [
+                        {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "default": null,
+                      "description": "Scale questions: the highest value, at most 20 above scale_min."
+                    },
+                    "scale_max_label": {
+                      "default": "",
+                      "description": "Scale questions: what the highest value means.",
+                      "maxLength": 60,
+                      "type": "string"
+                    },
+                    "scale_min": {
+                      "anyOf": [
+                        {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "default": null,
+                      "description": "Scale questions: the lowest value."
+                    },
+                    "scale_min_label": {
+                      "default": "",
+                      "description": "Scale questions: what the lowest value means.",
+                      "maxLength": 60,
+                      "type": "string"
+                    },
+                    "short_name": {
+                      "default": "",
+                      "description": "A short name for the question, such as Prices or Jobs, used where the page names it in brief; empty names it Question N. Never sent to a model.",
+                      "maxLength": 40,
+                      "type": "string"
+                    },
+                    "variations": {
+                      "description": "1 to 100 wordings of the question; each is asked samples_per_cell times of every model.",
+                      "items": {
+                        "properties": {
+                          "label": {
+                            "description": "A short name for this wording, shown beside its results.",
+                            "maxLength": 80,
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "place": {
+                            "anyOf": [
+                              {
+                                "description": "The place this wording asks about, from Google Places. Models never see it; the wording's text names the place.",
+                                "properties": {
+                                  "country": {
+                                    "anyOf": [
+                                      {
+                                        "pattern": "^[A-Z]{2}$",
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ],
+                                    "description": "The ISO 3166-1 country code, such as US, or null."
+                                  },
+                                  "id": {
+                                    "description": "Google's place id.",
+                                    "pattern": "^[A-Za-z0-9_-]{10,1000}$",
+                                    "type": "string"
+                                  },
+                                  "kind": {
+                                    "description": "country, region (a state or province), county, city, or postal_code (a ZIP or postal code, the finest).",
+                                    "enum": ["country", "region", "county", "city", "postal_code"],
+                                    "type": "string"
+                                  },
+                                  "name": {
+                                    "description": "The place's name, as Google formats its address, such as \"Alaska, USA\".",
+                                    "maxLength": 120,
+                                    "minLength": 1,
+                                    "type": "string"
+                                  },
+                                  "region": {
+                                    "anyOf": [
+                                      {
+                                        "pattern": "^[A-Z]{2}-[A-Z0-9]{1,3}$",
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ],
+                                    "description": "The ISO 3166-2 code of the state or province it is in, such as US-AK, or null."
+                                  }
+                                },
+                                "required": ["country", "id", "kind", "name", "region"],
+                                "type": "object"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "system_prompt": {
+                            "anyOf": [
+                              {
+                                "maxLength": 4000,
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ],
+                            "description": "A system prompt for this wording alone, in place of the poll's; null or empty uses the poll's."
+                          },
+                          "text": {
+                            "description": "The question exactly as the model is asked it.",
+                            "maxLength": 4000,
+                            "minLength": 1,
+                            "type": "string"
+                          }
+                        },
+                        "required": ["label", "text"],
+                        "type": "object"
+                      },
+                      "maxItems": 100,
+                      "minItems": 1,
+                      "type": "array"
+                    }
+                  },
+                  "required": ["answer_type", "variations"],
+                  "type": "object"
+                },
+                "maxItems": 50,
+                "minItems": 1,
+                "type": "array"
+              },
+              "restored_from": {
+                "anyOf": [
+                  {
+                    "maximum": 9007199254740991,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "The earlier version this one was started from, or null."
+              },
+              "run_time": {
+                "anyOf": [
+                  {
+                    "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "The time of day it runs, HH:MM in time_zone; null runs from the moment it is started."
+              },
+              "run_weekday": {
+                "anyOf": [
+                  {
+                    "maximum": 6,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Weekly polls: the day it runs, 0 = Sunday."
+              },
+              "sample_percent": {
+                "description": "The share of the poll's wordings each scheduled run asks, 1 to 100 percent; every wording is asked once before any is asked again. Left out: unchanged (100 for a new poll). run_poll_now asks this share with share=true, every wording otherwise.",
+                "maximum": 100,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "samples_per_cell": {
+                "description": "How many times each model is asked each wording per run, 1 to 50: more samples, narrower ranges.",
+                "maximum": 50,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "schedule": {
+                "description": "once, daily or weekly.",
+                "enum": ["once", "daily", "weekly"],
+                "type": "string"
+              },
+              "search_depth": {
+                "default": 1,
+                "description": "Searches allowed per answer, for every model with search on.",
+                "maximum": 3,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "start_date": {
+                "anyOf": [
+                  {
+                    "format": "date",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "The first day it runs, YYYY-MM-DD in time_zone; needs run_time."
+              },
+              "system_prompt": {
+                "default": "",
+                "description": "The system prompt every wording is asked under unless it has its own; empty for none.",
+                "maxLength": 4000,
+                "type": "string"
+              },
+              "time_zone": {
+                "default": "America/Anchorage",
+                "description": "The IANA time zone of its dates and run time.",
+                "maxLength": 64,
+                "minLength": 1,
+                "type": "string"
+              },
+              "title": {
+                "description": "The poll's title.",
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              },
+              "tracked_domains": {
+                "description": "Up to 5 sites (domains such as example.com; a scheme, path or www. is dropped). The results count, per model, how many answers that searched read or cited each, or a subdomain of it, beside how many searched at all. Left out: unchanged (none for a new poll).",
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 5,
+                "type": "array"
+              }
+            },
+            "required": ["panel", "questions", "samples_per_cell", "schedule", "title"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": false,
+            "openWorldHint": false,
+            "readOnlyHint": false,
+            "title": "Draft a poll for a person"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": false,
+            "openWorld": false,
+            "readOnly": false
+          },
+          "digest": "sha256:43c09e65bb478eb521f580aef3ff8b55b1ecc1635a53e7010c89bec9c1d7efe5"
         },
         {
           "name": "estimate_poll",
@@ -812,6 +1279,48 @@
             "readOnly": true
           },
           "digest": "sha256:22370928fdf867faf5eec37ecb16fae392cf5c3d2cdb9f74d055976f8f1ddc3e"
+        },
+        {
+          "name": "give_feedback",
+          "title": "Tell us where you got stuck",
+          "description": "Tell the people who run Mind Polling where you got stuck, what answered wrong, what is missing, or what helped. A person reads every message; no model does. Use it when something blocks you or answers wrong, as it happens: what you were trying to do, what you called and what came back. With a key the account is recorded; without one nothing identifies you. Never include a key, a token, a private link or anything private about your person. (POST /api/v1/feedback)",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "category": {
+                "description": "stuck: something blocked you. wrong: an answer was wrong or misleading. missing: something you needed is not offered. helped: something worked well.",
+                "enum": ["stuck", "wrong", "missing", "helped"],
+                "type": "string"
+              },
+              "message": {
+                "description": "What you were trying to do, what you called, and what got in the way or helped. Never a key, a token or a private link.",
+                "maxLength": 2000,
+                "minLength": 1,
+                "type": "string"
+              },
+              "operation": {
+                "description": "The operation (MCP tool) it is about, such as create_poll.",
+                "pattern": "^[a-z_]{2,60}$",
+                "type": "string"
+              }
+            },
+            "required": ["message"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": false,
+            "openWorldHint": false,
+            "readOnlyHint": false,
+            "title": "Tell us where you got stuck"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": false,
+            "openWorld": false,
+            "readOnly": false
+          },
+          "digest": "sha256:e3423e974874eb745146f61e20b5a0ea8d5dc3e53ab1a02ab1fd313209085191"
         },
         {
           "name": "list_calls",
@@ -1127,6 +1636,473 @@
           "digest": "sha256:094bb94b3b3f554ee3d2af7d622e026fedaeb2837dab47eb755e1a8f0846484b"
         },
         {
+          "name": "price_poll",
+          "title": "Price a poll",
+          "description": "What a poll would cost per run and per month, typical and at the 95th percentile, from the same prices the builder shows and the worker charges by. Send the definition create_poll and draft_poll take; it saves nothing and needs no key, so an agent can answer what a poll would cost before its person has an account. It does not say what a run holds from the balance or what starting the poll commits: those need a saved poll (estimate_poll). (POST /api/v1/estimate)",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "properties": {
+              "change_note": {
+                "default": "",
+                "description": "Why this version differs from the last, kept in the poll's history.",
+                "maxLength": 500,
+                "type": "string"
+              },
+              "delivery": {
+                "description": "realtime (the default), or batch: scheduled runs ask the models that can be batched (Anthropic) through the providers' batch APIs, cheaper, with answers arriving up to 2 hours after the run starts; run_poll_now is always real time. OpenAI and Google models are asked at their flex tier, the same price, in real time, either way. Left out: unchanged.",
+                "enum": ["realtime", "batch"],
+                "type": "string"
+              },
+              "description": {
+                "default": "",
+                "description": "What the poll is for, or empty.",
+                "maxLength": 2000,
+                "type": "string"
+              },
+              "end_date": {
+                "anyOf": [
+                  {
+                    "format": "date",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "The last day it runs, on or after start_date. A poll may run for as long as its owner chooses."
+              },
+              "index_name": {
+                "default": "",
+                "description": "A name for the composite of the poll's Better-Worse index questions, such as \"AI Economy Index\"; empty for \"Composite Better-Worse index\". Shown only when two or more questions have the index.",
+                "maxLength": 80,
+                "type": "string"
+              },
+              "mentions": {
+                "description": "Free-text questions only: up to 6 names per question whose mention the results count, per model, as the share of answers that name each (and the share that name none of them), with a 95% range. A name counts once per answer, for any reason, warnings included. Left out: unchanged (none for a new poll).",
+                "items": {
+                  "properties": {
+                    "names": {
+                      "description": "Up to 6 names for the question, each with the other forms that count as it.",
+                      "items": {
+                        "properties": {
+                          "case": {
+                            "description": "as written (the default): a name that begins with a capital must begin with one in the reply, so a brand that is also a common word is not counted for the word; any: any case.",
+                            "enum": ["as written", "any"],
+                            "type": "string"
+                          },
+                          "name": {
+                            "description": "The name as it is usually written, such as Alaska Airlines.",
+                            "maxLength": 80,
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "variants": {
+                            "default": [],
+                            "description": "Other forms that count as it, such as Alaska Air.",
+                            "items": {
+                              "maxLength": 80,
+                              "minLength": 1,
+                              "type": "string"
+                            },
+                            "maxItems": 10,
+                            "type": "array"
+                          }
+                        },
+                        "required": ["name"],
+                        "type": "object"
+                      },
+                      "maxItems": 6,
+                      "minItems": 1,
+                      "type": "array"
+                    },
+                    "question": {
+                      "description": "The question's position, from 0.",
+                      "maximum": 9007199254740991,
+                      "minimum": 0,
+                      "type": "integer"
+                    }
+                  },
+                  "required": ["names", "question"],
+                  "type": "object"
+                },
+                "maxItems": 50,
+                "type": "array"
+              },
+              "panel": {
+                "description": "1 to 30 models to ask, each once.",
+                "items": {
+                  "properties": {
+                    "model": {
+                      "description": "The model id, as list_models gives it.",
+                      "maxLength": 120,
+                      "minLength": 1,
+                      "type": "string"
+                    },
+                    "provider": {
+                      "description": "The provider, as list_models gives it.",
+                      "enum": ["anthropic", "openai", "google", "xai", "openrouter", "stub"],
+                      "type": "string"
+                    },
+                    "reasoning_effort": {
+                      "anyOf": [
+                        {
+                          "maxLength": 20,
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "default": null,
+                      "description": "The reasoning setting to send, or null for the model's lowest."
+                    },
+                    "search": {
+                      "default": false,
+                      "description": "Whether the model may search the web, at the poll's search_depth. Only where list_models offers that depth.",
+                      "type": "boolean"
+                    },
+                    "temperature": {
+                      "anyOf": [
+                        {
+                          "maximum": 2,
+                          "minimum": 0,
+                          "type": "number"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "default": null,
+                      "description": "The temperature to send, or null for the provider's default."
+                    }
+                  },
+                  "required": ["model", "provider"],
+                  "type": "object"
+                },
+                "maxItems": 30,
+                "minItems": 1,
+                "type": "array"
+              },
+              "questions": {
+                "description": "1 to 50 questions, in order.",
+                "items": {
+                  "properties": {
+                    "answer_type": {
+                      "description": "choice (pick one option), scale (a whole number between scale_min and scale_max), number, or free_text.",
+                      "enum": ["choice", "scale", "number", "free_text"],
+                      "type": "string"
+                    },
+                    "measure": {
+                      "anyOf": [
+                        {
+                          "enum": ["diffusion"],
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "description": "diffusion: results also show a -100 to +100 Better-Worse index, the share answering Better less the share answering Worse (0 is balanced: as many Better as Worse answers, or all About the same). Only on a choice question whose options are exactly Better, About the same and Worse, in that order; null otherwise."
+                    },
+                    "number_max": {
+                      "default": null,
+                      "description": "Number questions: the highest answer accepted, or null.",
+                      "type": ["number", "null"]
+                    },
+                    "number_min": {
+                      "default": null,
+                      "description": "Number questions: the lowest answer accepted, or null.",
+                      "type": ["number", "null"]
+                    },
+                    "number_unit": {
+                      "default": "",
+                      "description": "Number questions: the unit, such as US dollars or %, or empty.",
+                      "maxLength": 20,
+                      "type": "string"
+                    },
+                    "options": {
+                      "default": [],
+                      "description": "Choice questions: 2 to 12 options, shown in a fresh random order on every call.",
+                      "items": {
+                        "maxLength": 300,
+                        "minLength": 1,
+                        "type": "string"
+                      },
+                      "maxItems": 12,
+                      "type": "array"
+                    },
+                    "scale_max": {
+                      "anyOf": [
+                        {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "default": null,
+                      "description": "Scale questions: the highest value, at most 20 above scale_min."
+                    },
+                    "scale_max_label": {
+                      "default": "",
+                      "description": "Scale questions: what the highest value means.",
+                      "maxLength": 60,
+                      "type": "string"
+                    },
+                    "scale_min": {
+                      "anyOf": [
+                        {
+                          "maximum": 9007199254740991,
+                          "minimum": -9007199254740991,
+                          "type": "integer"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "default": null,
+                      "description": "Scale questions: the lowest value."
+                    },
+                    "scale_min_label": {
+                      "default": "",
+                      "description": "Scale questions: what the lowest value means.",
+                      "maxLength": 60,
+                      "type": "string"
+                    },
+                    "short_name": {
+                      "default": "",
+                      "description": "A short name for the question, such as Prices or Jobs, used where the page names it in brief; empty names it Question N. Never sent to a model.",
+                      "maxLength": 40,
+                      "type": "string"
+                    },
+                    "variations": {
+                      "description": "1 to 100 wordings of the question; each is asked samples_per_cell times of every model.",
+                      "items": {
+                        "properties": {
+                          "label": {
+                            "description": "A short name for this wording, shown beside its results.",
+                            "maxLength": 80,
+                            "minLength": 1,
+                            "type": "string"
+                          },
+                          "place": {
+                            "anyOf": [
+                              {
+                                "description": "The place this wording asks about, from Google Places. Models never see it; the wording's text names the place.",
+                                "properties": {
+                                  "country": {
+                                    "anyOf": [
+                                      {
+                                        "pattern": "^[A-Z]{2}$",
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ],
+                                    "description": "The ISO 3166-1 country code, such as US, or null."
+                                  },
+                                  "id": {
+                                    "description": "Google's place id.",
+                                    "pattern": "^[A-Za-z0-9_-]{10,1000}$",
+                                    "type": "string"
+                                  },
+                                  "kind": {
+                                    "description": "country, region (a state or province), county, city, or postal_code (a ZIP or postal code, the finest).",
+                                    "enum": ["country", "region", "county", "city", "postal_code"],
+                                    "type": "string"
+                                  },
+                                  "name": {
+                                    "description": "The place's name, as Google formats its address, such as \"Alaska, USA\".",
+                                    "maxLength": 120,
+                                    "minLength": 1,
+                                    "type": "string"
+                                  },
+                                  "region": {
+                                    "anyOf": [
+                                      {
+                                        "pattern": "^[A-Z]{2}-[A-Z0-9]{1,3}$",
+                                        "type": "string"
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ],
+                                    "description": "The ISO 3166-2 code of the state or province it is in, such as US-AK, or null."
+                                  }
+                                },
+                                "required": ["country", "id", "kind", "name", "region"],
+                                "type": "object"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ]
+                          },
+                          "system_prompt": {
+                            "anyOf": [
+                              {
+                                "maxLength": 4000,
+                                "type": "string"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ],
+                            "description": "A system prompt for this wording alone, in place of the poll's; null or empty uses the poll's."
+                          },
+                          "text": {
+                            "description": "The question exactly as the model is asked it.",
+                            "maxLength": 4000,
+                            "minLength": 1,
+                            "type": "string"
+                          }
+                        },
+                        "required": ["label", "text"],
+                        "type": "object"
+                      },
+                      "maxItems": 100,
+                      "minItems": 1,
+                      "type": "array"
+                    }
+                  },
+                  "required": ["answer_type", "variations"],
+                  "type": "object"
+                },
+                "maxItems": 50,
+                "minItems": 1,
+                "type": "array"
+              },
+              "restored_from": {
+                "anyOf": [
+                  {
+                    "maximum": 9007199254740991,
+                    "minimum": 1,
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "The earlier version this one was started from, or null."
+              },
+              "run_time": {
+                "anyOf": [
+                  {
+                    "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "The time of day it runs, HH:MM in time_zone; null runs from the moment it is started."
+              },
+              "run_weekday": {
+                "anyOf": [
+                  {
+                    "maximum": 6,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "Weekly polls: the day it runs, 0 = Sunday."
+              },
+              "sample_percent": {
+                "description": "The share of the poll's wordings each scheduled run asks, 1 to 100 percent; every wording is asked once before any is asked again. Left out: unchanged (100 for a new poll). run_poll_now asks this share with share=true, every wording otherwise.",
+                "maximum": 100,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "samples_per_cell": {
+                "description": "How many times each model is asked each wording per run, 1 to 50: more samples, narrower ranges.",
+                "maximum": 50,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "schedule": {
+                "description": "once, daily or weekly.",
+                "enum": ["once", "daily", "weekly"],
+                "type": "string"
+              },
+              "search_depth": {
+                "default": 1,
+                "description": "Searches allowed per answer, for every model with search on.",
+                "maximum": 3,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "start_date": {
+                "anyOf": [
+                  {
+                    "format": "date",
+                    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$",
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "default": null,
+                "description": "The first day it runs, YYYY-MM-DD in time_zone; needs run_time."
+              },
+              "system_prompt": {
+                "default": "",
+                "description": "The system prompt every wording is asked under unless it has its own; empty for none.",
+                "maxLength": 4000,
+                "type": "string"
+              },
+              "time_zone": {
+                "default": "America/Anchorage",
+                "description": "The IANA time zone of its dates and run time.",
+                "maxLength": 64,
+                "minLength": 1,
+                "type": "string"
+              },
+              "title": {
+                "description": "The poll's title.",
+                "maxLength": 200,
+                "minLength": 1,
+                "type": "string"
+              },
+              "tracked_domains": {
+                "description": "Up to 5 sites (domains such as example.com; a scheme, path or www. is dropped). The results count, per model, how many answers that searched read or cited each, or a subdomain of it, beside how many searched at all. Left out: unchanged (none for a new poll).",
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 5,
+                "type": "array"
+              }
+            },
+            "required": ["panel", "questions", "samples_per_cell", "schedule", "title"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Price a poll"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:7624e1ac423e36947842f01fb326a3a7ac26074822a20db8c24e6aafa811e07a"
+        },
+        {
           "name": "revoke_key",
           "title": "Revoke this key",
           "description": "Revoke the key making this request. It stops working at once and cannot be restored; polls it started stop at their next run. Use it when a key has leaked and you do not need a replacement. (DELETE /api/v1/me/key)",
@@ -1329,7 +2305,7 @@
                   }
                 ],
                 "default": null,
-                "description": "The last day it runs, at most 90 days after start_date."
+                "description": "The last day it runs, on or after start_date. A poll may run for as long as its owner chooses."
               },
               "id": {
                 "description": "The poll's id, or its public address (slug).",
@@ -1764,7 +2740,7 @@
             "openWorld": false,
             "readOnly": false
           },
-          "digest": "sha256:b93c0e1e5afd5b25719c924e580cff94c8d03284866bfdac8c19eb5522ef2f6d"
+          "digest": "sha256:c91e29c6b6482cddf425b9c0e6ddff393263125c46d1141fcb27850614f56a73"
         }
       ],
       "resources": [
@@ -1779,6 +2755,11 @@
       ],
       "prompts": [
         {
+          "name": "draft_a_poll_for_me",
+          "description": "Draft a poll for me to open, check and start, without an account or key.",
+          "digest": "sha256:792d226503a151df6c26bc5aa8a54807010885d37df69348ae9c2e69403f8875"
+        },
+        {
           "name": "read_public_poll",
           "description": "Find a public poll and summarise what each model answered, with the 95% ranges.",
           "digest": "sha256:16f6b93a3fa27c3dc372dbcfc4677434af706a648fc63a141521f453c9decc8e"
@@ -1789,7 +2770,7 @@
           "digest": "sha256:b9151ef421a8c36e67698df9addfaef9e32bb95dced980bafcd25cf685be9ea0"
         }
       ],
-      "digest": "sha256:8b698f3638803bf773687b426ab2b75409a43952a528a25168ced9a4eaaa17fb"
+      "digest": "sha256:a943b76d3f3defef0f68746f0a76e9339e62c7300f7e7213ef1ac1b50d682cee"
     }
   }
 }

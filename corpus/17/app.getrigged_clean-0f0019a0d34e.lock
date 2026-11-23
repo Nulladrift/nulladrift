@@ -30,7 +30,7 @@
       "tools": [
         {
           "name": "create_upload",
-          "description": "Get a signed PUT for a local file. Upload exactly the declared byte count, then pass upload_id to enhance_media. For a keyless upload, upload_id is sufficient. Keep the ID and upload URL private.",
+          "description": "Get a signed PUT for a local file. Upload exactly the declared byte count, then pass upload_id to enhance_media. Keep that upload_id for retries of the same job submission. For a keyless upload, upload_id is sufficient. Keep the ID and upload URL private.",
           "inputSchema": {
             "$schema": "https://json-schema.org/draft/2020-12/schema",
             "additionalProperties": false,
@@ -108,14 +108,22 @@
             "openWorld": false,
             "readOnly": false
           },
-          "digest": "sha256:8620cfd33699a533388fb87bd102ee0bfc55e6f968db346286758d708d79e480"
+          "digest": "sha256:d63e2d63d3456c7e68828109e4a2c97207aaca3e9c6cc55a8dcc865ce6c07171"
         },
         {
           "name": "enhance_media",
-          "description": "Clean speech in a video or audio file. Submit a public HTTPS URL or a completed upload, then poll get_job if it is still running. For a keyless upload, pass upload_id and omit anonymous_session. Keyless requests preview the first minute. Paid jobs may spend credits. Omit idempotency_key for normal use. Rigged Clean reuses the job for the same source and options within 10 minutes under the same API key or anonymous session.",
+          "description": "Clean speech in a video or audio file. Submit a public HTTPS URL or a completed upload. For a keyless upload, pass upload_id and omit anonymous_session. Omit preview or set it to true for a free preview of the first minute. Paid jobs require preview:false, a bearer key and max_cost_micro_usd. Save the upload_id, job_id and a caller-generated idempotency_key. Before resubmitting, check get_job for the receipt or charge if you have a job_id. If the submission response was lost, retry the same inputs, upload_id, idempotency_key and credentials within 24 hours.",
           "inputSchema": {
             "$schema": "https://json-schema.org/draft/2020-12/schema",
             "additionalProperties": false,
+            "if": {
+              "properties": {
+                "preview": {
+                  "const": false
+                }
+              },
+              "required": ["preview"]
+            },
             "properties": {
               "anonymous_session": {
                 "description": "Optional keyless session credential for grouping calls and retries. Omit it when submitting an anonymous upload by upload_id or reading an anonymous job by job_id.",
@@ -128,7 +136,7 @@
                 "type": "integer"
               },
               "idempotency_key": {
-                "description": "Optional. Omit for normal use. Rigged Clean deduplicates the same source and options for 10 minutes under the same API key or anonymous session. For explicit retries within 24 hours, reuse the same key with identical job parameters.",
+                "description": "Optional. Generate and save a key before submitting. Reuse it with the same source and job options and the same API key or anonymous session for retries within 24 hours. Automatic deduplication covers the same source and options for 10 minutes.",
                 "pattern": "^[\\x21-\\x7e]{1,128}$",
                 "type": "string"
               },
@@ -136,14 +144,25 @@
                 "enum": ["-14", "-16", "-23", "none"],
                 "type": "string"
               },
+              "max_cost_micro_usd": {
+                "description": "Required when preview is false. Maximum charge in millionths of a US dollar.",
+                "maximum": 9007199254740991,
+                "minimum": 0,
+                "type": "integer"
+              },
               "max_cost_usd": {
-                "description": "Maximum charge in US dollars.",
+                "description": "Optional dollar ceiling. If supplied with max_cost_micro_usd, the lower ceiling applies.",
                 "maximum": 9007199254.740992,
                 "minimum": 0,
                 "type": "number"
               },
               "preview": {
+                "description": "Omit or set true for a free preview. Set false for a paid job.",
                 "type": "boolean"
+              },
+              "ref": {
+                "description": "Optional campaign tag. Trimmed, lowercased and kept if it matches [a-z0-9._-]{1,32}. An existing attribution cookie takes precedence.",
+                "type": "string"
               },
               "source_url": {
                 "description": "Public HTTPS URL. Supply exactly one source.",
@@ -157,7 +176,7 @@
                 "type": "number"
               },
               "tier": {
-                "enum": ["clean", "studio"],
+                "const": "clean",
                 "type": "string"
               },
               "upload_id": {
@@ -172,6 +191,9 @@
                 "minimum": 0,
                 "type": "integer"
               }
+            },
+            "then": {
+              "required": ["max_cost_micro_usd"]
             },
             "type": "object"
           },
@@ -208,6 +230,11 @@
                 "required": ["balance_micro_usd", "charged_micro_usd", "charged_usd", "rail"],
                 "type": "object"
               },
+              "checkout_url": {
+                "maxLength": 4096,
+                "pattern": "^[Hh][Tt][Tt][Pp][Ss]?:",
+                "type": "string"
+              },
               "download_curl": {
                 "type": "string"
               },
@@ -221,6 +248,13 @@
                     "enum": ["invalid_request", "unauthorized", "insufficient_balance", "over_max_cost", "source_forbidden", "idempotency_conflict", "file_too_large", "source_unreachable", "unsupported_media", "no_audio", "media_too_long", "no_speech", "rate_limited", "free_limit_reached", "free_budget_exhausted", "capacity_paused", "engine_failed", "guard_failed", "timeout", "payment_failed", "checkout_unavailable", "tier_unavailable"],
                     "type": "string"
                   },
+                  "details": {
+                    "additionalProperties": {},
+                    "propertyNames": {
+                      "type": "string"
+                    },
+                    "type": "object"
+                  },
                   "message": {
                     "type": "string"
                   },
@@ -231,7 +265,7 @@
                     "type": "boolean"
                   }
                 },
-                "required": ["code", "message", "next_action", "retryable"],
+                "required": ["code", "details", "message", "next_action", "retryable"],
                 "type": "object"
               },
               "full_file_price_micro_usd": {
@@ -411,7 +445,7 @@
             "openWorld": true,
             "readOnly": false
           },
-          "digest": "sha256:7c2468967257b2fbe1e3ef3cc255aa0fa65d22e7238bac58397f372bbd0a24a5"
+          "digest": "sha256:34c43ac4f07e0c923fd076f4784947c10282180c4ae91e260ed6ff71937dd189"
         },
         {
           "name": "get_account",
@@ -427,6 +461,10 @@
               },
               "pack": {
                 "enum": ["p5", "p20"],
+                "type": "string"
+              },
+              "ref": {
+                "description": "Optional campaign tag. Trimmed, lowercased and kept if it matches [a-z0-9._-]{1,32}. An existing attribution cookie takes precedence.",
                 "type": "string"
               }
             },
@@ -663,7 +701,7 @@
                     "type": "object"
                   }
                 },
-                "required": ["packs", "preview", "price_version", "tiers", "x402"],
+                "required": ["checkout", "packs", "preview", "price_version", "tiers", "x402"],
                 "type": "object"
               }
             },
@@ -680,11 +718,11 @@
             "openWorld": true,
             "readOnly": true
           },
-          "digest": "sha256:a083fcb6fa0ff051ef9df4a3f8b6a2121695e85bf258ba498954c2f7422a3001"
+          "digest": "sha256:bb373c1c1a42a21dd5b3e29c973aa25e9a08bb162e5df13bff45d528ebd59877"
         },
         {
           "name": "get_job",
-          "description": "Read an existing job by job_id. For a keyless job, job_id is sufficient, so keep it private. Use the same API key for a keyed job. Optionally wait for a terminal state. A completed result includes the receipt and its download command.",
+          "description": "Read an existing job by job_id. For a keyless job, job_id is sufficient, so keep it private. Use the same API key for a keyed job. Optionally wait for a terminal state. Check the receipt and billing charge here before resubmitting. A completed result includes its download command.",
           "inputSchema": {
             "$schema": "https://json-schema.org/draft/2020-12/schema",
             "additionalProperties": false,
@@ -741,6 +779,11 @@
                 "required": ["balance_micro_usd", "charged_micro_usd", "charged_usd", "rail"],
                 "type": "object"
               },
+              "checkout_url": {
+                "maxLength": 4096,
+                "pattern": "^[Hh][Tt][Tt][Pp][Ss]?:",
+                "type": "string"
+              },
               "download_curl": {
                 "type": "string"
               },
@@ -754,6 +797,13 @@
                     "enum": ["invalid_request", "unauthorized", "insufficient_balance", "over_max_cost", "source_forbidden", "idempotency_conflict", "file_too_large", "source_unreachable", "unsupported_media", "no_audio", "media_too_long", "no_speech", "rate_limited", "free_limit_reached", "free_budget_exhausted", "capacity_paused", "engine_failed", "guard_failed", "timeout", "payment_failed", "checkout_unavailable", "tier_unavailable"],
                     "type": "string"
                   },
+                  "details": {
+                    "additionalProperties": {},
+                    "propertyNames": {
+                      "type": "string"
+                    },
+                    "type": "object"
+                  },
                   "message": {
                     "type": "string"
                   },
@@ -764,7 +814,7 @@
                     "type": "boolean"
                   }
                 },
-                "required": ["code", "message", "next_action", "retryable"],
+                "required": ["code", "details", "message", "next_action", "retryable"],
                 "type": "object"
               },
               "full_file_price_micro_usd": {
@@ -942,10 +992,10 @@
             "openWorld": false,
             "readOnly": true
           },
-          "digest": "sha256:1967a1b2530de3788e78f97749ff9f361ffbcff56b9c5708c1b5d644b7e28035"
+          "digest": "sha256:73beb5c8f0663401f06327c18d99a52d52becb859abf0ffff42cd25e4b986862"
         }
       ],
-      "digest": "sha256:291b48e559012d1e4abb6f8e6c09b310667710576411223a5766b750fb2ed880"
+      "digest": "sha256:29fddee058d86e28a805bbddfe74951929b5508c70452fddcb728323d23ee4ae"
     }
   }
 }
