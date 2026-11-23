@@ -135,7 +135,7 @@ rule ids, and as the `kind` field in opt-in telemetry.
 | ---- | ---- |
 | `server.added` / `server.removed` | |
 | `server.renamed` | See §7. |
-| `server.transport.changed` | Same name, different command or URL. Treated as identity, not a field edit. |
+| `server.transport.changed` | Same name, different command or URL. Treated as identity, not a field edit. High, except a command that now names an exact release of the same package, which is low. See §9. |
 | `server.identity.changed` | `serverInfo` moved, the postmark-mcp signal. |
 | `server.artifact.changed` | The package, image or file behind the server is a different release. Medium. See §9. |
 | `server.artifact.substituted` | The same npm version now has different bytes. High: npm never republishes a version. See §9. |
@@ -247,6 +247,18 @@ tag is how images are versioned even though one can be moved; nor is a local fil
 `npx` name the project has installed, since that copy is what runs. It never affects the exit
 code. It is in the human output and in SARIF as `server.artifact.floating`, a note; `--json` has
 no field for it.
+
+**Naming the release is not a different server.** Writing the version into the command edits
+the command, and an edited command is `server.transport.changed`, high, because a name pointing
+at a different command is a different server. When the only difference is which release of the
+same package the command asks for, it is low instead: provenance names the same package on both
+sides; every other argument, the environment and the working directory are unchanged; and the new
+spelling names one exact release (`name@2.2.1`, `name==2026.11.18`, `image@sha256:...`). That
+covers the pin itself and every upgrade of the pin after it. The release is still reported on its
+own, as `server.artifact.changed` or `server.artifact.substituted`, and so is whatever its surface
+changed. Going the other way, from an exact release to a range, a tag or nothing, stays high,
+since the next release would then arrive without anybody editing the config; so does any change
+without provenance on both sides.
 
 **A PyPI release is pinned as all of its files.** `integrity` names one file, and that is rarely
 the one an installer runs: uv and pip take the best wheel for the platform, and PyPI lets a

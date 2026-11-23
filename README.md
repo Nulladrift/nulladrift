@@ -149,7 +149,8 @@ artifact and fails `check` with nothing in the project changed. `init`, `check` 
 which servers are written that way and give the spec for what runs now, such as
 `@modelcontextprotocol/server-memory@2.2.1`, `mcp-server-fetch==2026.11.18` or an image by digest.
 Written that way, an upgrade is a pull request that changes the version, and the drift it brings
-is reviewed there. Changing the command is itself reported once, as `server.transport.changed`;
+is reviewed there. Editing the version in the command is reported as `server.transport.changed`
+at low severity, for the pin and for every upgrade after it, since it names the same package;
 accept it with `nulladrift review`. An image with a version tag is left alone, and the warning
 never changes the exit code.
 
