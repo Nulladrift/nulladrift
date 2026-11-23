@@ -50,6 +50,8 @@ export async function buildReport(options: CommonOptions): Promise<{ report: Aud
     unreachable: result.unreachable,
     // Reported beside the verdict and never part of it; see `AuditReport.unverified`.
     unverified: result.unverified,
+    // Advice beside the verdict, like `unverified`: why the drift keeps coming, not more of it.
+    floating: result.floating,
     partial: result.partial,
     serversChecked: Object.keys(result.lock.subjects).length,
     lockPath: options.lockPath,

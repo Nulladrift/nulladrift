@@ -12,6 +12,21 @@ telemetry). Renaming a change kind breaks every consumer that matched on it.
 
 Nothing yet.
 
+## [0.11.0] - 2026-11-23
+
+### Added
+
+- **`init`, `check` and `push` say when a server runs whatever version was published last.**
+  `npx -y @modelcontextprotocol/server-memory` or `uvx mcp-server-fetch` names no version, so each
+  upstream release is a different artifact behind an unchanged config, and `check` fails on it as
+  `server.artifact.changed`. In a test organization that was all five upstream changes caught over
+  ten days, and nothing said the fix was a version in the command. Each such server now gets one
+  warning with the spec to write instead: the release this run found running
+  (`@modelcontextprotocol/server-memory@2.2.1`, `mcp-server-fetch==2026.11.18`, an image by
+  digest), or the shape of one when it found none. A dist-tag such as `latest` and a range count as
+  no version; an image warns only with no tag or `latest`, and a local file never does. Exit codes
+  and verdicts are unchanged. `check --sarif` reports it as `server.artifact.floating`, a note (a
+  new rule id; not a change kind); `--json` is unchanged.
 ## [0.10.1] - 2026-11-22
 
 ### Security
