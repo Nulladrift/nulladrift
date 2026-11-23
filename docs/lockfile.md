@@ -237,6 +237,17 @@ could not re-establish it -- the registry's own rule guarantees it still means t
 A floating request (`latest`, a range, an image tag) is not carried forward, because that
 would claim yesterday's version for code that may have moved since.
 
+**A floating request is pointed out.** A configuration that names no exact version (a bare
+package, a dist-tag, a range, an image with no tag or `latest`) runs whatever was published last,
+so each upstream release reaches `check` as `server.artifact.changed` with nothing in the
+repository changed. `init`, `check` and `push` name each such server once, with the spec to write
+instead: the release this run resolved (`name@2.2.1`, `name==2026.11.18`, `image@sha256:...`), or
+the shape of one when it resolved nothing. An image with any other tag is not reported, because a
+tag is how images are versioned even though one can be moved; nor is a local file, nor a bare
+`npx` name the project has installed, since that copy is what runs. It never affects the exit
+code. It is in the human output and in SARIF as `server.artifact.floating`, a note; `--json` has
+no field for it.
+
 **A PyPI release is pinned as all of its files.** `integrity` names one file, and that is rarely
 the one an installer runs: uv and pip take the best wheel for the platform, and PyPI lets a
 maintainer add a file to a release after it is published. So `files` records every file in the

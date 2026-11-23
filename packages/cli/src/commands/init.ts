@@ -4,6 +4,7 @@ import { describeSearch } from "../config/discover";
 import { lstat } from "node:fs/promises";
 import { captureAll, unauditedToRecord } from "../audit";
 import { countRedacted } from "../lock/credentials";
+import { floatingLine } from "../report/floating";
 import { redactedLine } from "../report/redacted";
 import { writeLockfile } from "../lock/io";
 import { EXIT_CLEAN, EXIT_INCOMPLETE, type ExitCode } from "../lib/exit";
@@ -96,6 +97,16 @@ export async function runInit(options: InitOptions): Promise<ExitCode> {
   const lines: string[] = pinnedSomething
     ? ["", bold(`Pinned ${names.length} server(s) to ${options.lockPath}:`), ""]
     : ["", bold("Pinned nothing: no server answered."), ""];
+  /*
+   * Under the server it is about, pinned or not, because this is the moment the version is being
+   * agreed to. Left as it is, the next upstream release fails `check` with nothing in the
+   * repository changed; written down exactly now, it does not.
+   */
+  const floating = new Map(result.floating.map((entry) => [entry.server, entry]));
+  const floatingNote = (name: string): string[] => {
+    const entry = floating.get(name);
+    return entry ? [`      ${yellow(floatingLine(entry))}`] : [];
+  };
   for (const name of names) {
     const entry = result.lock.subjects[name];
     const counts = [
@@ -109,6 +120,7 @@ export async function runInit(options: InitOptions): Promise<ExitCode> {
     lines.push(`      ${dim(visibleControls(`${entry?.protocol.era}/${entry?.protocol.version} · from ${entry?.source.file}${deprecated}`))}`);
     const redacted = entry ? countRedacted(entry.transport as { args?: string[]; url?: string }) : 0;
     if (redacted > 0) lines.push(`      ${yellow(redactedLine(redacted))}`);
+    lines.push(...floatingNote(name));
 
     /*
      * What is being approved, at the moment of approving it. The counts say how much surface
@@ -167,6 +179,7 @@ export async function runInit(options: InitOptions): Promise<ExitCode> {
   for (const failure of result.unreachable) {
     // The reason quotes the server: its error message, its stderr. Escaped like any server text.
     lines.push(`  ${red("✗")} ${bold(visibleControls(failure.server))}  ${dim("not pinned")}`, `      ${visibleLines(failure.reason, "      ")}`);
+    lines.push(...floatingNote(failure.server));
   }
 
   // Said now, or the first `check` after a successful `init` is where somebody finds out.

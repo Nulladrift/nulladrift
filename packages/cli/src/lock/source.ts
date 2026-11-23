@@ -117,6 +117,24 @@ function npmPrefix(start: string): string {
   return ancestors(start).find((dir) => existsSync(join(dir, "package.json")) || existsSync(join(dir, "node_modules"))) ?? resolve(start);
 }
 
+/**
+ * A copy already in the project. `npx foo` runs a `foo` found in any `node_modules/.bin` above
+ * it before asking a registry, and `npx foo@1.2.3` runs an installed `foo` that satisfies it.
+ * `bunx` does the same. `pnpm dlx` and `yarn dlx` always fetch.
+ *
+ * Exported because it also decides whether a bare `npx foo` floats: when this is true, what runs
+ * is whatever the project installed, which moves with the project's own lockfile and not with the
+ * registry, and telling somebody it runs the latest release would be wrong.
+ */
+export function installedCopy(transport: ConfiguredStdio, reference: ArtifactReference, context: SourceContext): boolean {
+  const name = commandName(transport.command);
+  if (name === "pnpm" || name === "yarn" || name === "pnpx") return false;
+  const bin = reference.name.split("/").pop()!;
+  return ancestors(transport.cwd ?? context.projectRoot).some(
+    (dir) => existsSync(join(dir, "node_modules", ...reference.name.split("/"), "package.json")) || existsSync(join(dir, "node_modules", ".bin", bin)),
+  );
+}
+
 function npmElsewhere(transport: ConfiguredStdio, reference: ArtifactReference, context: SourceContext): string | undefined {
   const env = context.env ?? process.env;
   const name = commandName(transport.command);
@@ -125,19 +143,7 @@ function npmElsewhere(transport: ConfiguredStdio, reference: ArtifactReference, 
   const options = launcherOptions(afterSubcommand(name, transport.args), NPM_VALUE_FLAGS, ["-p", "--package"]);
   const prefix = npmPrefix(base);
 
-  /*
-   * A copy already in the project. `npx foo` runs a `foo` found in any `node_modules/.bin` above
-   * it before asking a registry, and `npx foo@1.2.3` runs an installed `foo` that satisfies it.
-   * `bunx` does the same. `pnpm dlx` and `yarn dlx` always fetch.
-   */
-  if (name !== "pnpm" && name !== "yarn" && name !== "pnpx") {
-    const bin = reference.name.split("/").pop()!;
-    for (const dir of ancestors(base)) {
-      if (existsSync(join(dir, "node_modules", ...reference.name.split("/"), "package.json")) || existsSync(join(dir, "node_modules", ".bin", bin))) {
-        return "a copy installed in node_modules runs instead of the registry's";
-      }
-    }
-  }
+  if (installedCopy(transport, reference, context)) return "a copy installed in node_modules runs instead of the registry's";
 
   // npm config, highest precedence first: the command line, the environment, the project, the user.
   const cli = new Map(options.filter(([flag]) => flag.startsWith("--")).map(([flag, value]) => [flag.slice(2), value ?? ""]));

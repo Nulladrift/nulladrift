@@ -2,6 +2,7 @@
 import { serversThatShippedNothing } from "../diff/types";
 import type { Change, Severity } from "../diff/types";
 import { bold, dim, elideMiddle, green, red, truncate, yellow, visibleControls, visibleLines } from "../lib/ui";
+import { floatingLine } from "./floating";
 import type { AuditReport } from "./types";
 
 const MARK: Record<Severity, (text: string) => string> = {
@@ -148,6 +149,17 @@ export function renderHumanReport(report: AuditReport): string {
       dim("  Their surfaces were checked; the package or file behind them was not. A pin the config names exactly is kept."),
       "",
     );
+  }
+
+  /*
+   * Said on a clean run too. It is about the next upstream release, which otherwise arrives as
+   * drift that reads as the server's doing, when it was the configuration that let it in.
+   */
+  const floating = report.floating ?? [];
+  if (floating.length > 0) {
+    lines.push(yellow(`${floating.length} server(s) name no exact version:`));
+    for (const entry of floating) lines.push(`  ${bold(visibleControls(entry.server))}`, `      ${floatingLine(entry)}`);
+    lines.push(dim("  This did not change the verdict."), "");
   }
 
   /*
