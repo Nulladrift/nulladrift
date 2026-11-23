@@ -1,5 +1,11 @@
 import type { CapabilityViolation, ServerSteering } from "@nulladrift/core";
 import type { Change } from "../diff/types";
+import type { FloatingRequest } from "../lock/provenance";
+
+/** A server whose configuration names a registry package with no exact version. */
+export interface FloatingServer extends FloatingRequest {
+  server: string;
+}
 
 export interface Unreachable {
   server: string;
@@ -46,6 +52,13 @@ export interface AuditReport {
    * statements, and the report should not let one pass for the other.
    */
   unverified?: string[];
+  /**
+   * Servers configured to run whatever release their registry has now, with what to write instead.
+   *
+   * Never affects the exit code. The drift a new release causes is reported, and fails, as drift;
+   * this says why it keeps happening, which is the configuration's doing and not the server's.
+   */
+  floating?: FloatingServer[];
   /**
    * Servers read, but not in full, and why. Fails the audit (exit 2) unless `--allow-partial`,
    * since a clean comparison against part of a surface says nothing about the rest of it.

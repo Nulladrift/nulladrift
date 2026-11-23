@@ -143,6 +143,16 @@ describes the new code. The same npm version arriving with different bytes is
 `server.artifact.substituted`, which has no innocent explanation. `--no-provenance` skips the
 registry lookups for an air-gapped run.
 
+**Name an exact version in the config.** `npx -y @modelcontextprotocol/server-memory` and
+`uvx mcp-server-fetch` run whatever was published last, so every upstream release is a different
+artifact and fails `check` with nothing in the project changed. `init`, `check` and `push` say
+which servers are written that way and give the spec for what runs now, such as
+`@modelcontextprotocol/server-memory@2.2.1`, `mcp-server-fetch==2026.11.18` or an image by digest.
+Written that way, an upgrade is a pull request that changes the version, and the drift it brings
+is reviewed there. Changing the command is itself reported once, as `server.transport.changed`;
+accept it with `nulladrift review`. An image with a version tag is left alone, and the warning
+never changes the exit code.
+
 **What it leaves out: credentials, wherever a config puts them.** `env` and header values are
 recorded by name only, and a URL loses its query string and `user:password`. A credential
 written literally (`--api-key sk-...`, `-e GITHUB_TOKEN=ghp_...`, a connection string's password,

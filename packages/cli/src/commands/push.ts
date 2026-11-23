@@ -11,6 +11,7 @@ import { captureAll } from "../audit";
 import { EXIT_CLEAN, EXIT_DRIFT, EXIT_INCOMPLETE, type ExitCode } from "../lib/exit";
 import { bold, dim, green, red, visibleControls, yellow } from "../lib/ui";
 import { describeRefusal } from "../report/push-error";
+import { floatingNotes } from "../report/floating";
 import { redactedNotes } from "../report/redacted";
 import { acquireBuildToken, acquireReadingToken, BUILD_TOKEN_HEADER, READING_TOKEN_HEADER, readingAudience, readingAudienceBase } from "../lib/build-token";
 import { VERSION } from "../lib/version";
@@ -153,6 +154,8 @@ export async function runPush(options: PushOptions): Promise<ExitCode> {
   });
   // What is sent is the locked transport, so a credential left out of the lock is left out of the reading too.
   for (const note of redactedNotes(result.lock)) process.stderr.write(`${yellow("note:")} ${note}\n`);
+  // Said whatever the control plane decides: the verdict is its call, and this is advice about the config, not a finding.
+  for (const note of floatingNotes(result.floating)) process.stderr.write(`${yellow("note:")} ${note}\n`);
 
   /*
    * Nothing to send, caught here rather than by the control plane.

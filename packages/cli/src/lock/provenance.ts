@@ -289,6 +289,66 @@ export function isExact(reference: ArtifactReference): boolean {
   }
 }
 
+/** A configuration that lets the registry choose which release runs, and what to write instead. */
+export interface FloatingRequest {
+  ecosystem: "npm" | "pypi" | "oci";
+  /** As the registry names it, without a version. */
+  name: string;
+  /** The package as the configuration asks for it: `name`, `name@latest`, `name>=1`, `image:latest`. */
+  asked: string;
+  /** The exact spec for the release this run found running, when it found one. */
+  exact?: string;
+}
+
+/**
+ * Whether the configuration leaves the version to the registry, and if so the spec that names
+ * what runs today.
+ *
+ * `npx -y @modelcontextprotocol/server-memory` runs whatever was published last. Every release
+ * upstream is then a different artifact behind a configuration nobody touched, and it arrives as
+ * drift that fails the build: in a test organization, all five upstream changes caught over ten
+ * days came from commands like that. Nothing said the fix was a version in the command, so the
+ * finding read as the server's doing rather than the configuration's.
+ *
+ * Narrower than `isExact` for an image. A version tag can be moved, but moving one is not how
+ * images are normally released, and writing every tagged image up would bury the two forms that
+ * do float by design: no tag, and `latest`, which `referenceOf` already treats as the same thing.
+ * A file is never floating. It is the project's own, and changes when the project changes it.
+ *
+ * `provenance` is what this run resolved, which for a floating request is always this run's:
+ * `carriedForward` keeps nothing that floats.
+ */
+export function floatingRequest(reference: ArtifactReference, provenance: LockedProvenance | undefined): FloatingRequest | undefined {
+  const found = provenance?.ecosystem === reference.ecosystem && provenance.name === reference.name ? provenance : undefined;
+  switch (reference.ecosystem) {
+    case "npm":
+      if (isExact(reference)) return undefined;
+      return {
+        ecosystem: "npm",
+        name: reference.name,
+        asked: reference.requested === undefined ? reference.name : `${reference.name}@${reference.requested}`,
+        ...(found?.version === undefined ? {} : { exact: `${reference.name}@${found.version}` }),
+      };
+    case "pypi": {
+      if (isExact(reference)) return undefined;
+      // A range keeps its operator. Anything else is a word where a version should be, shown in uv's spelling: `pkg@latest`.
+      const asked = reference.requested === undefined ? reference.name : /^[=<>~!]/.test(reference.requested) ? `${reference.name}${reference.requested}` : `${reference.name}@${reference.requested}`;
+      return { ecosystem: "pypi", name: reference.name, asked, ...(found?.version === undefined ? {} : { exact: `${reference.name}==${found.version}` }) };
+    }
+    case "oci":
+      if (reference.digest !== undefined || reference.requested !== "latest") return undefined;
+      return {
+        ecosystem: "oci",
+        name: reference.name,
+        asked: `${reference.name}:latest`,
+        // By digest, the only name for an image that cannot be pointed somewhere else.
+        ...(found?.integrity === undefined ? {} : { exact: `${reference.name}@${found.integrity}` }),
+      };
+    case "file":
+      return undefined;
+  }
+}
+
 // ----------------------------------------------------------------------------------- resolving
 
 export const NPM_PUBLIC = "https://registry.npmjs.org";

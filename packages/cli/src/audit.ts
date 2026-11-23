@@ -5,8 +5,8 @@ import { isCredentialName, REDACTED, redactArgs, redactPath, SEVERITY, sortChang
 import { diffLockfiles } from "./diff";
 import type { Change } from "./diff/types";
 import { buildLockedServer, lockTransport } from "./lock/build";
-import { carriedForward, launchPinned, referenceOf, resolveReference } from "./lock/provenance";
-import { fetchedElsewhere } from "./lock/source";
+import { carriedForward, floatingRequest, launchPinned, referenceOf, resolveReference } from "./lock/provenance";
+import { fetchedElsewhere, installedCopy } from "./lock/source";
 import type { Lockfile, LockedMcpServer, LockedProvenance, LockedUnaudited, LockPolicy } from "./lock/types";
 import type { ConfiguredServer } from "./config/types";
 import { LOCKFILE_VERSION } from "./lock/types";
@@ -15,7 +15,7 @@ import { DEFAULT_TIMEOUT_MS } from "./mcp/connect";
 import { boundReason, UnreachableServerError, authFailureKind } from "./mcp/types";
 import { own, setOwn } from "./lib/own";
 import { VERSION } from "./lib/version";
-import type { Unreachable } from "./report/types";
+import type { FloatingServer, Unreachable } from "./report/types";
 
 export interface CaptureOptions {
   projectRoot: string;
@@ -74,6 +74,11 @@ export interface CaptureResult {
    * Pinned as far as they were read, and an unfinished audit unless `--allow-partial`.
    */
   partial: Array<{ server: string; reasons: string[] }>;
+  /**
+   * Servers whose configuration leaves the version to the registry, captured or not: the advice
+   * is about the configuration, which says the same thing whether or not the server answered.
+   */
+  floating: FloatingServer[];
 }
 
 /**
@@ -115,6 +120,22 @@ async function provenanceOf(
   return { ...(kept ? { provenance: kept } : {}), unverified: true };
 }
 
+/**
+ * Whether this server runs whatever its registry published last, and what to write instead.
+ *
+ * Not for a copy installed in the project, which `npx` runs before asking any registry: that
+ * moves when the project's own install does, so "the latest release" would not be what runs. A
+ * launcher pointed at another registry or index still floats, on that registry, and is said to.
+ */
+function floatingOf(server: ConfiguredServer, provenance: LockedProvenance | undefined, projectRoot: string): FloatingServer | undefined {
+  if (server.transport.type !== "stdio") return undefined;
+  const reference = referenceOf(server.transport, projectRoot);
+  if (!reference) return undefined;
+  if (reference.ecosystem === "npm" && installedCopy(server.transport, reference, { projectRoot })) return undefined;
+  const floating = floatingRequest(reference, provenance);
+  return floating ? { server: server.name, ...floating } : undefined;
+}
+
 async function mapWithLimit<T, R>(items: T[], limit: number, worker: (item: T) => Promise<R>): Promise<R[]> {
   const results = new Array<R>(items.length);
   let next = 0;
@@ -135,26 +156,28 @@ export async function captureAll(options: CaptureOptions): Promise<CaptureResult
 
   const captured = await mapWithLimit(discovery.servers, options.concurrency ?? 4, async (server) => {
     let established: Awaited<ReturnType<typeof provenanceOf>> | undefined;
+    let floating: FloatingServer | undefined;
     try {
       /*
        * What the server runs is read before it runs. Hashed after, a local file could put the
        * approved bytes back over itself once loaded, and the lock pinned the file it no longer was.
        */
       established = await provenanceOf(server, options);
+      floating = floatingOf(server, established.provenance, options.projectRoot);
       const { provenance, unverified, displaced } = established;
       // An image runs by the digest it was pinned at; see launchPinned. The lock keeps the config as written.
       const pinned = server.transport.type === "stdio" ? launchPinned(server.transport, provenance) : undefined;
       const surface = await captureSurface(pinned ? { ...server, transport: pinned } : server, options.timeoutMs ?? DEFAULT_TIMEOUT_MS);
       const entry = buildLockedServer(server, surface, options.policy);
       options.onServerDone?.(server.name, "captured");
-      return { name: server.name, entry: provenance ? { ...entry, provenance } : entry, unverified, displaced };
+      return { name: server.name, entry: provenance ? { ...entry, provenance } : entry, unverified, displaced, floating };
     } catch (error) {
       options.onServerDone?.(server.name, "failed");
       // Cleaned first: a key cut in half by the bound would no longer match the key.
       const reason = boundReason(withoutSecrets(error instanceof UnreachableServerError ? error.message : (error as Error).message, server));
       const kind = authFailureKind(error) ?? "unreachable";
       // Kept: what it runs can be compared with a pin even when it would not answer.
-      return { name: server.name, failure: { server: server.name, reason, kind } satisfies Unreachable, provenance: established?.provenance, displaced: established?.displaced };
+      return { name: server.name, failure: { server: server.name, reason, kind } satisfies Unreachable, provenance: established?.provenance, displaced: established?.displaced, floating };
     }
   });
 
@@ -164,8 +187,10 @@ export async function captureAll(options: CaptureOptions): Promise<CaptureResult
   const displaced: CaptureResult["displaced"] = [];
   const unaudited: Record<string, LockedUnaudited> = {};
   const unauditedProvenance: Record<string, LockedProvenance> = {};
+  const floating: FloatingServer[] = [];
   const configured = new Map(discovery.servers.map((server) => [server.name, server]));
   for (const result of captured) {
+    if (result.floating) floating.push(result.floating);
     if ("entry" in result && result.entry) {
       setOwn(subjects, result.name, result.entry);
       if (result.unverified) unverified.push(result.name);
@@ -217,6 +242,7 @@ export async function captureAll(options: CaptureOptions): Promise<CaptureResult
       .filter(([, entry]) => entry.coverage !== undefined)
       .map(([server, entry]) => ({ server, reasons: entry.coverage!.reasons }))
       .sort((a, b) => a.server.localeCompare(b.server)),
+    floating: floating.sort((a, b) => a.server.localeCompare(b.server)),
   };
 }
 

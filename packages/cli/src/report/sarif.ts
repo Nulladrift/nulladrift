@@ -12,6 +12,7 @@ import type { Change, ChangeKind, Severity } from "../diff/types";
 import { CHANGE_KINDS, SEVERITY } from "../diff/types";
 import { helpUriFor, publishedDocsUrl } from "../lib/meta";
 import { VERSION } from "../lib/version";
+import { floatingLine } from "./floating";
 import { AUDIT_FAILURE_LABEL, type AuditReport } from "./types";
 
 const LEVEL: Record<Severity, "error" | "warning" | "note"> = {
@@ -52,6 +53,12 @@ const PARTIAL_RULE = "server.surface.partial";
  * partial read, for the same reason.
  */
 const UNREAD_RULE = "server.surface.unread";
+/*
+ * A note, like an unverified artifact: a server configured with no exact version, so each upstream
+ * release reaches the build as drift with nothing in the repository changed. Not a change kind;
+ * nothing moved. The alert goes away when the configuration names a version, which is the point.
+ */
+const FLOATING_RULE = "server.artifact.floating";
 
 const RULE_HELP: Partial<Record<ChangeKind, string>> = {
   "tool.capability.gained":
@@ -100,6 +107,7 @@ export function renderSarifReport(report: AuditReport, options: { steering?: boo
   const unverified = report.unverified ?? [];
   const partial = report.partial ?? [];
   const unread = report.unreachable;
+  const floating = report.floating ?? [];
 
   /*
    * One shape for all three sources. Without it the three `map`s infer three different literal
@@ -162,6 +170,15 @@ export function renderSarifReport(report: AuditReport, options: { steering?: boo
           name: "ServerArtifactUnverified",
           shortDescription: { text: "What a server runs could not be checked" },
           fullDescription: { text: "The server answered and its declared surface was compared, but the artifact behind it could not be established on this run: a registry that did not answer, or a launcher configured to fetch from somewhere the pin does not describe. It does not affect the exit code." },
+          defaultConfiguration: { level: "note" as const },
+        }]
+      : []),
+    ...(floating.length > 0
+      ? [{
+          id: FLOATING_RULE,
+          name: "ServerArtifactFloating",
+          shortDescription: { text: "A server configured with no exact version" },
+          fullDescription: { text: "The configuration names a package with no version, a dist-tag or a range, or an image with no tag or the latest tag, so the server runs whatever was published last and a new release shows up as drift with no change to the configuration. Name an exact version, or an image digest. It does not affect the exit code." },
           defaultConfiguration: { level: "note" as const },
         }]
       : []),
@@ -237,6 +254,13 @@ export function renderSarifReport(report: AuditReport, options: { steering?: boo
             message: { text: `${server}: what this server runs could not be checked on this run` },
             locations: at(server, server),
             partialFingerprints: { "mcpAuditChange/v1": `${server}/unverified` },
+          })),
+          ...floating.map<SarifResult>((entry) => ({
+            ruleId: FLOATING_RULE,
+            level: "note",
+            message: { text: `${entry.server}: ${floatingLine(entry)}` },
+            locations: at(entry.server, entry.server),
+            partialFingerprints: { "mcpAuditChange/v1": `${entry.server}/floating` },
           })),
         ],
       },
