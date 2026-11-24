@@ -39,8 +39,96 @@
           "listChanged": true
         }
       },
-      "instructions": "DJZS audits the reasoning behind a trade before it executes. It does not predict prices or place orders.\n1. Checking a counterparty agent (free, read-only): call query_agent_trust with its wallet address for its pass/fail record, and query_pol_certificates to read its individual audit certificates.\n2. Before opening, sizing or increasing a position: send the thesis in the user's own words. Prediction-market bets go to verify_pm_trade; perpetual and spot trades go to verify_perp_trade. Each audit costs 2.00 USDC via x402 on Base and anchors a permanent certificate, so confirm with the user before calling. A thesis sent to the wrong tool is refused without charge.\n3. Act on the verdict: PASS (action PROCEED) means the thesis is complete and bounded; WAIT (action HALT) means fields named in halt_reason could not be resolved, so clarify and re-audit; FAIL means do not execute as stated until the flagged defects are fixed.\nA verdict grades whether the reasoning is stated, falsifiable and bounded, not whether the trade will win.",
+      "instructions": "DJZS audits the reasoning behind a trade before it executes. It does not predict prices or place orders.\n1. Checking a counterparty agent (free, read-only): call query_agent_trust with its wallet address for its pass/fail record, and query_pol_certificates to read its individual audit certificates.\n2. Before opening, sizing or increasing a position: send the thesis in the user's own words. Prediction-market bets go to verify_pm_trade; perpetual and spot trades go to verify_perp_trade. Each audit costs 2.00 USDC via x402 on Base and anchors a permanent certificate, so confirm with the user before calling. A thesis sent to the wrong tool is refused without charge.\n2a. No wallet, or not ready to pay: call check_thesis. It is free, returns the same PASS, WAIT or FAIL with the reasons, and writes no receipt. It has a shared daily limit.\n3. Act on the verdict: PASS (action PROCEED) means the thesis is complete and bounded; WAIT (action HALT) means fields named in halt_reason could not be resolved, so clarify and re-audit; FAIL means do not execute as stated until the flagged defects are fixed.\nA verdict grades whether the reasoning is stated, falsifiable and bounded, not whether the trade will win.",
       "tools": [
+        {
+          "name": "check_thesis",
+          "title": "Check a Trade Thesis for Free",
+          "description": "FREE check of a trade thesis, no wallet and no payment. Send the thesis in the user's own words and say whether it is a prediction-market bet or a perp/spot trade. Returns PASS, WAIT or FAIL with the reasons, the same verdict the paid audit computes (same rules, same engine). It does NOT write a receipt: nothing is attested on-chain and nothing can be shown to a counterparty. For a receipt use verify_pm_trade or verify_perp_trade (2.00 USDC via x402). USE THIS TOOL when the user wants to test a thesis before trading and the client cannot pay, or before deciding whether a paid receipt is worth it. Shared daily limit across all callers; when it is used up the result says so. A verdict grades whether the reasoning is stated, falsifiable and bounded. It does not predict the outcome and is not advice.",
+          "inputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "properties": {
+              "kind": {
+                "description": "prediction_market for a bet on a Kalshi or Polymarket style market; perp_or_spot for a perpetual or spot trade.",
+                "enum": ["prediction_market", "perp_or_spot"],
+                "type": "string"
+              },
+              "thesis": {
+                "description": "The thesis in the user's own words: the venue and market or instrument, the side, the size or price, the reason, the source of any odds or data, and what would prove it wrong. Do not rewrite or improve it; the check reads what the user actually wrote.",
+                "maxLength": 3500,
+                "minLength": 20,
+                "type": "string"
+              }
+            },
+            "required": ["kind", "thesis"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "http://json-schema.org/draft-07/schema#",
+            "additionalProperties": {},
+            "properties": {
+              "attested": {
+                "description": "Always false: no receipt is written",
+                "type": "boolean"
+              },
+              "flags": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "free": {
+                "description": "Always true: this tool never charges",
+                "type": "boolean"
+              },
+              "risk_score": {
+                "type": "number"
+              },
+              "status": {
+                "description": "OK (a verdict follows), LIMIT_REACHED (free checks used up for today) or UNAVAILABLE",
+                "type": "string"
+              },
+              "unknown_fields": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "verdict": {
+                "description": "PASS, WAIT, FAIL, or REFUSED_SCOPE when the thesis was sent as the wrong kind",
+                "type": "string"
+              },
+              "verdict_hash": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            },
+            "required": ["free", "status"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": false,
+            "openWorldHint": true,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "execution": {
+            "taskSupport": "forbidden"
+          },
+          "digest": "sha256:0e54e2474cb68634f07ac37aa701df7c4deb55ab939f5c3723c7c5e0fa90912a"
+        },
         {
           "name": "query_agent_trust",
           "title": "Query Agent Trust Score",
@@ -460,6 +548,12 @@
               "schema_version": {
                 "type": "string"
               },
+              "sources": {
+                "additionalProperties": {},
+                "description": "DJZS-SRC-v0.2, non-scoring: for each URL the thesis cites, whether the source carries the claim (supported, figure_not_in_source, span_figure_mismatch, no_supporting_span, unreachable, not_checked), read from the page or, for Polymarket event and FRED series links, from the source data itself (route), with the sha256 of what was read and when (fetched_at)",
+                "properties": {},
+                "type": "object"
+              },
               "tally": {},
               "taxonomy": {
                 "additionalProperties": {},
@@ -513,7 +607,7 @@
             "agents-x402/paymentRequired": true,
             "agents-x402/priceUSD": 2
           },
-          "digest": "sha256:c1c89d13ddee384304f67d73bdb7ecb0fc56448eb212cb9f672bc386f60479e1"
+          "digest": "sha256:61c05ae596d218b3893c913775e2641e929b195398c790e071651b278ae5ffae"
         },
         {
           "name": "verify_pm_trade",
@@ -597,6 +691,12 @@
               "schema_version": {
                 "type": "string"
               },
+              "sources": {
+                "additionalProperties": {},
+                "description": "DJZS-SRC-v0.2, non-scoring: for each URL the thesis cites, whether the source carries the claim (supported, figure_not_in_source, span_figure_mismatch, no_supporting_span, unreachable, not_checked), read from the page or, for Polymarket event and FRED series links, from the source data itself (route), with the sha256 of what was read and when (fetched_at)",
+                "properties": {},
+                "type": "object"
+              },
               "tally": {},
               "taxonomy": {
                 "additionalProperties": {},
@@ -650,10 +750,10 @@
             "agents-x402/paymentRequired": true,
             "agents-x402/priceUSD": 2
           },
-          "digest": "sha256:353d2539094af7aed06ef52f22154f53ce30f5a6f7f1746ec5aa49fb39dee7ad"
+          "digest": "sha256:b7f7390bce599f50bf52505fe29948f82c32e96e24eb47b73dccb27db6f9cf4f"
         }
       ],
-      "digest": "sha256:6ed0f4e6f5a263832995ec46d89990fc02d952be6b68d374d0534916adf672c3"
+      "digest": "sha256:4d14408d9f90f587089142ea9e557c0b6e9c5ac93522bcdcbd815837f9248a2a"
     }
   }
 }
