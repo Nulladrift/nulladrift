@@ -1,0 +1,60 @@
+# Checks who a pull request's commits name, the two ways this project has had to correct by hand:
+#
+# - Every author is a GitHub noreply address (<id>+<login>@users.noreply.github.com). A commit's
+#   author address is published with the repository and cannot be taken back once pushed.
+# - Nothing credits Claude: no `Co-Authored-By` trailer naming it in a commit, and no "Generated
+#   with Claude Code" line in a commit or the description. GitHub lists every co-author as a
+#   contributor, and a commit here names the one person responsible for it.
+#
+# The same file runs in nulladrift, nulladrift-app and nulladrift-home. It reads the pull request
+# through the API, so it needs no checkout and no third-party action.
+name: commits
+permissions:
+  contents: read
+  pull-requests: read
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited]
+
+jobs:
+  commits:
+    # Branches pushed to this repository only. An outside contributor to the public CLI works from a
+    # fork and commits under whatever address they choose. Not `author_association`: membership of
+    # the organization is private, so a member's pull request does not read as MEMBER in the event.
+    # Dependabot and the release bot push branches here too, and already use noreply addresses.
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check authors and credits
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR: ${{ github.event.pull_request.number }}
+          # Through the environment, never interpolated into the script: the description is text
+          # anyone with access can write.
+          BODY: ${{ github.event.pull_request.body }}
+        run: |
+          set -euo pipefail
+          # One line at a time: a trailer naming a person, followed later by the word Claude, is fine.
+          credit='co-authored-by:[^\n]*(claude|anthropic)|generated with \[?claude code'
+          # Captured before the loop, so a failed API call fails the job instead of checking nothing.
+          rows=$(gh api --paginate "repos/$REPO/pulls/$PR/commits" \
+            | jq -r --arg credit "$credit" '.[] | [.sha[0:7], (.commit.author.email | endswith("@users.noreply.github.com")), (.commit.message | test($credit; "i"))] | @tsv')
+          failed=0
+          while IFS=$'\t' read -r sha noreply credited; do
+            [ -n "$sha" ] || continue
+            if [ "$noreply" != true ]; then
+              echo "::error::Commit $sha is authored by an address that is not a GitHub noreply address, and an author address is published with the repository. Set yours with: git config user.email <id>+<login>@users.noreply.github.com (the address is under GitHub Settings > Emails), then rewrite the branch with: git rebase --exec 'git commit --amend --no-edit --reset-author' origin/${GITHUB_BASE_REF} and push with --force-with-lease."
+              failed=1
+            fi
+            if [ "$credited" = true ]; then
+              echo "::error::Commit $sha credits Claude, with a Co-Authored-By trailer or a 'Generated with Claude Code' line. A commit here names the one person responsible for it, and GitHub would list Claude as a contributor. Remove the line from the message (git commit --amend for the last commit) and push with --force-with-lease."
+              failed=1
+            fi
+          done <<< "$rows"
+          if printf '%s' "$BODY" | grep -qiE 'generated with \[?claude code'; then
+            echo "::error::The pull request description has a 'Generated with Claude Code' line. Remove it: gh pr edit $PR --body-file <file without it>."
+            failed=1
+          fi
+          [ "$failed" = 0 ] && echo "Every commit is authored by a noreply address, and nothing credits Claude."
+          exit "$failed"

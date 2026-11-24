@@ -1,3 +1,4 @@
+import comments from "@eslint-community/eslint-plugin-eslint-comments/configs";
 import js from "@eslint/js";
 import globals from "globals";
 import tseslint from "typescript-eslint";
@@ -19,6 +20,13 @@ export default tseslint.config(
     rules: {
       "@typescript-eslint/no-unused-vars": ["error", { argsIgnorePattern: "^_", varsIgnorePattern: "^_", caughtErrors: "none" }],
     },
+  },
+  comments.recommended,
+  {
+    // A directive that no longer suppresses anything is an error, so a stale one cannot linger.
+    linterOptions: { reportUnusedDisableDirectives: "error" },
+    // Every eslint-disable says why after `--`, so a suppression is a decision someone can read.
+    rules: { "@eslint-community/eslint-comments/require-description": ["error", { ignore: ["eslint-enable"] }] },
   },
   {
     // Fixtures and hostile-input tests deliberately build malformed shapes.
