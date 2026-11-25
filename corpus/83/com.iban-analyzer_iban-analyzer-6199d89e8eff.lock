@@ -30,13 +30,13 @@
       "tools": [
         {
           "name": "analyze_iban",
-          "title": "Resolve an IBAN to its bank",
-          "description": "Look up which bank an IBAN belongs to. Returns the registered bank name, BIC/SWIFT code and address where it is published, plus whether the IBAN is structurally valid, the country and its SEPA status. Where no bank is returned the result says why: a bank code that was never issued reads differently from one we hold no record for, and neither is ever guessed at. This is the tool to use for a payment instruction. Costs one bank lookup from the caller's monthly allowance, whatever the batch size.",
+          "title": "Resolve IBANs to their banks",
+          "description": "Name the bank behind an IBAN: registered bank name, BIC/SWIFT code and the address where the register publishes one, plus whether the IBAN is structurally valid, its country and that country's SEPA status. This is the tool for a payment instruction - reach for validate_iban instead when only the typing needs checking, and get_bank_by_bic when what you hold is a BIC rather than an IBAN. Where no bank comes back the result says why: a bank code that was never issued reads differently from one we hold no record for, and neither is ever guessed at. Takes up to 50 IBANs in one call and answers each separately. Requires an X-Api-Key header, and costs one bank lookup from the caller's monthly allowance however many IBANs the call carried.",
           "inputSchema": {
             "additionalProperties": false,
             "properties": {
               "ibans": {
-                "description": "The IBANs to look up, as written. Spaces and lower case are fine. Up to 50 per call.",
+                "description": "The IBANs, exactly as they were written down. Spaces, lower case and the grouped form a bank prints on a statement are all accepted, so nothing needs normalising first. Up to 50 in one array, and sending the whole list in a single call costs the same as sending one IBAN. Each entry is answered on its own, so a malformed one comes back marked invalid beside the others rather than failing the call.",
                 "items": {
                   "type": "string"
                 },
@@ -48,39 +48,74 @@
             "required": ["ibans"],
             "type": "object"
           },
-          "behavior": {
-            "destructive": true,
-            "idempotent": false,
-            "openWorld": true,
-            "readOnly": false
+          "annotations": {
+            "openWorldHint": false,
+            "readOnlyHint": true
           },
-          "digest": "sha256:89a7c4f7370ad2e2020f8b894679a1160eed7209562bedd92eaf947b0806f709"
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:8464953b39334786bb34e02e23bdfcb174604ffb0cbb1567866e40b9aaee8386"
         },
         {
           "name": "get_allowance",
           "title": "Allowance remaining",
-          "description": "How much of the caller's monthly allowance is left, which plan it belongs to and when it resets. Check this before a long run of lookups. Free - costs no allowance.",
+          "description": "What is left of the caller's own allowance - bank lookups, IBAN validations and OCR extractions counted separately - with the plan name and the dates the current period runs between. The only tool here that reports on the account rather than on an IBAN. Worth calling before a long run of lookups, and after analyze_iban or validate_iban refuses one, to tell a spent allowance apart from a bad request. Requires an X-Api-Key header but costs no allowance; the figures are a snapshot that the next metered call moves.",
           "inputSchema": {
             "additionalProperties": false,
             "type": "object"
           },
-          "behavior": {
-            "destructive": true,
-            "idempotent": false,
-            "openWorld": true,
-            "readOnly": false
+          "annotations": {
+            "openWorldHint": false,
+            "readOnlyHint": true
           },
-          "digest": "sha256:13cbfb2b9d8b57869bba752f80fcfdbdd3a45465629501e6dd8ffae1f387c5dd"
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:dca28d971bd7bf4c720604694b82293c1e5dcd330e99b4da1ef9adb71226f5db"
+        },
+        {
+          "name": "get_bank_by_bic",
+          "title": "Find the bank holding a BIC",
+          "description": "The reverse of analyze_iban: give it a BIC/SWIFT code and it names the bank that holds the code - registered name, city, address and postcode, with the IBAN length and SEPA status of its country. Use it when a remittance file, an invoice or a supplier form carries a BIC and no IBAN; use analyze_iban when an IBAN is in hand, because that returns the BIC as well. A miss comes back as a stated reason - the code is malformed, its country is outside our coverage, or we hold no record - and never as a finding that the BIC is unregistered, which is not something this service is in a position to know. One BIC per call, by design. Requires an X-Api-Key header, and costs one bank lookup from the caller's monthly allowance only when a bank actually comes back.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "bic": {
+                "description": "A BIC/SWIFT code, 8 or 11 characters, e.g. SPNODK22XXX. Spaces, hyphens and lower case are ignored. Both spellings of one code are accepted - SPNODK22 and SPNODK22XXX name the same office, and the answer says which form we hold it under. No country code is needed: characters 5 and 6 of a BIC are its country.",
+                "type": "string"
+              }
+            },
+            "required": ["bic"],
+            "type": "object"
+          },
+          "annotations": {
+            "openWorldHint": false,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:d34e6f9d0657548ba31c1b584d8f6f3b6ef47d319569f7e1a4ee948521fd53bd"
         },
         {
           "name": "get_country_iban_format",
-          "title": "IBAN format for a country",
-          "description": "The IBAN length and SEPA status for one country, and whether its IBANs are approved for international use. Free - costs no allowance.",
+          "title": "IBAN format for one country",
+          "description": "The IBAN rules for a single country: how many characters its IBANs run to, whether the country is in SEPA, and whether its IBANs are approved for international use. It describes a country, never a particular IBAN - use validate_iban to check one of those, and list_supported_countries to see every country at once rather than calling this in a loop. A well-formed code we hold no format for comes back as a stated refusal naming the code, so a country can safely be asked about on spec. Requires an X-Api-Key header but costs no allowance.",
           "inputSchema": {
             "additionalProperties": false,
             "properties": {
               "country_code": {
-                "description": "Two-letter ISO country code, e.g. DE.",
+                "description": "Two-letter ISO 3166-1 country code, e.g. DE. Case and surrounding spaces are ignored. This is the country of the IBAN, which is the first two characters of the IBAN itself - not the country the bank is headquartered in, and not a currency or dialling code.",
                 "maxLength": 2,
                 "minLength": 2,
                 "type": "string"
@@ -89,39 +124,47 @@
             "required": ["country_code"],
             "type": "object"
           },
-          "behavior": {
-            "destructive": true,
-            "idempotent": false,
-            "openWorld": true,
-            "readOnly": false
+          "annotations": {
+            "openWorldHint": false,
+            "readOnlyHint": true
           },
-          "digest": "sha256:e04fa4e6e96c7ce3449582b851e83f8a0a307540d99a7e14026d68d07f1a598c"
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:a724e77e501861c71e7debf1679d75d76261ee8493adf9099267aebcaa67e930"
         },
         {
           "name": "list_supported_countries",
           "title": "Countries covered",
-          "description": "Every country this service knows, and for each one whether IBAN validation and bank lookup are available. Use it to find out in advance whether a country can be answered at all. Free - costs no allowance.",
+          "description": "Every country this service knows, one row each, flagged for whether IBAN validation and bank lookup are available. The two differ: more countries have a known IBAN format than have a bank register behind them, and the summary line gives both totals. Call it once up front to find out whether a country can be answered at all; use get_country_iban_format for one country's rules, and analyze_iban when an IBAN is already in hand. The answer changes rarely and is worth keeping for the rest of the session rather than re-fetching. Requires an X-Api-Key header but costs no allowance.",
           "inputSchema": {
             "additionalProperties": false,
             "type": "object"
           },
-          "behavior": {
-            "destructive": true,
-            "idempotent": false,
-            "openWorld": true,
-            "readOnly": false
+          "annotations": {
+            "openWorldHint": false,
+            "readOnlyHint": true
           },
-          "digest": "sha256:9185b73c10f73140661c4e99ca806d0a9061a57a031ddb0d6ec0a25026588d07"
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:f2128bf6ca7635eeb40097d6f9b6a5839ae14aa261ba8db21d5076534f07f233"
         },
         {
           "name": "validate_iban",
-          "title": "Check an IBAN is well formed",
-          "description": "Check whether IBANs are structurally valid - length, country, checksum - without looking up the bank behind them. Use this when the question is only 'is this typed correctly'; use analyze_iban when the answer needs to name a bank. Costs one validation from the caller's monthly allowance.",
+          "title": "Check IBANs are well formed",
+          "description": "Check whether IBANs are structurally valid - length, country and checksum - without resolving the bank behind them. Use it when the question is only 'is this typed correctly'; use analyze_iban when the answer has to name a bank, because this tool never will. Takes up to 50 in one call and returns a separate verdict for each, so an invalid entry never fails the rest. Requires an X-Api-Key header, and costs one validation from the caller's monthly allowance however many IBANs the call carried.",
           "inputSchema": {
             "additionalProperties": false,
             "properties": {
               "ibans": {
-                "description": "The IBANs to look up, as written. Spaces and lower case are fine. Up to 50 per call.",
+                "description": "The IBANs, exactly as they were written down. Spaces, lower case and the grouped form a bank prints on a statement are all accepted, so nothing needs normalising first. Up to 50 in one array, and sending the whole list in a single call costs the same as sending one IBAN. Each entry is answered on its own, so a malformed one comes back marked invalid beside the others rather than failing the call.",
                 "items": {
                   "type": "string"
                 },
@@ -133,16 +176,20 @@
             "required": ["ibans"],
             "type": "object"
           },
-          "behavior": {
-            "destructive": true,
-            "idempotent": false,
-            "openWorld": true,
-            "readOnly": false
+          "annotations": {
+            "openWorldHint": false,
+            "readOnlyHint": true
           },
-          "digest": "sha256:ab55e28ffc114c6465a8189d5bfcbffecf3ad02aaae70e76d718d0a5dc6435a4"
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:7a2a0606430902d7c2b1ca1266b30f0871d90a0e3f7cee905b02ba04f56d0e9a"
         }
       ],
-      "digest": "sha256:f0ff0c40dd1c18544ca4a6bb2e2419f8f8933caaddbf7f9431916f8906aa13e3"
+      "digest": "sha256:765dd0ae496e4cc3786c4f35c0dcceaf32967fa6c1e9fe47ba4355f7f92907a6"
     }
   }
 }
