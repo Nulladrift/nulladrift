@@ -933,12 +933,13 @@
         {
           "name": "create_database_sync",
           "title": "Create database sync",
-          "description": "Register a saved schema for relational synchronization to PostgreSQL, MySQL or SQLite. Requires owner and a sync-enabled plan. Starts a billed classification job when available; returns database ID, classification_job_id or classification_skipped, stamped_keys and registration_notices. The webhook signing secret stays outside the MCP response and can be managed in the web app. The schema is initially unpublished: wait for classification, review keys/options/notices, then publish_schema before any data can sync. pk_strategy locks once the physical model ships. Owned child arrays replace previous membership, so omitted children are deleted on re-enrichment. purge_entity_state transfers custody to replicas; relay custody_warning. A connected host may provision automatically; otherwise get_database_setup_instructions starts browser-confirmed client pairing. Modeling, publication and delivery: enricher://docs/database-sync.",
+          "description": "Register a saved schema for relational synchronization to PostgreSQL or SQL Server. Requires owner and a sync-enabled plan. Starts a billed classification job when available; returns database ID, classification_job_id or classification_skipped, stamped_keys and registration_notices. The webhook signing secret stays outside the MCP response and can be managed in the web app. The schema is initially unpublished: wait for classification, review keys/options/notices, then publish_schema before any data can sync. pk_strategy locks once the physical model ships. Owned child arrays replace previous membership, so omitted children are deleted on re-enrichment. purge_entity_state transfers custody to replicas; relay custody_warning. A connected host may provision automatically; otherwise get_database_setup_instructions starts browser-confirmed client pairing. Modeling, publication and delivery: enricher://docs/database-sync.",
           "inputSchema": {
             "properties": {
               "dialect": {
                 "default": "postgres",
-                "description": "SQL dialect the deltas are rendered in: postgres | mysql | sqlite.",
+                "description": "Target database type: `postgres` (PostgreSQL) or `sqlserver` (SQL Server 2022 or later). The snapshot and the deltas are rendered in its SQL.",
+                "enum": ["postgres", "sqlserver"],
                 "title": "Dialect",
                 "type": "string"
               },
@@ -984,13 +985,13 @@
               },
               "pattern_index_localized_keys": {
                 "default": false,
-                "description": "Add per-language pattern-match indexes on indexed localized keys/labels (default false). Useful for prefix autocomplete; increases write/index cost. Concrete SQL depends on the selected dialect.",
+                "description": "Add per-language pattern-match indexes on indexed localized keys/labels (default false). Useful for prefix autocomplete; increases write/index cost. PostgreSQL only: refused (option_not_served) with dialect `sqlserver`.",
                 "title": "Pattern Index Localized Keys",
                 "type": "boolean"
               },
               "pk_strategy": {
                 "default": "surrogate",
-                "description": "surrogate (default): physical surrogate IDs with unique schema keys; natural: use schema keys as physical primary keys and restrict later re-keying. Locks once the physical model ships; decide before publication. See enricher://docs/database-sync.",
+                "description": "surrogate (default): physical surrogate IDs with unique schema keys; natural: use schema keys as physical primary keys, so a later re-key also rewrites their copies in every dependent table. Locks once the physical model ships; decide before publication. See enricher://docs/database-sync.",
                 "title": "Pk Strategy",
                 "type": "string"
               },
@@ -1103,7 +1104,7 @@
               }
             ]
           },
-          "digest": "sha256:92a368216b0d02cad32e2d62772ec345675314579d474a8902d501787e71185d"
+          "digest": "sha256:4c72dd34b62a7a6e492ca9f99224e013b933281e8dffa3e262c290728963e54f"
         },
         {
           "name": "create_schema_from_sample",
@@ -1730,7 +1731,7 @@
         {
           "name": "fetch_database_deltas",
           "title": "Fetch database deltas",
-          "description": "Read the next ordered window of SQL deltas and canonical payloads for a database sync. claim=false is replayable; claim=true leases the window for 120 seconds. Apply a claimed window transactionally, including schema deltas, before ack_database_deltas. limit is also bounded by the registration's page_limit. snapshot_required pauses delivery until the replica reapplies its snapshot. No LLM call. Leasing, cursors, quarantine and snapshot handling: enricher://docs/database-sync.",
+          "description": "Read the next ordered window of SQL deltas and canonical payloads for a database sync. claim=false is replayable; claim=true leases the window for 120 seconds. Apply a claimed window transactionally, including schema deltas, before ack_database_deltas. Each delta's sql is one executable batch in the registration's dialect (PostgreSQL or SQL Server); never join two SQL Server deltas into one batch. limit is also bounded by the registration's page_limit. snapshot_required pauses delivery until the snapshot is downloaded; the replica must apply it first. No LLM call. Leasing, cursors, quarantine and snapshot handling: enricher://docs/database-sync.",
           "inputSchema": {
             "properties": {
               "claim": {
@@ -1788,7 +1789,7 @@
               }
             ]
           },
-          "digest": "sha256:73cf906819131a4816d79973356f0e507c008ab1d965dbbec7d717253fe0e5fa"
+          "digest": "sha256:dc6e37a2ad3f1a6952edcb8d503e067a81ef82258b27a01f657cf52604e01df4"
         },
         {
           "name": "generate_sample",
@@ -1974,9 +1975,63 @@
           "digest": "sha256:64432328e7ac238270e6e42921c244505eec9262adb12ffc06b376560523fc52"
         },
         {
+          "name": "get_benchmark_result",
+          "title": "Get benchmark result",
+          "description": "Read one model's benchmark result in full: its output (structured_output), the scoring breakdown (quality_detail: per-field scores, judge verdicts and the findings that update the reference) and its derived scores. include_runs=true adds every repetition with its own output and breakdown (can be large). result_id comes from get_benchmark_scenario or get_benchmark_scenario_results. No LLM call.",
+          "inputSchema": {
+            "properties": {
+              "include_runs": {
+                "default": false,
+                "description": "Include every repetition's output and breakdown (can be large).",
+                "title": "Include Runs",
+                "type": "boolean"
+              },
+              "result_id": {
+                "description": "UUID of the result (the `id` of a result row).",
+                "title": "Result Id",
+                "type": "string"
+              },
+              "scenario_id": {
+                "description": "UUID of the scenario.",
+                "title": "Scenario Id",
+                "type": "string"
+              }
+            },
+            "required": ["result_id", "scenario_id"],
+            "title": "get_benchmark_resultArguments",
+            "type": "object"
+          },
+          "outputSchema": {
+            "additionalProperties": true,
+            "title": "get_benchmark_resultDictOutput",
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "openWorldHint": false,
+            "readOnlyHint": true,
+            "title": "Get benchmark result"
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "securitySchemes": [
+              {
+                "scopes": ["mcp"],
+                "type": "oauth2"
+              }
+            ]
+          },
+          "digest": "sha256:431bf58c0e5ad8769a1ab06f4276460257f189cda7d66a952061c3fefa21e31a"
+        },
+        {
           "name": "get_benchmark_scenario",
           "title": "Get benchmark scenario",
-          "description": "Read one benchmark scenario with per-model quality, cost and speed results. include_reference=true adds the reference, the fixed entity_data and the schema-generation entity_samples. Config changes can make existing results stale. No LLM call. For a ranked subset use get_benchmark_scenario_results. Read after run_benchmark completes.",
+          "description": "Read one benchmark scenario with per-model quality, cost and speed results. include_reference=true adds the reference, the fixed entity_data and the schema-generation entity_samples. Config changes can make existing results stale. No LLM call. For a ranked subset use get_benchmark_scenario_results. Results carry scores and metrics, not each model's output or scoring breakdown: read one in full with get_benchmark_result. Read after run_benchmark completes.",
           "inputSchema": {
             "properties": {
               "include_reference": {
@@ -2020,12 +2075,12 @@
               }
             ]
           },
-          "digest": "sha256:2ff52fb1735e116adbba4eeb4349b1e1ab287b5a352700bf294bd54b69ddfbf9"
+          "digest": "sha256:613d9e17ec4263f2a29ae10a9e53594a14f7dbc62be6349310bda3bc0fe3f0e0"
         },
         {
           "name": "get_benchmark_scenario_results",
           "title": "Get ranked benchmark scenario results",
-          "description": "Filter, rank and limit a scenario's per-model benchmark results. No LLM call. overall blends quality, speed and cost using organization task weights and is null if a component is missing. Status tags are independent: success does not exclude stale or stale_score results. Missing sort metrics come last in either direction. See enricher://docs/model-benchmark for interpretation.",
+          "description": "Filter, rank and limit a scenario's per-model benchmark results. No LLM call. overall blends quality, speed and cost using organization task weights and is null if a component is missing. Status tags are independent: success does not exclude stale or stale_score results. Missing sort metrics come last in either direction. Each row's id opens the full result (output, breakdown, findings) with get_benchmark_result. See enricher://docs/model-benchmark for interpretation.",
           "inputSchema": {
             "properties": {
               "limit": {
@@ -2141,7 +2196,7 @@
               }
             ]
           },
-          "digest": "sha256:98c5e62bd1def471618af276fa2f6427f7f3db43bcbe2e284d7a50fec1f3ba82"
+          "digest": "sha256:0a139757e7273aac94cbc738aadd263615955f6def95bf334f8ab932c6aa0dc8"
         },
         {
           "name": "get_database_setup_instructions",
@@ -2506,7 +2561,7 @@
         {
           "name": "get_stats",
           "title": "Get statistics",
-          "description": "Read organization-wide record totals, success rate, tokens and cost summary. No LLM call. This tool has no job filter; use list_records(job_id=...) for a particular run and benchmark tools for comparative quality/cost/speed scores.",
+          "description": "Read organization-wide record totals, success rate, tokens and cost summary, with by_model: per model composite key, its records, successes, cost and mean LLM time. No LLM call. This tool has no job filter; use list_records(job_id=...) for a particular run and benchmark tools for comparative quality/cost/speed scores.",
           "inputSchema": {
             "properties": {},
             "title": "get_statsArguments",
@@ -2537,7 +2592,7 @@
               }
             ]
           },
-          "digest": "sha256:86186b8e33ede659b7eac0a9bb9ee83a14a84e288da92879c48f2714611847e9"
+          "digest": "sha256:f98e83300b673ff51627a10c39e3d07bc705929c75521f8f5dd15fce4a52c956"
         },
         {
           "name": "get_support_conversation",
@@ -2707,7 +2762,7 @@
         {
           "name": "list_database_syncs",
           "title": "List database syncs",
-          "description": "List a saved schema's database registrations, linked schemas, options and sync hosts. Returns pending and quarantined delta counts, projection_upgrade_pending and database links. No LLM call. Pending zero alone does not prove healthy delivery: check quarantine and migration blockers. Use list_entity_states for server-side rows and get_record for per-record delivery state. PostgreSQL, MySQL and SQLite delivery is performed by the user's sync client. See enricher://docs/database-sync.",
+          "description": "List a saved schema's database registrations, linked schemas, options and sync hosts. Returns pending and quarantined delta counts, projection_upgrade_pending and database links. No LLM call. Pending zero alone does not prove healthy delivery: check quarantine and migration blockers. Use list_entity_states for server-side rows and get_record for per-record delivery state. Delivery to the PostgreSQL or SQL Server database is performed by the user's sync client. See enricher://docs/database-sync.",
           "inputSchema": {
             "properties": {
               "schema_id": {
@@ -2745,7 +2800,7 @@
               }
             ]
           },
-          "digest": "sha256:f7400d3090a751153eda6b69c04ed71a252c19f5b1ecad1061f78de1e66c2d66"
+          "digest": "sha256:cdb858187b02ed5631ff0fe516830afe415265b0e526ed2ac2ee6254fe2ab33c"
         },
         {
           "name": "list_entity_states",
@@ -3594,12 +3649,12 @@
         {
           "name": "publish_schema",
           "title": "Publish schema",
-          "description": "Publish a database-linked schema's working copy as the contract used by enrichment and replicas. A newly linked schema sends nothing until first publication; unlinked drafts cannot be published. Requires editor; no LLM call. Call validate_only=true to inspect the diff, blockers, warnings and per-database migration_sql. Transform migrations require user-approved confirm_transforms=true; cross-schema conflicts remain blockers. key_language may be required if classification revealed a multilingual key. Returns publication state; queued migrations apply asynchronously on replicas. See enricher://docs/database-sync for the review and delivery workflow.",
+          "description": "Publish a database-linked schema's working copy as the contract used by enrichment and replicas. A newly linked schema sends nothing until first publication; unlinked drafts cannot be published. Requires editor; no LLM call. Call validate_only=true to inspect the diff, blockers, warnings and per-database migration_sql. Transform migrations, and columns a linked database narrows (migration_sql[].physical_changes), require user-approved confirm_transforms=true; cross-schema conflicts remain blockers. key_language may be required if classification revealed a multilingual key. Returns publication state; queued migrations apply asynchronously on replicas. unserved lists, per SQL Server database, the declared indexes and foreign keys it does not create. See enricher://docs/database-sync for the review and delivery workflow.",
           "inputSchema": {
             "properties": {
               "confirm_transforms": {
                 "default": false,
-                "description": "Acknowledge a transform migration (re-key, type change, or a column/table rename) run against the replicas' own data. Required when the preview says requires_confirm — ALWAYS show the transforms to the user and get their explicit approval before passing true.",
+                "description": "Acknowledge a transform migration (re-key, type change, or a column/table rename) run against the replicas' own data, or a column a linked database narrows (migration_sql[].physical_changes, which can be the only reason). Required when the preview says requires_confirm — ALWAYS show both lists to the user and get their explicit approval before passing true.",
                 "title": "Confirm Transforms",
                 "type": "boolean"
               },
@@ -3657,7 +3712,7 @@
               }
             ]
           },
-          "digest": "sha256:d3ee2655ec18b7dbcd31392edff20881e08c02ba15f027e1db9f4fa7d4dde3a9"
+          "digest": "sha256:20c722cda48d01208138d2cc9414a4c7a32f151b5c595b8c52a7cd0ca2605511"
         },
         {
           "name": "resolve_unify_proposal",
@@ -4652,7 +4707,7 @@
         {
           "name": "update_schema",
           "title": "Update schema",
-          "description": "Edit a saved schema's metadata or replace its full schema_content without an LLM call. Requires editor. Only supplied values change. For one property, prefer update_schema_property, add_schema_property or move_schema_property. Replacements must use GeneratedJsonSchema; unknown keywords are dropped, not rejected, and reported in ignored_keywords / applied_repairs. On database-linked schemas this edits the working copy: neutral edits propagate automatically; structural edits take effect after publish_schema. Returns the updated schema and link. Contract and edit workflow: enricher://docs/schema-reference.",
+          "description": "Edit a saved schema's metadata or replace its full schema_content without an LLM call. Requires editor. Only supplied values change. For one property, prefer update_schema_property, add_schema_property or move_schema_property. Replacements must use GeneratedJsonSchema; unknown keywords are dropped, not rejected, and reported in ignored_keywords / applied_repairs. On database-linked schemas this edits the working copy: neutral edits propagate automatically; structural edits take effect after publish_schema. Returns the publish_state the edit left, the repairs and the link — not the document (get_schema reads it back). Contract and edit workflow: enricher://docs/schema-reference.",
           "inputSchema": {
             "properties": {
               "ambiguity_check_enabled": {
@@ -4772,7 +4827,7 @@
               }
             ]
           },
-          "digest": "sha256:d60f19899110e7eb2ce1e2dcef43bea7e3f2f812009599db87109a0be0c023b5"
+          "digest": "sha256:a4830833445865f34f31019416c8c2551906a2e733867a5b233ffe63782daf76"
         },
         {
           "name": "update_schema_property",
@@ -5086,7 +5141,7 @@
           "digest": "sha256:73cbe306a6cf22d514e0557b2bc3021ddc6e1f7dffee07d4498187586ee0b7bf"
         }
       ],
-      "digest": "sha256:2d18d55c24ec6e03f82d695ea83c4991d8908d37293456c6ff71a8793349e558"
+      "digest": "sha256:e670ecafe88d4dc699a8d9a1bbfe6d302d3f02ddfb82aa1bf72c5049e780c367"
     }
   }
 }

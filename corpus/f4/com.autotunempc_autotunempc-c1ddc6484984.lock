@@ -79,7 +79,7 @@
         {
           "name": "autotune_embedded_controller_with_c_codegen",
           "title": "Autotune an embedded controller",
-          "description": "Tune a linear plant and write a zero-heap C99 bundle.\n\nThe reply's ``codegen`` object lists ``mpc_bundle.h`` and ``mpc_bundle.c``\nplus ``usage_example_c`` and ``controller_kind``. A linear plant is a\ncondensed QP (``linear_qp``). A nonlinear plant, including differential\ndrive, is a linearized iteration (``linearized_rti``): Jacobians\nat the current state, then projected-gradient steps. That is not a full\nnonlinear SQP. Compile with\n``gcc -O3 -std=c99 -Wall -Wextra -fPIC -shared -lm``. Each control step is\n``mpc_compute_u0`` then, after the plant measurement, ``mpc_observer_update``.\nNeither function allocates on the heap. ``MPC_NX``, ``MPC_NU``, ``MPC_ND``,\nand ``MPC_HORIZON`` in the header are the array sizes.\n\nSame payment as autotune_template: X-API-Key spends 1 autotune credit, and\na missing key or an empty pack is HTTP 402 for x402.",
+          "description": "Tune a linear plant and write a zero-heap C99 bundle.\n\nThe reply's ``codegen`` object lists ``mpc_bundle.h`` and ``mpc_bundle.c``\nplus ``usage_example_c`` and ``controller_kind``. A linear plant is a\ncondensed QP (``linear_qp``). A nonlinear plant, including differential\ndrive, is a linearized iteration (``linearized_rti``): one Jacobian of ``f``\nat the current ``(x, u, d)``, then projected-gradient steps. That is not a full\nnonlinear SQP and not acados SQP-RTI. The exported acados controller is a real SQP;\n``SQP_RTI`` is that backend's one-quadratic-program-per-tick mode. Compile with\n``gcc -O3 -std=c99 -Wall -Wextra -fPIC -shared -lm``. Each control step is\n``mpc_compute_u0`` then, after the plant measurement, ``mpc_observer_update``.\nNeither function allocates on the heap. ``MPC_NX``, ``MPC_NU``, ``MPC_ND``,\nand ``MPC_HORIZON`` in the header are the array sizes.\n\nSame payment as autotune_template: X-API-Key spends 1 autotune credit, and\na missing key or an empty pack is HTTP 402 for x402.",
           "inputSchema": {
             "additionalProperties": false,
             "properties": {
@@ -113,7 +113,7 @@
               "tags": []
             }
           },
-          "digest": "sha256:1030feecbc24a60a4791022056641ad1416ba7b97b645ffa34c640a23ce8b1c9"
+          "digest": "sha256:e2a43b66671c073db6e28292224bec8cefaf32c30120f6ba9753faa3e10a965e"
         },
         {
           "name": "autotune_root_zone_irrigation",
@@ -523,10 +523,15 @@
                   },
                   "cmd_vel_frame_id": {
                     "default": "base_link",
-                    "description": "frame_id on TwistStamped exports. Default base_link. The solve is unchanged.",
+                    "description": "frame_id on TwistStamped exports. Default base_link. Letters, digits, underscore, slash, and hyphen only.",
                     "maxLength": 64,
                     "minLength": 1,
                     "type": "string"
+                  },
+                  "codegen": {
+                    "default": false,
+                    "description": "Ask for the compiled oracle. Anonymous callers are forced to false so this route cannot invoke gcc. Authenticated callers may leave it true.",
+                    "type": "boolean"
                   },
                   "constraints": {
                     "anyOf": [
@@ -590,6 +595,21 @@
                                           "description": "Radius. Must be >= 0.",
                                           "maximum": 1000000000000,
                                           "minimum": 0,
+                                          "type": "number"
+                                        },
+                                        "vx": {
+                                          "default": 0,
+                                          "description": "Constant velocity along the first position index. Omit for 0.",
+                                          "type": "number"
+                                        },
+                                        "vy": {
+                                          "default": 0,
+                                          "description": "Constant velocity along the second position index. Omit for 0.",
+                                          "type": "number"
+                                        },
+                                        "vz": {
+                                          "default": 0,
+                                          "description": "Constant vertical velocity. Omit for 0. Planar circles ignore it.",
                                           "type": "number"
                                         }
                                       },
@@ -843,6 +863,12 @@
                     "description": "ROS 2 export only. False publishes geometry_msgs/Twist. True publishes TwistStamped. The solve is unchanged.",
                     "type": "boolean"
                   },
+                  "iteration_mode": {
+                    "default": "full",
+                    "description": "full is the default and runs IPOPT to the request's iteration cap. rti takes at most two warm-started iterations, then resolves with the full cap only when the constraint residual is still above 1e-2.",
+                    "enum": ["full", "rti"],
+                    "type": "string"
+                  },
                   "linear_input_cost": {
                     "anyOf": [
                       {
@@ -876,6 +902,20 @@
                     ],
                     "default": null,
                     "description": "Economic stage price on each state node, length nx. Linear, not squared. Omit for zeros."
+                  },
+                  "margin_tightening_m": {
+                    "anyOf": [
+                      {
+                        "maximum": 0.15,
+                        "minimum": 0,
+                        "type": "number"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "description": "Meters of worst-case obstacle penetration measured in autotune, added to the robust pad. Clamped with the observer term at 0.15 m. Omit for zero. Used only when tightening is on."
                   },
                   "max_fallback_steps": {
                     "default": 2,
@@ -913,6 +953,13 @@
                     "description": "Observer blend, clamped to 0.05..0.6. 0.25 is a slow bias tracker.",
                     "type": "number"
                   },
+                  "observer_margin_gain": {
+                    "default": 1,
+                    "description": "Scale on ||d_hat_xy|| inside the robust pad. Used only when tightening is on.",
+                    "maximum": 5,
+                    "minimum": 0,
+                    "type": "number"
+                  },
                   "obstacles": {
                     "description": "Up to 8 circular keep-out zones in the x-y plane. Empty adds no obstacle slacks. Each zone is softened so a start inside the circle does not make IPOPT infeasible.",
                     "items": {
@@ -930,6 +977,27 @@
                           "description": "Circle radius. Must be >= 0.",
                           "maximum": 1000000000000,
                           "minimum": 0,
+                          "type": "number"
+                        },
+                        "vx": {
+                          "default": 0,
+                          "description": "Constant velocity along x. Omit for a stationary obstacle.",
+                          "maximum": 1000000000000,
+                          "minimum": -1000000000000,
+                          "type": "number"
+                        },
+                        "vy": {
+                          "default": 0,
+                          "description": "Constant velocity along y. Omit for a stationary obstacle.",
+                          "maximum": 1000000000000,
+                          "minimum": -1000000000000,
+                          "type": "number"
+                        },
+                        "vz": {
+                          "default": 0,
+                          "description": "Constant velocity along z. Omit for a stationary obstacle.",
+                          "maximum": 1000000000000,
+                          "minimum": -1000000000000,
                           "type": "number"
                         },
                         "x": {
@@ -971,15 +1039,148 @@
                     "default": null,
                     "description": "Weight on the output residual z - z_ref, with z = C x + D u. Shape ny by ny. Omit for a zero weight, which leaves the quadratic cost on x and u unchanged."
                   },
+                  "plan_pattern": {
+                    "anyOf": [
+                      {
+                        "maxLength": 32,
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "description": "Optional planner pattern. 'helix' asks the quadrotor planner for one cleared orbit."
+                  },
+                  "plan_to_goal": {
+                    "default": false,
+                    "description": "When true, replace waypoints with a single-goal path rolled out by the plant dynamics under commands that already respect the input and slew limits. An unreachable goal is rejected instead of tracked as a guessed polyline.",
+                    "type": "boolean"
+                  },
+                  "planner_fidelity": {
+                    "default": "fast",
+                    "description": "Kinodynamic search fidelity. Anonymous callers are forced to fast. An X-API-Key caller may request high_fidelity.",
+                    "enum": ["fast", "high_fidelity"],
+                    "type": "string"
+                  },
+                  "plant_disturbance": {
+                    "anyOf": [
+                      {
+                        "items": {
+                          "maximum": 1000000000000,
+                          "minimum": -1000000000000,
+                          "type": "number"
+                        },
+                        "type": "array"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "description": "Disturbance applied only inside the simulated plant step. The NLP and the offset observer's nominal model keep disturbance_hat (zeros when omitted). Omit to step the plant with disturbance_hat, which is the previous behavior."
+                  },
                   "qf_source": {
                     "default": "caller",
                     "description": "Terminal weight source. caller uses Qf as sent. discrete_riccati replaces Qf with the discrete algebraic Riccati solution of (A, B, Q, R) on a linear plant.",
                     "enum": ["caller", "discrete_riccati"],
                     "type": "string"
                   },
+                  "replan_tube_m": {
+                    "anyOf": [
+                      {
+                        "exclusiveMinimum": 0,
+                        "maximum": 20,
+                        "type": "number"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "description": "Replan when the position leaves this tube around the certified tail. Omit for 0.55 m on a kinodynamic rollout, and for no replanning otherwise."
+                  },
                   "reset_warm_start": {
                     "default": false,
                     "description": "Drop this session_id's warm-start seed before the solve. Default false. The compiled solver stays.",
+                    "type": "boolean"
+                  },
+                  "reveal_obstacle": {
+                    "anyOf": [
+                      {
+                        "additionalProperties": false,
+                        "description": "An obstacle that appears at one closed-loop step and stays visible.",
+                        "properties": {
+                          "height": {
+                            "anyOf": [
+                              {
+                                "type": "number"
+                              },
+                              {
+                                "type": "null"
+                              }
+                            ],
+                            "default": null,
+                            "description": "Optional height, meters. Omit for a pillar."
+                          },
+                          "margin": {
+                            "default": 0,
+                            "description": "Extra keep-out, meters.",
+                            "minimum": 0,
+                            "type": "number"
+                          },
+                          "radius": {
+                            "description": "Obstacle radius, meters.",
+                            "exclusiveMinimum": 0,
+                            "type": "number"
+                          },
+                          "step": {
+                            "description": "Closed-loop step at which the obstacle is revealed.",
+                            "maximum": 140,
+                            "minimum": 0,
+                            "type": "integer"
+                          },
+                          "x": {
+                            "description": "Obstacle center, x, meters.",
+                            "type": "number"
+                          },
+                          "y": {
+                            "description": "Obstacle center, y, meters.",
+                            "type": "number"
+                          }
+                        },
+                        "required": ["radius", "step", "x", "y"],
+                        "type": "object"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "description": "Optional obstacle revealed mid-rollout. It invalidates the remaining tail and requests a replan."
+                  },
+                  "robust_keepout": {
+                    "default": false,
+                    "description": "Alias of robust_margin_tightening for a closed-loop simulate. Grows each keep-out by the observer bias. Default false.",
+                    "type": "boolean"
+                  },
+                  "robust_margin_m": {
+                    "anyOf": [
+                      {
+                        "maximum": 2,
+                        "minimum": 0,
+                        "type": "number"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "description": "Extra meters added to every keep-out radius. Omit for the nominal disk. The compiled obstacle rows stay the same; only the numeric radius changes."
+                  },
+                  "robust_margin_tightening": {
+                    "default": false,
+                    "description": "When true, inflate every keep-out radius and shrink the corridor by gain * ||d_hat_xy|| plus margin_tightening_m. The pad is clamped to 0.15 m and the corridor never drops below 0.05 m or its original width. Default false leaves the nominal disks unchanged.",
                     "type": "boolean"
                   },
                   "scenario_forecasts": {
@@ -1051,10 +1252,29 @@
                     "description": "Leave this at auto. The server selects the numerical method.",
                     "type": "string"
                   },
+                  "solver_backend": {
+                    "default": "ipopt",
+                    "description": "ipopt is the browser rollout. fatrop is the same host solver as a paid solve. sqp_rti is accepted and is compiled only for an authenticated caller; an anonymous call is forced back to ipopt and never compiles C on this route.",
+                    "enum": ["auto", "ipopt", "fatrop", "sqp_rti"],
+                    "type": "string"
+                  },
+                  "solver_drop_at": {
+                    "anyOf": [
+                      {
+                        "minimum": 0,
+                        "type": "integer"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "description": "Closed-loop step at which IPOPT stops. From there the plant holds the last command for max_fallback_steps, then hover thrust on quadrotor_3d or zeros on every other plant. Those steps are integrated. They are not included in solve_ms."
+                  },
                   "steps": {
                     "default": 40,
-                    "description": "Closed-loop steps to simulate. Default 40. Must be from 1 to 100.",
-                    "maximum": 100,
+                    "description": "Closed-loop steps to simulate. Default 40. Must be from 1 to 140.",
+                    "maximum": 140,
                     "minimum": 1,
                     "type": "integer"
                   },
@@ -1339,7 +1559,7 @@
                               "minimum": -1000000000000,
                               "type": "number"
                             },
-                            "description": "Template knobs, one number per required key. double_integrator and unicycle_kinematics: dt > 0 (seconds). thermal_rc_zone: dt > 0, capacity > 0, time_constant > 0, and ambient. soil_moisture_cascade: dt > 0, capacity > 0, tau_1 > 0, tau_2 > 0, tau_3 > 0, k_12 >= 0, k_23 >= 0. gravity_tank: dt > 0, discharge > 0, inflow_gain > 0. cart_pendulum: dt, cart_mass, pole_mass, friction, inertia, gravity, and length, each > 0. icr_skid_steer: dt > 0 and slip, a signed length with abs(slip) <= 10. Body-frame lateral velocity equals slip * yaw_rate. If x_icr is the forward coordinate of the instantaneous center, positive ahead of the reference point, slip = -x_icr. ackermann: dt > 0 and wheelbase > 0. The steer component of u_min and u_max must lie inside ±1.2 rad. quadrotor_3d: dt from 0.02 to 0.05 s (20–50 Hz outer loop), gravity > 0, and drag >= 0. Inputs are roll, pitch, and thrust acceleration. Tilt bounds stay inside ±0.45 rad. Thrust bounds stay inside 0.4 g to 2 g. thermal_valve_process: dt > 0, rangeability > 1, flow_max > 0, tau_valve > 0, capacity > 0, loss >= 0, ambient, and heater_gain > 0. Valve flow is R^(valve_pos - 1). marine_usv: dt > 0, mass > 0, inertia > 0. Added mass and quadratic drag coefficients are >= 0. anti_sway_crane: dt > 0, cable_length > 0, cart_mass > 0, load_mass > 0, gravity > 0, damping >= 0. The input is cart force. Sway angle limits are soft state bounds. process_valve: dt > 0, capacitance > 0, tau > 0, cv > 0, and supply > 0. quadrotor: dt > 0, mass > 0, gravity > 0, and attitude_tau > 0. Unknown keys are rejected.",
+                            "description": "Template knobs, one number per required key. double_integrator and unicycle_kinematics: dt > 0 (seconds). thermal_rc_zone: dt > 0, capacity > 0, time_constant > 0, and ambient. soil_moisture_cascade: dt > 0, capacity > 0, tau_1 > 0, tau_2 > 0, tau_3 > 0, k_12 >= 0, k_23 >= 0. gravity_tank: dt > 0, discharge > 0, inflow_gain > 0. cart_pendulum: dt, cart_mass, pole_mass, friction, inertia, gravity, and length, each > 0. icr_skid_steer: dt > 0 and slip, a signed length with abs(slip) <= 10. Body-frame lateral velocity equals slip * yaw_rate. If x_icr is the forward coordinate of the instantaneous center, positive ahead of the reference point, slip = -x_icr. ackermann: dt > 0 and wheelbase > 0. The steer component of u_min and u_max must lie inside ±1.2 rad. quadrotor_3d: dt from 0.02 to 0.05 s (20–50 Hz outer loop), gravity > 0, and drag >= 0. Inputs are roll, pitch, and thrust acceleration. Tilt bounds stay inside ±0.45 rad. Thrust bounds stay inside 0.4 g to 2 g. Optional attitude_tau_s > 0 adds a first-order roll/pitch lag, a yaw state, and a yaw-rate command. Omit it, or send 0, and the 6-state outer loop is unchanged. thermal_valve_process: dt > 0, rangeability > 1, flow_max > 0, tau_valve > 0, capacity > 0, loss >= 0, ambient, and heater_gain > 0. Valve flow is R^(valve_pos - 1). marine_usv: dt > 0, mass > 0, inertia > 0. Added mass and quadratic drag coefficients are >= 0. anti_sway_crane: dt > 0, cable_length > 0, cart_mass > 0, load_mass > 0, gravity > 0, damping >= 0. The input is cart force. Sway angle limits are soft state bounds. process_valve: dt > 0, capacitance > 0, tau > 0, cv > 0, and supply > 0. quadrotor: dt > 0, mass > 0, gravity > 0, and attitude_tau > 0. Unknown keys are rejected.",
                             "type": "object"
                           },
                           "u_max": {
@@ -1612,6 +1832,25 @@
                         "type": "object"
                       }
                     ]
+                  },
+                  "terminal_level": {
+                    "anyOf": [
+                      {
+                        "maximum": 1000000,
+                        "minimum": 0,
+                        "type": "number"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "description": "Upper bound on (x_N - x_ref)^T Qf (x_N - x_ref) when terminal_set is true. Omit for max(4, nx)."
+                  },
+                  "terminal_set": {
+                    "default": false,
+                    "description": "When true, the terminal state must lie in a sublevel set of the Qf Lyapunov function. A slack keeps a distant start feasible. Default false leaves the NLP unchanged. This constraint is solved with IPOPT.",
+                    "type": "boolean"
                   },
                   "timeout_s": {
                     "default": 2,
@@ -1757,7 +1996,7 @@
               "tags": []
             }
           },
-          "digest": "sha256:0b46e77c3bcba837300595f41734c02cb2760a21d4fbcf621bfff55b4fff6870"
+          "digest": "sha256:9bf51b48e227335c3f19dd8b3058ec77c88a9b210519e8f7f0d2f68c1f87b4aa"
         },
         {
           "name": "solve_mpc",
@@ -1879,7 +2118,7 @@
                   },
                   "cmd_vel_frame_id": {
                     "default": "base_link",
-                    "description": "frame_id on TwistStamped exports. Default base_link. The solve is unchanged.",
+                    "description": "frame_id on TwistStamped exports. Default base_link. Letters, digits, underscore, slash, and hyphen only.",
                     "maxLength": 64,
                     "minLength": 1,
                     "type": "string"
@@ -1946,6 +2185,21 @@
                                           "description": "Radius. Must be >= 0.",
                                           "maximum": 1000000000000,
                                           "minimum": 0,
+                                          "type": "number"
+                                        },
+                                        "vx": {
+                                          "default": 0,
+                                          "description": "Constant velocity along the first position index. Omit for 0.",
+                                          "type": "number"
+                                        },
+                                        "vy": {
+                                          "default": 0,
+                                          "description": "Constant velocity along the second position index. Omit for 0.",
+                                          "type": "number"
+                                        },
+                                        "vz": {
+                                          "default": 0,
+                                          "description": "Constant vertical velocity. Omit for 0. Planar circles ignore it.",
                                           "type": "number"
                                         }
                                       },
@@ -2199,6 +2453,12 @@
                     "description": "ROS 2 export only. False publishes geometry_msgs/Twist. True publishes TwistStamped. The solve is unchanged.",
                     "type": "boolean"
                   },
+                  "iteration_mode": {
+                    "default": "full",
+                    "description": "full is the default and runs IPOPT to the request's iteration cap. rti takes at most two warm-started iterations, then resolves with the full cap only when the constraint residual is still above 1e-2.",
+                    "enum": ["full", "rti"],
+                    "type": "string"
+                  },
                   "linear_input_cost": {
                     "anyOf": [
                       {
@@ -2232,6 +2492,20 @@
                     ],
                     "default": null,
                     "description": "Economic stage price on each state node, length nx. Linear, not squared. Omit for zeros."
+                  },
+                  "margin_tightening_m": {
+                    "anyOf": [
+                      {
+                        "maximum": 0.15,
+                        "minimum": 0,
+                        "type": "number"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "description": "Meters of worst-case obstacle penetration measured in autotune, added to the robust pad. Clamped with the observer term at 0.15 m. Omit for zero. Used only when tightening is on."
                   },
                   "max_fallback_steps": {
                     "default": 2,
@@ -2269,6 +2543,13 @@
                     "description": "Observer blend, clamped to 0.05..0.6. 0.25 is a slow bias tracker.",
                     "type": "number"
                   },
+                  "observer_margin_gain": {
+                    "default": 1,
+                    "description": "Scale on ||d_hat_xy|| inside the robust pad. Used only when tightening is on.",
+                    "maximum": 5,
+                    "minimum": 0,
+                    "type": "number"
+                  },
                   "obstacles": {
                     "description": "Up to 8 circular keep-out zones in the x-y plane. Empty adds no obstacle slacks. Each zone is softened so a start inside the circle does not make IPOPT infeasible.",
                     "items": {
@@ -2286,6 +2567,27 @@
                           "description": "Circle radius. Must be >= 0.",
                           "maximum": 1000000000000,
                           "minimum": 0,
+                          "type": "number"
+                        },
+                        "vx": {
+                          "default": 0,
+                          "description": "Constant velocity along x. Omit for a stationary obstacle.",
+                          "maximum": 1000000000000,
+                          "minimum": -1000000000000,
+                          "type": "number"
+                        },
+                        "vy": {
+                          "default": 0,
+                          "description": "Constant velocity along y. Omit for a stationary obstacle.",
+                          "maximum": 1000000000000,
+                          "minimum": -1000000000000,
+                          "type": "number"
+                        },
+                        "vz": {
+                          "default": 0,
+                          "description": "Constant velocity along z. Omit for a stationary obstacle.",
+                          "maximum": 1000000000000,
+                          "minimum": -1000000000000,
                           "type": "number"
                         },
                         "x": {
@@ -2336,6 +2638,30 @@
                   "reset_warm_start": {
                     "default": false,
                     "description": "Drop this session_id's warm-start seed before the solve. Default false. The compiled solver stays.",
+                    "type": "boolean"
+                  },
+                  "robust_keepout": {
+                    "default": false,
+                    "description": "Alias of robust_margin_tightening for a closed-loop simulate. Grows each keep-out by the observer bias. Default false.",
+                    "type": "boolean"
+                  },
+                  "robust_margin_m": {
+                    "anyOf": [
+                      {
+                        "maximum": 2,
+                        "minimum": 0,
+                        "type": "number"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "description": "Extra meters added to every keep-out radius. Omit for the nominal disk. The compiled obstacle rows stay the same; only the numeric radius changes."
+                  },
+                  "robust_margin_tightening": {
+                    "default": false,
+                    "description": "When true, inflate every keep-out radius and shrink the corridor by gain * ||d_hat_xy|| plus margin_tightening_m. The pad is clamped to 0.15 m and the corridor never drops below 0.05 m or its original width. Default false leaves the nominal disks unchanged.",
                     "type": "boolean"
                   },
                   "scenario_forecasts": {
@@ -2405,6 +2731,12 @@
                   "solver": {
                     "default": "auto",
                     "description": "Leave this at auto. The server selects the numerical method.",
+                    "type": "string"
+                  },
+                  "solver_backend": {
+                    "default": "ipopt",
+                    "description": "Nonlinear program backend. ipopt is the existing solver and the default, so a payload that omits this field is unchanged. auto uses fatrop when this CasADi build has the plugin and the shooting NLP matches its stage-wise structure, and IPOPT otherwise. fatrop asks for that OCP solver and still falls back to IPOPT if structure detection rejects the formulation.",
+                    "enum": ["auto", "ipopt", "fatrop"],
                     "type": "string"
                   },
                   "system": {
@@ -2688,7 +3020,7 @@
                               "minimum": -1000000000000,
                               "type": "number"
                             },
-                            "description": "Template knobs, one number per required key. double_integrator and unicycle_kinematics: dt > 0 (seconds). thermal_rc_zone: dt > 0, capacity > 0, time_constant > 0, and ambient. soil_moisture_cascade: dt > 0, capacity > 0, tau_1 > 0, tau_2 > 0, tau_3 > 0, k_12 >= 0, k_23 >= 0. gravity_tank: dt > 0, discharge > 0, inflow_gain > 0. cart_pendulum: dt, cart_mass, pole_mass, friction, inertia, gravity, and length, each > 0. icr_skid_steer: dt > 0 and slip, a signed length with abs(slip) <= 10. Body-frame lateral velocity equals slip * yaw_rate. If x_icr is the forward coordinate of the instantaneous center, positive ahead of the reference point, slip = -x_icr. ackermann: dt > 0 and wheelbase > 0. The steer component of u_min and u_max must lie inside ±1.2 rad. quadrotor_3d: dt from 0.02 to 0.05 s (20–50 Hz outer loop), gravity > 0, and drag >= 0. Inputs are roll, pitch, and thrust acceleration. Tilt bounds stay inside ±0.45 rad. Thrust bounds stay inside 0.4 g to 2 g. thermal_valve_process: dt > 0, rangeability > 1, flow_max > 0, tau_valve > 0, capacity > 0, loss >= 0, ambient, and heater_gain > 0. Valve flow is R^(valve_pos - 1). marine_usv: dt > 0, mass > 0, inertia > 0. Added mass and quadratic drag coefficients are >= 0. anti_sway_crane: dt > 0, cable_length > 0, cart_mass > 0, load_mass > 0, gravity > 0, damping >= 0. The input is cart force. Sway angle limits are soft state bounds. process_valve: dt > 0, capacitance > 0, tau > 0, cv > 0, and supply > 0. quadrotor: dt > 0, mass > 0, gravity > 0, and attitude_tau > 0. Unknown keys are rejected.",
+                            "description": "Template knobs, one number per required key. double_integrator and unicycle_kinematics: dt > 0 (seconds). thermal_rc_zone: dt > 0, capacity > 0, time_constant > 0, and ambient. soil_moisture_cascade: dt > 0, capacity > 0, tau_1 > 0, tau_2 > 0, tau_3 > 0, k_12 >= 0, k_23 >= 0. gravity_tank: dt > 0, discharge > 0, inflow_gain > 0. cart_pendulum: dt, cart_mass, pole_mass, friction, inertia, gravity, and length, each > 0. icr_skid_steer: dt > 0 and slip, a signed length with abs(slip) <= 10. Body-frame lateral velocity equals slip * yaw_rate. If x_icr is the forward coordinate of the instantaneous center, positive ahead of the reference point, slip = -x_icr. ackermann: dt > 0 and wheelbase > 0. The steer component of u_min and u_max must lie inside ±1.2 rad. quadrotor_3d: dt from 0.02 to 0.05 s (20–50 Hz outer loop), gravity > 0, and drag >= 0. Inputs are roll, pitch, and thrust acceleration. Tilt bounds stay inside ±0.45 rad. Thrust bounds stay inside 0.4 g to 2 g. Optional attitude_tau_s > 0 adds a first-order roll/pitch lag, a yaw state, and a yaw-rate command. Omit it, or send 0, and the 6-state outer loop is unchanged. thermal_valve_process: dt > 0, rangeability > 1, flow_max > 0, tau_valve > 0, capacity > 0, loss >= 0, ambient, and heater_gain > 0. Valve flow is R^(valve_pos - 1). marine_usv: dt > 0, mass > 0, inertia > 0. Added mass and quadratic drag coefficients are >= 0. anti_sway_crane: dt > 0, cable_length > 0, cart_mass > 0, load_mass > 0, gravity > 0, damping >= 0. The input is cart force. Sway angle limits are soft state bounds. process_valve: dt > 0, capacitance > 0, tau > 0, cv > 0, and supply > 0. quadrotor: dt > 0, mass > 0, gravity > 0, and attitude_tau > 0. Unknown keys are rejected.",
                             "type": "object"
                           },
                           "u_max": {
@@ -2962,6 +3294,25 @@
                       }
                     ]
                   },
+                  "terminal_level": {
+                    "anyOf": [
+                      {
+                        "maximum": 1000000,
+                        "minimum": 0,
+                        "type": "number"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ],
+                    "default": null,
+                    "description": "Upper bound on (x_N - x_ref)^T Qf (x_N - x_ref) when terminal_set is true. Omit for max(4, nx)."
+                  },
+                  "terminal_set": {
+                    "default": false,
+                    "description": "When true, the terminal state must lie in a sublevel set of the Qf Lyapunov function. A slack keeps a distant start feasible. Default false leaves the NLP unchanged. This constraint is solved with IPOPT.",
+                    "type": "boolean"
+                  },
                   "timeout_s": {
                     "default": 2,
                     "description": "IPOPT wall-clock budget in seconds. Default 2, must be > 0 and <= 5.",
@@ -3070,7 +3421,7 @@
               "tags": []
             }
           },
-          "digest": "sha256:392fa4a831263480d6e93d8794cdaac4062d9e031ae5d8e74837526934a4e56a"
+          "digest": "sha256:d73948c0086102d804a455540de471bfef10c6c8fa69470fbe859adc8fe2b84c"
         },
         {
           "name": "start_autotune_job",
@@ -3145,6 +3496,21 @@
                                           "description": "Radius. Must be >= 0.",
                                           "maximum": 1000000000000,
                                           "minimum": 0,
+                                          "type": "number"
+                                        },
+                                        "vx": {
+                                          "default": 0,
+                                          "description": "Constant velocity along the first position index. Omit for 0.",
+                                          "type": "number"
+                                        },
+                                        "vy": {
+                                          "default": 0,
+                                          "description": "Constant velocity along the second position index. Omit for 0.",
+                                          "type": "number"
+                                        },
+                                        "vz": {
+                                          "default": 0,
+                                          "description": "Constant vertical velocity. Omit for 0. Planar circles ignore it.",
                                           "type": "number"
                                         }
                                       },
@@ -3983,7 +4349,7 @@
                               "minimum": -1000000000000,
                               "type": "number"
                             },
-                            "description": "Template knobs, one number per required key. double_integrator and unicycle_kinematics: dt > 0 (seconds). thermal_rc_zone: dt > 0, capacity > 0, time_constant > 0, and ambient. soil_moisture_cascade: dt > 0, capacity > 0, tau_1 > 0, tau_2 > 0, tau_3 > 0, k_12 >= 0, k_23 >= 0. gravity_tank: dt > 0, discharge > 0, inflow_gain > 0. cart_pendulum: dt, cart_mass, pole_mass, friction, inertia, gravity, and length, each > 0. icr_skid_steer: dt > 0 and slip, a signed length with abs(slip) <= 10. Body-frame lateral velocity equals slip * yaw_rate. If x_icr is the forward coordinate of the instantaneous center, positive ahead of the reference point, slip = -x_icr. ackermann: dt > 0 and wheelbase > 0. The steer component of u_min and u_max must lie inside ±1.2 rad. quadrotor_3d: dt from 0.02 to 0.05 s (20–50 Hz outer loop), gravity > 0, and drag >= 0. Inputs are roll, pitch, and thrust acceleration. Tilt bounds stay inside ±0.45 rad. Thrust bounds stay inside 0.4 g to 2 g. thermal_valve_process: dt > 0, rangeability > 1, flow_max > 0, tau_valve > 0, capacity > 0, loss >= 0, ambient, and heater_gain > 0. Valve flow is R^(valve_pos - 1). marine_usv: dt > 0, mass > 0, inertia > 0. Added mass and quadratic drag coefficients are >= 0. anti_sway_crane: dt > 0, cable_length > 0, cart_mass > 0, load_mass > 0, gravity > 0, damping >= 0. The input is cart force. Sway angle limits are soft state bounds. process_valve: dt > 0, capacitance > 0, tau > 0, cv > 0, and supply > 0. quadrotor: dt > 0, mass > 0, gravity > 0, and attitude_tau > 0. Unknown keys are rejected.",
+                            "description": "Template knobs, one number per required key. double_integrator and unicycle_kinematics: dt > 0 (seconds). thermal_rc_zone: dt > 0, capacity > 0, time_constant > 0, and ambient. soil_moisture_cascade: dt > 0, capacity > 0, tau_1 > 0, tau_2 > 0, tau_3 > 0, k_12 >= 0, k_23 >= 0. gravity_tank: dt > 0, discharge > 0, inflow_gain > 0. cart_pendulum: dt, cart_mass, pole_mass, friction, inertia, gravity, and length, each > 0. icr_skid_steer: dt > 0 and slip, a signed length with abs(slip) <= 10. Body-frame lateral velocity equals slip * yaw_rate. If x_icr is the forward coordinate of the instantaneous center, positive ahead of the reference point, slip = -x_icr. ackermann: dt > 0 and wheelbase > 0. The steer component of u_min and u_max must lie inside ±1.2 rad. quadrotor_3d: dt from 0.02 to 0.05 s (20–50 Hz outer loop), gravity > 0, and drag >= 0. Inputs are roll, pitch, and thrust acceleration. Tilt bounds stay inside ±0.45 rad. Thrust bounds stay inside 0.4 g to 2 g. Optional attitude_tau_s > 0 adds a first-order roll/pitch lag, a yaw state, and a yaw-rate command. Omit it, or send 0, and the 6-state outer loop is unchanged. thermal_valve_process: dt > 0, rangeability > 1, flow_max > 0, tau_valve > 0, capacity > 0, loss >= 0, ambient, and heater_gain > 0. Valve flow is R^(valve_pos - 1). marine_usv: dt > 0, mass > 0, inertia > 0. Added mass and quadratic drag coefficients are >= 0. anti_sway_crane: dt > 0, cable_length > 0, cart_mass > 0, load_mass > 0, gravity > 0, damping >= 0. The input is cart force. Sway angle limits are soft state bounds. process_valve: dt > 0, capacitance > 0, tau > 0, cv > 0, and supply > 0. quadrotor: dt > 0, mass > 0, gravity > 0, and attitude_tau > 0. Unknown keys are rejected.",
                             "type": "object"
                           },
                           "u_max": {
@@ -4289,7 +4655,7 @@
               "tags": []
             }
           },
-          "digest": "sha256:e78b4153d1009cd84e4f3ec49a638c7b918b11d97730a9d2b1de123f835b529b"
+          "digest": "sha256:cf91374353d21de6d9ba2e9391685d1f342101b3564122ec127d6e4d787858f5"
         },
         {
           "name": "validate_problem",
@@ -4444,6 +4810,21 @@
                                           "description": "Radius. Must be >= 0.",
                                           "maximum": 1000000000000,
                                           "minimum": 0,
+                                          "type": "number"
+                                        },
+                                        "vx": {
+                                          "default": 0,
+                                          "description": "Constant velocity along the first position index. Omit for 0.",
+                                          "type": "number"
+                                        },
+                                        "vy": {
+                                          "default": 0,
+                                          "description": "Constant velocity along the second position index. Omit for 0.",
+                                          "type": "number"
+                                        },
+                                        "vz": {
+                                          "default": 0,
+                                          "description": "Constant vertical velocity. Omit for 0. Planar circles ignore it.",
                                           "type": "number"
                                         }
                                       },
@@ -5022,7 +5403,7 @@
                               "minimum": -1000000000000,
                               "type": "number"
                             },
-                            "description": "Template knobs, one number per required key. double_integrator and unicycle_kinematics: dt > 0 (seconds). thermal_rc_zone: dt > 0, capacity > 0, time_constant > 0, and ambient. soil_moisture_cascade: dt > 0, capacity > 0, tau_1 > 0, tau_2 > 0, tau_3 > 0, k_12 >= 0, k_23 >= 0. gravity_tank: dt > 0, discharge > 0, inflow_gain > 0. cart_pendulum: dt, cart_mass, pole_mass, friction, inertia, gravity, and length, each > 0. icr_skid_steer: dt > 0 and slip, a signed length with abs(slip) <= 10. Body-frame lateral velocity equals slip * yaw_rate. If x_icr is the forward coordinate of the instantaneous center, positive ahead of the reference point, slip = -x_icr. ackermann: dt > 0 and wheelbase > 0. The steer component of u_min and u_max must lie inside ±1.2 rad. quadrotor_3d: dt from 0.02 to 0.05 s (20–50 Hz outer loop), gravity > 0, and drag >= 0. Inputs are roll, pitch, and thrust acceleration. Tilt bounds stay inside ±0.45 rad. Thrust bounds stay inside 0.4 g to 2 g. thermal_valve_process: dt > 0, rangeability > 1, flow_max > 0, tau_valve > 0, capacity > 0, loss >= 0, ambient, and heater_gain > 0. Valve flow is R^(valve_pos - 1). marine_usv: dt > 0, mass > 0, inertia > 0. Added mass and quadratic drag coefficients are >= 0. anti_sway_crane: dt > 0, cable_length > 0, cart_mass > 0, load_mass > 0, gravity > 0, damping >= 0. The input is cart force. Sway angle limits are soft state bounds. process_valve: dt > 0, capacitance > 0, tau > 0, cv > 0, and supply > 0. quadrotor: dt > 0, mass > 0, gravity > 0, and attitude_tau > 0. Unknown keys are rejected.",
+                            "description": "Template knobs, one number per required key. double_integrator and unicycle_kinematics: dt > 0 (seconds). thermal_rc_zone: dt > 0, capacity > 0, time_constant > 0, and ambient. soil_moisture_cascade: dt > 0, capacity > 0, tau_1 > 0, tau_2 > 0, tau_3 > 0, k_12 >= 0, k_23 >= 0. gravity_tank: dt > 0, discharge > 0, inflow_gain > 0. cart_pendulum: dt, cart_mass, pole_mass, friction, inertia, gravity, and length, each > 0. icr_skid_steer: dt > 0 and slip, a signed length with abs(slip) <= 10. Body-frame lateral velocity equals slip * yaw_rate. If x_icr is the forward coordinate of the instantaneous center, positive ahead of the reference point, slip = -x_icr. ackermann: dt > 0 and wheelbase > 0. The steer component of u_min and u_max must lie inside ±1.2 rad. quadrotor_3d: dt from 0.02 to 0.05 s (20–50 Hz outer loop), gravity > 0, and drag >= 0. Inputs are roll, pitch, and thrust acceleration. Tilt bounds stay inside ±0.45 rad. Thrust bounds stay inside 0.4 g to 2 g. Optional attitude_tau_s > 0 adds a first-order roll/pitch lag, a yaw state, and a yaw-rate command. Omit it, or send 0, and the 6-state outer loop is unchanged. thermal_valve_process: dt > 0, rangeability > 1, flow_max > 0, tau_valve > 0, capacity > 0, loss >= 0, ambient, and heater_gain > 0. Valve flow is R^(valve_pos - 1). marine_usv: dt > 0, mass > 0, inertia > 0. Added mass and quadratic drag coefficients are >= 0. anti_sway_crane: dt > 0, cable_length > 0, cart_mass > 0, load_mass > 0, gravity > 0, damping >= 0. The input is cart force. Sway angle limits are soft state bounds. process_valve: dt > 0, capacitance > 0, tau > 0, cv > 0, and supply > 0. quadrotor: dt > 0, mass > 0, gravity > 0, and attitude_tau > 0. Unknown keys are rejected.",
                             "type": "object"
                           },
                           "u_max": {
@@ -5394,10 +5775,10 @@
               "tags": []
             }
           },
-          "digest": "sha256:ed2c28fec6a18fb0e3843ec16f0ef75acc1c993c88178cb4c9383b033747d61f"
+          "digest": "sha256:607bd08839dc3fe3dda1a19d1f3b26b4980d3d841ff28586d690af6ab78446af"
         }
       ],
-      "digest": "sha256:9ce677454aa7390b24afeb3bc22f54f0cc3aa3d0970db3c711ca16f9e857d0cf"
+      "digest": "sha256:b686ad0380494f03ef2601a47648a0a7ca01f60ca04ba20c24d84da80582660a"
     }
   }
 }

@@ -19,7 +19,7 @@
       "serverInfo": {
         "name": "aquedra-run",
         "title": "Aquedra Run",
-        "version": "0.1.0",
+        "version": "0.2.0",
         "websiteUrl": "https://r.aquedra.com",
         "icons": [
           {
@@ -34,8 +34,115 @@
           "listChanged": true
         }
       },
-      "instructions": "Aquedra Run sells GIS tools for AI agents, priced per call and paid with prepaid credits (1 credit = US$1). This connection has GIS tools (convert_coordinates, measure_geojson, reproject_geojson, transform_geojson, convert_geo_file), each call charging its listed price from the credits (dry_run returns the price without charging), and can read the account's usage and buy credits. The chat tool answers with open models on Aquedra Run's own GPUs on a best-effort basis: when they are busy it fails with gpu_busy and retry_after_seconds, and nothing is charged. Credit packs are not on sale yet. Never buy credits or pay unless the user asked for it, and never pay again for a payment reported as pending. Money amounts are US dollars as decimal text.",
+      "instructions": "Aquedra Run sells GIS tools for AI agents, priced per call and paid with prepaid credits (1 credit = US$1). This connection has GIS tools (convert_coordinates, measure_geojson, reproject_geojson, transform_geojson, convert_geo_file, get_elevation, elevation_profile, analyze_terrain), each call charging its listed price from the credits (dry_run returns the price without charging), and can read the account's usage and buy credits. Elevation results carry a Copernicus attribution that must be kept when they are shared. The chat tool answers with open models on Aquedra Run's own GPUs on a best-effort basis: when they are busy it fails with gpu_busy and retry_after_seconds, and nothing is charged. Credit packs are not on sale yet. Never buy credits or pay unless the user asked for it, and never pay again for a payment reported as pending. Money amounts are US dollars as decimal text.",
       "tools": [
+        {
+          "name": "analyze_terrain",
+          "title": "Terrain analysis",
+          "description": "Returns the area and surface area, elevation statistics, slope and aspect of a GeoJSON Polygon or MultiPolygon from the pixels of Copernicus DEM, a surface model (DSM) whose heights include buildings and trees, in metres above EGM2008 inside it, with the result's dem and attribution. For the elevation of points use get_elevation, and along a line use elevation_profile. Takes a polygon of up to 100 km² and 10,000 vertices, within up to 16 DEM blocks (about 120 x 120 km near the equator; each 90 m GLO-90 block counts as 4) and a bounding box of up to 4,194,304 DEM pixels. Costs US$0.002 per unit (up to 4 km² of polygon area) from prepaid credits; with the default 3 s it is charged only when it succeeds, and invalid input is never charged. Set dry_run to true to get the price without charging and max_cost_usd to refuse a call that would cost more; for heavier inputs set max_seconds from 4 to 30, where each second over the 3 included costs US$0.0005, the full time is held up front and the unused part refunded, and running out of time is 503 terrain_unavailable, refunded in full on both lanes, never 422 operation_too_complex.",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "description": "Terrain of a polygon from the DEM pixels whose centres fall inside it: area and surface area, elevation statistics, Horn slope and aspect, area-weighted. Elevations come from Copernicus DEM (GLO-30, GLO-90 where GLO-30 is missing), a surface model that includes buildings and vegetation, in metres above the EGM2008 geoid; the ocean is 0 m.",
+            "properties": {
+              "dry_run": {
+                "description": "When true, return the price (cost_usd) and units of this call without running it or charging anything.",
+                "type": "boolean"
+              },
+              "geojson": {
+                "additionalProperties": {},
+                "description": "A GeoJSON Polygon or MultiPolygon, or a Feature of one, in WGS84 longitude/latitude: at most 10,000 vertices and 100 km² of geodesic area, not crossing the antimeridian.",
+                "properties": {
+                  "type": {
+                    "description": "GeoJSON type: Polygon or MultiPolygon, or Feature with one as its geometry.",
+                    "enum": ["Polygon", "MultiPolygon", "Feature"],
+                    "type": "string"
+                  }
+                },
+                "required": ["type"],
+                "type": "object"
+              },
+              "max_cost_usd": {
+                "description": "The most this call may cost, in USD, as a number or decimal text with at most 6 decimals (e.g. 0.01 or \"0.01\"). A call that would cost more is refused with 402 max_cost_exceeded and nothing is charged.",
+                "type": ["number", "string"]
+              },
+              "max_seconds": {
+                "description": "Compute time limit in seconds, 1 to 30 (default 3; 1 to 3 all use the standard 3 s). The price includes 3 s of compute. From 4 to 30 (extended time) the call runs on a separate lane, where buffer accepts larger inputs, and each second over 3 costs the geo_compute_second price: the price plus all those seconds is held at the start (that is what dry_run reports and max_cost_usd is compared with), the seconds not used are refunded, and the response adds compute_ms and max_seconds. With extended time the price and the time used are charged if the call runs out of time or memory, or is cancelled while running: 422 operation_too_complex keeps the whole hold, 422 operation_too_large or 413 result_too_large (a result over 8 MiB) or 499 cancelled keep the price and the seconds used, and those errors carry cost_usd. Any other failure is refunded in full. For the elevation operations (elevation, profile and terrain), running out of time is 503 terrain_unavailable, refunded in full on both lanes, never 422 operation_too_complex.",
+                "maximum": 30,
+                "minimum": 1,
+                "type": "integer"
+              }
+            },
+            "required": ["geojson"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "additionalProperties": false,
+            "properties": {
+              "balance_usd": {
+                "description": "Credit balance after the charge, US dollars as decimal text; absent with dry_run.",
+                "type": "string"
+              },
+              "call_id": {
+                "description": "Server-issued id of the call; absent with dry_run.",
+                "type": "string"
+              },
+              "compute_ms": {
+                "description": "Extended time only: the compute time the call was billed on, in milliseconds.",
+                "maximum": 9007199254740991,
+                "minimum": -9007199254740991,
+                "type": "integer"
+              },
+              "cost_usd": {
+                "description": "What the call cost (or would cost, with dry_run), US dollars as decimal text.",
+                "type": "string"
+              },
+              "dry_run": {
+                "const": true,
+                "description": "True when nothing was run or charged.",
+                "type": "boolean"
+              },
+              "max_seconds": {
+                "description": "Extended time only: the max_seconds the call ran (or would run) with.",
+                "maximum": 9007199254740991,
+                "minimum": -9007199254740991,
+                "type": "integer"
+              },
+              "result": {
+                "description": "The operation's result; absent with dry_run."
+              },
+              "units": {
+                "description": "Price units the input measured.",
+                "maximum": 9007199254740991,
+                "minimum": -9007199254740991,
+                "type": "integer"
+              }
+            },
+            "required": ["cost_usd", "units"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": false,
+            "openWorldHint": false,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": false,
+            "openWorld": false,
+            "readOnly": false
+          },
+          "meta": {
+            "securitySchemes": [
+              {
+                "scopes": ["run"],
+                "type": "oauth2"
+              }
+            ]
+          },
+          "digest": "sha256:e1492705b98ef5b301a50aeb95903433cc71b1defaa9df90dd9c182b8c0f692c"
+        },
         {
           "name": "buy_credits",
           "title": "Buy credits",
@@ -428,7 +535,7 @@
                 "type": ["number", "string"]
               },
               "max_seconds": {
-                "description": "Compute time limit in seconds, 1 to 30 (default 3; 1 to 3 all use the standard 3 s). The price includes 3 s of compute. From 4 to 30 (extended time) the call runs on a separate lane, where buffer accepts larger inputs, and each second over 3 costs the geo_compute_second price: the price plus all those seconds is held at the start (that is what dry_run reports and max_cost_usd is compared with), the seconds not used are refunded, and the response adds compute_ms and max_seconds. With extended time the price and the time used are charged if the call runs out of time or memory, or is cancelled while running: 422 operation_too_complex keeps the whole hold, 422 operation_too_large or 413 result_too_large (a result over 8 MiB) or 499 cancelled keep the price and the seconds used, and those errors carry cost_usd. Any other failure is refunded in full.",
+                "description": "Compute time limit in seconds, 1 to 30 (default 3; 1 to 3 all use the standard 3 s). The price includes 3 s of compute. From 4 to 30 (extended time) the call runs on a separate lane, where buffer accepts larger inputs, and each second over 3 costs the geo_compute_second price: the price plus all those seconds is held at the start (that is what dry_run reports and max_cost_usd is compared with), the seconds not used are refunded, and the response adds compute_ms and max_seconds. With extended time the price and the time used are charged if the call runs out of time or memory, or is cancelled while running: 422 operation_too_complex keeps the whole hold, 422 operation_too_large or 413 result_too_large (a result over 8 MiB) or 499 cancelled keep the price and the seconds used, and those errors carry cost_usd. Any other failure is refunded in full. For the elevation operations (elevation, profile and terrain), running out of time is 503 terrain_unavailable, refunded in full on both lanes, never 422 operation_too_complex.",
                 "maximum": 30,
                 "minimum": 1,
                 "type": "integer"
@@ -572,7 +679,7 @@
               }
             ]
           },
-          "digest": "sha256:736328096409662c306e24d7a88ab3a0a01258d333ccbefcb70054e6cfad164d"
+          "digest": "sha256:164f2b0f3903b68e36865191617aa146a0829a4452695156c3bfcf28719f7fee"
         },
         {
           "name": "convert_geo_file",
@@ -601,7 +708,7 @@
                 "type": ["number", "string"]
               },
               "max_seconds": {
-                "description": "Compute time limit in seconds, 1 to 30 (default 3; 1 to 3 all use the standard 3 s). The price includes 3 s of compute. From 4 to 30 (extended time) the call runs on a separate lane, where buffer accepts larger inputs, and each second over 3 costs the geo_compute_second price: the price plus all those seconds is held at the start (that is what dry_run reports and max_cost_usd is compared with), the seconds not used are refunded, and the response adds compute_ms and max_seconds. With extended time the price and the time used are charged if the call runs out of time or memory, or is cancelled while running: 422 operation_too_complex keeps the whole hold, 422 operation_too_large or 413 result_too_large (a result over 8 MiB) or 499 cancelled keep the price and the seconds used, and those errors carry cost_usd. Any other failure is refunded in full.",
+                "description": "Compute time limit in seconds, 1 to 30 (default 3; 1 to 3 all use the standard 3 s). The price includes 3 s of compute. From 4 to 30 (extended time) the call runs on a separate lane, where buffer accepts larger inputs, and each second over 3 costs the geo_compute_second price: the price plus all those seconds is held at the start (that is what dry_run reports and max_cost_usd is compared with), the seconds not used are refunded, and the response adds compute_ms and max_seconds. With extended time the price and the time used are charged if the call runs out of time or memory, or is cancelled while running: 422 operation_too_complex keeps the whole hold, 422 operation_too_large or 413 result_too_large (a result over 8 MiB) or 499 cancelled keep the price and the seconds used, and those errors carry cost_usd. Any other failure is refunded in full. For the elevation operations (elevation, profile and terrain), running out of time is 503 terrain_unavailable, refunded in full on both lanes, never 422 operation_too_complex.",
                 "maximum": 30,
                 "minimum": 1,
                 "type": "integer"
@@ -693,7 +800,244 @@
               }
             ]
           },
-          "digest": "sha256:b6b91c1ae16a79bc7d8561db1ee988c58ff1ba6702da01970fcc0167ac176503"
+          "digest": "sha256:220638ae7ef855608fadce1617329646d0989bb787a47a6fbfa5b8f4b36f5b4c"
+        },
+        {
+          "name": "elevation_profile",
+          "title": "Elevation profile",
+          "description": "Returns the elevation profile of a GeoJSON LineString from Copernicus DEM, a surface model (DSM) whose heights include buildings and trees, in metres above EGM2008: samples with their distance from the start and elevation, the minimum, maximum, ascent and descent, with each sample's source and the result's dem and attribution. For the elevation of separate points use get_elevation, and for the slope and elevation statistics of an area use analyze_terrain. Takes a line of up to 100 km and 10,000 vertices, up to 1,000 samples (samples or step_m), within up to 16 DEM blocks (about 120 x 120 km near the equator; each 90 m GLO-90 block counts as 4). Costs US$0.002 per unit (up to 256 samples) from prepaid credits; with the default 3 s it is charged only when it succeeds, and invalid input is never charged. Set dry_run to true to get the price without charging and max_cost_usd to refuse a call that would cost more; for heavier inputs set max_seconds from 4 to 30, where each second over the 3 included costs US$0.0005, the full time is held up front and the unused part refunded, and running out of time is 503 terrain_unavailable, refunded in full on both lanes, never 422 operation_too_complex.",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "description": "Elevation profile along a line: samples with their distance from the start and elevation, min, max, and total ascent and descent (unsmoothed). Elevations come from Copernicus DEM (GLO-30, GLO-90 where GLO-30 is missing), a surface model that includes buildings and vegetation, in metres above the EGM2008 geoid; the ocean is 0 m.",
+            "properties": {
+              "dry_run": {
+                "description": "When true, return the price (cost_usd) and units of this call without running it or charging anything.",
+                "type": "boolean"
+              },
+              "line": {
+                "additionalProperties": {},
+                "description": "A GeoJSON LineString, or a Feature of one, in WGS84 longitude/latitude, with 2 to 10,000 positions (more is 413 payload_too_large), at most 100,000 m long, not crossing the antimeridian.",
+                "properties": {
+                  "type": {
+                    "description": "GeoJSON type: LineString, or Feature with one as its geometry.",
+                    "enum": ["LineString", "Feature"],
+                    "type": "string"
+                  }
+                },
+                "required": ["type"],
+                "type": "object"
+              },
+              "max_cost_usd": {
+                "description": "The most this call may cost, in USD, as a number or decimal text with at most 6 decimals (e.g. 0.01 or \"0.01\"). A call that would cost more is refused with 402 max_cost_exceeded and nothing is charged.",
+                "type": ["number", "string"]
+              },
+              "max_seconds": {
+                "description": "Compute time limit in seconds, 1 to 30 (default 3; 1 to 3 all use the standard 3 s). The price includes 3 s of compute. From 4 to 30 (extended time) the call runs on a separate lane, where buffer accepts larger inputs, and each second over 3 costs the geo_compute_second price: the price plus all those seconds is held at the start (that is what dry_run reports and max_cost_usd is compared with), the seconds not used are refunded, and the response adds compute_ms and max_seconds. With extended time the price and the time used are charged if the call runs out of time or memory, or is cancelled while running: 422 operation_too_complex keeps the whole hold, 422 operation_too_large or 413 result_too_large (a result over 8 MiB) or 499 cancelled keep the price and the seconds used, and those errors carry cost_usd. Any other failure is refunded in full. For the elevation operations (elevation, profile and terrain), running out of time is 503 terrain_unavailable, refunded in full on both lanes, never 422 operation_too_complex.",
+                "maximum": 30,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "samples": {
+                "description": "Number of samples spread evenly along the line, both ends included (2 to 1,000). Do not combine with step_m.",
+                "maximum": 1000,
+                "minimum": 2,
+                "type": "integer"
+              },
+              "step_m": {
+                "description": "Distance in metres between samples, from the start, plus the end (1 to 100,000); at most 1,000 samples. Do not combine with samples. Without either, a sample every 30 m, or 1,000 samples over the whole line when that would be more.",
+                "maximum": 100000,
+                "minimum": 1,
+                "type": "number"
+              }
+            },
+            "required": ["line"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "additionalProperties": false,
+            "properties": {
+              "balance_usd": {
+                "description": "Credit balance after the charge, US dollars as decimal text; absent with dry_run.",
+                "type": "string"
+              },
+              "call_id": {
+                "description": "Server-issued id of the call; absent with dry_run.",
+                "type": "string"
+              },
+              "compute_ms": {
+                "description": "Extended time only: the compute time the call was billed on, in milliseconds.",
+                "maximum": 9007199254740991,
+                "minimum": -9007199254740991,
+                "type": "integer"
+              },
+              "cost_usd": {
+                "description": "What the call cost (or would cost, with dry_run), US dollars as decimal text.",
+                "type": "string"
+              },
+              "dry_run": {
+                "const": true,
+                "description": "True when nothing was run or charged.",
+                "type": "boolean"
+              },
+              "max_seconds": {
+                "description": "Extended time only: the max_seconds the call ran (or would run) with.",
+                "maximum": 9007199254740991,
+                "minimum": -9007199254740991,
+                "type": "integer"
+              },
+              "result": {
+                "description": "The operation's result; absent with dry_run."
+              },
+              "units": {
+                "description": "Price units the input measured.",
+                "maximum": 9007199254740991,
+                "minimum": -9007199254740991,
+                "type": "integer"
+              }
+            },
+            "required": ["cost_usd", "units"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": false,
+            "openWorldHint": false,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": false,
+            "openWorld": false,
+            "readOnly": false
+          },
+          "meta": {
+            "securitySchemes": [
+              {
+                "scopes": ["run"],
+                "type": "oauth2"
+              }
+            ]
+          },
+          "digest": "sha256:9388ad06f7196ef6687f04c146dda9d614d9088fd43a27885070f40928d7b155"
+        },
+        {
+          "name": "get_elevation",
+          "title": "Elevation at points",
+          "description": "Returns the elevation at each point, interpolated bilinearly from Copernicus DEM, a surface model (DSM) whose heights include buildings and trees, in metres above EGM2008, with each point's source and the result's dem and attribution. For elevations along a line use elevation_profile, and for the slope and elevation statistics of an area use analyze_terrain. Takes up to 1,000 points (WGS84 lat and lon) per call, within up to 16 DEM blocks (about 120 x 120 km near the equator; each 90 m GLO-90 block counts as 4). Costs US$0.002 per unit (up to 256 points) from prepaid credits; with the default 3 s it is charged only when it succeeds, and invalid input is never charged. Set dry_run to true to get the price without charging and max_cost_usd to refuse a call that would cost more; for heavier inputs set max_seconds from 4 to 30, where each second over the 3 included costs US$0.0005, the full time is held up front and the unused part refunded, and running out of time is 503 terrain_unavailable, refunded in full on both lanes, never 422 operation_too_complex.",
+          "inputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "description": "Ground elevation in metres at each point, interpolated bilinearly. Elevations come from Copernicus DEM (GLO-30, GLO-90 where GLO-30 is missing), a surface model that includes buildings and vegetation, in metres above the EGM2008 geoid; the ocean is 0 m.",
+            "properties": {
+              "dry_run": {
+                "description": "When true, return the price (cost_usd) and units of this call without running it or charging anything.",
+                "type": "boolean"
+              },
+              "max_cost_usd": {
+                "description": "The most this call may cost, in USD, as a number or decimal text with at most 6 decimals (e.g. 0.01 or \"0.01\"). A call that would cost more is refused with 402 max_cost_exceeded and nothing is charged.",
+                "type": ["number", "string"]
+              },
+              "max_seconds": {
+                "description": "Compute time limit in seconds, 1 to 30 (default 3; 1 to 3 all use the standard 3 s). The price includes 3 s of compute. From 4 to 30 (extended time) the call runs on a separate lane, where buffer accepts larger inputs, and each second over 3 costs the geo_compute_second price: the price plus all those seconds is held at the start (that is what dry_run reports and max_cost_usd is compared with), the seconds not used are refunded, and the response adds compute_ms and max_seconds. With extended time the price and the time used are charged if the call runs out of time or memory, or is cancelled while running: 422 operation_too_complex keeps the whole hold, 422 operation_too_large or 413 result_too_large (a result over 8 MiB) or 499 cancelled keep the price and the seconds used, and those errors carry cost_usd. Any other failure is refunded in full. For the elevation operations (elevation, profile and terrain), running out of time is 503 terrain_unavailable, refunded in full on both lanes, never 422 operation_too_complex.",
+                "maximum": 30,
+                "minimum": 1,
+                "type": "integer"
+              },
+              "points": {
+                "description": "1 to 1,000 points as {lat, lon}; more is 413 payload_too_large. The points of one call may need at most 16 DEM blocks of 1024 x 1024 pixels (about 30 km across at 30 m; each 90 m GLO-90 block counts as 4).",
+                "items": {
+                  "description": "A point in WGS84 decimal degrees.",
+                  "properties": {
+                    "lat": {
+                      "description": "Latitude in decimal degrees (-90 to 90), WGS84.",
+                      "maximum": 90,
+                      "minimum": -90,
+                      "type": "number"
+                    },
+                    "lon": {
+                      "description": "Longitude in decimal degrees (-180 to 180), WGS84.",
+                      "maximum": 180,
+                      "minimum": -180,
+                      "type": "number"
+                    }
+                  },
+                  "required": ["lat", "lon"],
+                  "type": "object"
+                },
+                "minItems": 1,
+                "type": "array"
+              }
+            },
+            "required": ["points"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "additionalProperties": false,
+            "properties": {
+              "balance_usd": {
+                "description": "Credit balance after the charge, US dollars as decimal text; absent with dry_run.",
+                "type": "string"
+              },
+              "call_id": {
+                "description": "Server-issued id of the call; absent with dry_run.",
+                "type": "string"
+              },
+              "compute_ms": {
+                "description": "Extended time only: the compute time the call was billed on, in milliseconds.",
+                "maximum": 9007199254740991,
+                "minimum": -9007199254740991,
+                "type": "integer"
+              },
+              "cost_usd": {
+                "description": "What the call cost (or would cost, with dry_run), US dollars as decimal text.",
+                "type": "string"
+              },
+              "dry_run": {
+                "const": true,
+                "description": "True when nothing was run or charged.",
+                "type": "boolean"
+              },
+              "max_seconds": {
+                "description": "Extended time only: the max_seconds the call ran (or would run) with.",
+                "maximum": 9007199254740991,
+                "minimum": -9007199254740991,
+                "type": "integer"
+              },
+              "result": {
+                "description": "The operation's result; absent with dry_run."
+              },
+              "units": {
+                "description": "Price units the input measured.",
+                "maximum": 9007199254740991,
+                "minimum": -9007199254740991,
+                "type": "integer"
+              }
+            },
+            "required": ["cost_usd", "units"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": false,
+            "openWorldHint": false,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": false,
+            "openWorld": false,
+            "readOnly": false
+          },
+          "meta": {
+            "securitySchemes": [
+              {
+                "scopes": ["run"],
+                "type": "oauth2"
+              }
+            ]
+          },
+          "digest": "sha256:3b4ef9f17119224f8729b786eafb508320ec1bc52bf31a452c97bb30f7e98f43"
         },
         {
           "name": "get_usage",
@@ -754,7 +1098,7 @@
                 "type": ["number", "string"]
               },
               "max_seconds": {
-                "description": "Compute time limit in seconds, 1 to 30 (default 3; 1 to 3 all use the standard 3 s). The price includes 3 s of compute. From 4 to 30 (extended time) the call runs on a separate lane, where buffer accepts larger inputs, and each second over 3 costs the geo_compute_second price: the price plus all those seconds is held at the start (that is what dry_run reports and max_cost_usd is compared with), the seconds not used are refunded, and the response adds compute_ms and max_seconds. With extended time the price and the time used are charged if the call runs out of time or memory, or is cancelled while running: 422 operation_too_complex keeps the whole hold, 422 operation_too_large or 413 result_too_large (a result over 8 MiB) or 499 cancelled keep the price and the seconds used, and those errors carry cost_usd. Any other failure is refunded in full.",
+                "description": "Compute time limit in seconds, 1 to 30 (default 3; 1 to 3 all use the standard 3 s). The price includes 3 s of compute. From 4 to 30 (extended time) the call runs on a separate lane, where buffer accepts larger inputs, and each second over 3 costs the geo_compute_second price: the price plus all those seconds is held at the start (that is what dry_run reports and max_cost_usd is compared with), the seconds not used are refunded, and the response adds compute_ms and max_seconds. With extended time the price and the time used are charged if the call runs out of time or memory, or is cancelled while running: 422 operation_too_complex keeps the whole hold, 422 operation_too_large or 413 result_too_large (a result over 8 MiB) or 499 cancelled keep the price and the seconds used, and those errors carry cost_usd. Any other failure is refunded in full. For the elevation operations (elevation, profile and terrain), running out of time is 503 terrain_unavailable, refunded in full on both lanes, never 422 operation_too_complex.",
                 "maximum": 30,
                 "minimum": 1,
                 "type": "integer"
@@ -829,7 +1173,7 @@
               }
             ]
           },
-          "digest": "sha256:365a76d71e2e7e48ebb2b4bbb3cb9116ef8eb9dce7976e7d3795924f25e53960"
+          "digest": "sha256:929b8b834a2f7c45273d07ef7e8722fa0ac2be7de6429c6a1be22caf473bb5bb"
         },
         {
           "name": "reproject_geojson",
@@ -864,7 +1208,7 @@
                 "type": ["number", "string"]
               },
               "max_seconds": {
-                "description": "Compute time limit in seconds, 1 to 30 (default 3; 1 to 3 all use the standard 3 s). The price includes 3 s of compute. From 4 to 30 (extended time) the call runs on a separate lane, where buffer accepts larger inputs, and each second over 3 costs the geo_compute_second price: the price plus all those seconds is held at the start (that is what dry_run reports and max_cost_usd is compared with), the seconds not used are refunded, and the response adds compute_ms and max_seconds. With extended time the price and the time used are charged if the call runs out of time or memory, or is cancelled while running: 422 operation_too_complex keeps the whole hold, 422 operation_too_large or 413 result_too_large (a result over 8 MiB) or 499 cancelled keep the price and the seconds used, and those errors carry cost_usd. Any other failure is refunded in full.",
+                "description": "Compute time limit in seconds, 1 to 30 (default 3; 1 to 3 all use the standard 3 s). The price includes 3 s of compute. From 4 to 30 (extended time) the call runs on a separate lane, where buffer accepts larger inputs, and each second over 3 costs the geo_compute_second price: the price plus all those seconds is held at the start (that is what dry_run reports and max_cost_usd is compared with), the seconds not used are refunded, and the response adds compute_ms and max_seconds. With extended time the price and the time used are charged if the call runs out of time or memory, or is cancelled while running: 422 operation_too_complex keeps the whole hold, 422 operation_too_large or 413 result_too_large (a result over 8 MiB) or 499 cancelled keep the price and the seconds used, and those errors carry cost_usd. Any other failure is refunded in full. For the elevation operations (elevation, profile and terrain), running out of time is 503 terrain_unavailable, refunded in full on both lanes, never 422 operation_too_complex.",
                 "maximum": 30,
                 "minimum": 1,
                 "type": "integer"
@@ -944,7 +1288,7 @@
               }
             ]
           },
-          "digest": "sha256:0573f4608f8d185efc8d2f6cbc7dd118977a21cb20bf61ae1c25c1ae0d096098"
+          "digest": "sha256:864735e3c7f5de00b868821ffcdd015d9b56932d0ba802a7d3959412b43cd0c9"
         },
         {
           "name": "transform_geojson",
@@ -980,7 +1324,7 @@
                 "type": ["number", "string"]
               },
               "max_seconds": {
-                "description": "Compute time limit in seconds, 1 to 30 (default 3; 1 to 3 all use the standard 3 s). The price includes 3 s of compute. From 4 to 30 (extended time) the call runs on a separate lane, where buffer accepts larger inputs, and each second over 3 costs the geo_compute_second price: the price plus all those seconds is held at the start (that is what dry_run reports and max_cost_usd is compared with), the seconds not used are refunded, and the response adds compute_ms and max_seconds. With extended time the price and the time used are charged if the call runs out of time or memory, or is cancelled while running: 422 operation_too_complex keeps the whole hold, 422 operation_too_large or 413 result_too_large (a result over 8 MiB) or 499 cancelled keep the price and the seconds used, and those errors carry cost_usd. Any other failure is refunded in full.",
+                "description": "Compute time limit in seconds, 1 to 30 (default 3; 1 to 3 all use the standard 3 s). The price includes 3 s of compute. From 4 to 30 (extended time) the call runs on a separate lane, where buffer accepts larger inputs, and each second over 3 costs the geo_compute_second price: the price plus all those seconds is held at the start (that is what dry_run reports and max_cost_usd is compared with), the seconds not used are refunded, and the response adds compute_ms and max_seconds. With extended time the price and the time used are charged if the call runs out of time or memory, or is cancelled while running: 422 operation_too_complex keeps the whole hold, 422 operation_too_large or 413 result_too_large (a result over 8 MiB) or 499 cancelled keep the price and the seconds used, and those errors carry cost_usd. Any other failure is refunded in full. For the elevation operations (elevation, profile and terrain), running out of time is 503 terrain_unavailable, refunded in full on both lanes, never 422 operation_too_complex.",
                 "maximum": 30,
                 "minimum": 1,
                 "type": "integer"
@@ -1066,10 +1410,10 @@
               }
             ]
           },
-          "digest": "sha256:5739a8f0db2b5a4de433b7ed4d215eda0b9a1573cabf343a85292c988b01cbe6"
+          "digest": "sha256:ed1d6ab2f576540b637a97544caf2b4ff6dfc07095bb1d7696c38b452c08ed55"
         }
       ],
-      "digest": "sha256:a011a7583016447fafa08d82954499018d7a9c38a0379707339ef192ebf8f3e9"
+      "digest": "sha256:0237d23c9374f333d57eb62641a7898e3d837d9086adb017c7297aec670316fd"
     }
   }
 }

@@ -27,12 +27,70 @@
       "instructions": "Öffentliche Aktionen der Website https://auto-oez.at/. Inhalte: content_summary (Überblick), content_full (alles, in Teilen), content_section (eine Seite/ein Abschnitt) — jede Antwort beginnt mit der Änderungsliste. Buchen, Anfragen und Bestellen nur im Auftrag und mit den Angaben der betroffenen Person.",
       "tools": [
         {
-          "name": "book_appointment",
-          "title": "Termin buchen",
-          "description": "Bucht einen freien Termin (Zeit aus check_availability). Nur im Auftrag und mit den Angaben der Person, für die gebucht wird.",
+          "name": "approve_quote",
+          "title": "Kostenvoranschlag freigeben",
+          "description": "Gibt einen Kostenvoranschlag verbindlich frei; daraus wird der Werkstattauftrag. Nur mit dem Token aus dem Link und nur im ausdrücklichen Auftrag der Person, der der Kostenvoranschlag gehört, mit ihrem vollen Namen. Vorher mit view_quote ansehen. Eine Wiederholung legt nichts doppelt an.",
           "inputSchema": {
             "additionalProperties": false,
             "properties": {
+              "add": {
+                "description": "Kennungen optionaler Positionen, die zusätzlich beauftragt werden (optional, aus view_quote)",
+                "items": {
+                  "maxLength": 16,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "maxItems": 60,
+                "type": "array"
+              },
+              "decline": {
+                "description": "Kennungen der Abschnitte, die nicht beauftragt werden (optional, aus view_quote)",
+                "items": {
+                  "maxLength": 16,
+                  "minLength": 1,
+                  "type": "string"
+                },
+                "maxItems": 60,
+                "type": "array"
+              },
+              "name": {
+                "description": "Vor- und Nachname der Person, die freigibt (2–120 Zeichen)",
+                "maxLength": 120,
+                "minLength": 2,
+                "type": "string"
+              },
+              "token": {
+                "description": "Token aus dem Link des Kostenvoranschlags (der letzte Teil von …/quote-approval/<token>)",
+                "pattern": "^[A-Za-z0-9_-]{20,64}$",
+                "type": "string"
+              }
+            },
+            "required": ["name", "token"],
+            "type": "object"
+          },
+          "annotations": {
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:036dca0b57ae1d447ccb78a037208b87368348420eafa507c909ee3b782c38fa"
+        },
+        {
+          "name": "book_appointment",
+          "title": "Termin buchen",
+          "description": "Bucht einen freien Termin (start, end und staffId aus check_availability). Nur im Auftrag und mit den Angaben der Person, für die gebucht wird. Für eine Werkstatt: das Fahrzeug (Kennzeichen, Marke und Modell, Erstzulassung, Kilometerstand) in vehicle mitgeben. Die Antwort enthält appointment.id und appointment.cancelToken: beides der Person mitteilen bzw. aufbewahren; nur damit kann der Termin bis 24 Stunden vor Beginn abgesagt oder verschoben werden. Mit clientRequestId kann der Aufruf nach einer verlorenen Antwort gefahrlos wiederholt werden.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "clientRequestId": {
+                "description": "Eigene Vorgangs-ID des Agenten (optional, 8–64 Zeichen: Buchstaben, Ziffern, _ und -), am besten zufällig, z. B. eine UUID. Gleiche ID mit gleichen Angaben = dieselbe Antwort und kein zweiter Vorgang; mit anderen Angaben wird der Aufruf abgelehnt. get_request_status findet den Vorgang mit dieser ID.",
+                "pattern": "^[A-Za-z0-9_-]{8,64}$",
+                "type": "string"
+              },
               "customerEmail": {
                 "description": "E-Mail für die Bestätigung",
                 "format": "email",
@@ -59,10 +117,45 @@
                 "description": "Kennung der Leistung",
                 "type": "string"
               },
+              "staffId": {
+                "description": "Kennung der Person bzw. Ressource aus check_availability (optional)",
+                "type": "string"
+              },
               "start": {
                 "description": "Beginn, ISO 8601 mit Zeitzone",
                 "format": "date-time",
                 "type": "string"
+              },
+              "vehicle": {
+                "additionalProperties": false,
+                "description": "Fahrzeug, für das der Termin ist",
+                "properties": {
+                  "firstRegistration": {
+                    "description": "Erstzulassung, z. B. 03/2018 (optional)",
+                    "maxLength": 20,
+                    "type": "string"
+                  },
+                  "makeModel": {
+                    "description": "Marke und Modell, z. B. VW Golf",
+                    "maxLength": 80,
+                    "minLength": 2,
+                    "type": "string"
+                  },
+                  "mileageKm": {
+                    "description": "Kilometerstand in km (optional)",
+                    "maximum": 2000000,
+                    "minimum": 0,
+                    "type": "integer"
+                  },
+                  "plate": {
+                    "description": "Kennzeichen, z. B. W-12345A",
+                    "maxLength": 15,
+                    "minLength": 2,
+                    "type": "string"
+                  }
+                },
+                "required": ["makeModel", "plate"],
+                "type": "object"
               }
             },
             "required": ["customerEmail", "customerName", "end", "serviceId", "start"],
@@ -77,12 +170,42 @@
             "openWorld": true,
             "readOnly": false
           },
-          "digest": "sha256:8a5a3ef3de977f255e507ca8348d1242df56eb151a37b8e039bf7ea18ae56864"
+          "digest": "sha256:1df856a992cb5a6a0f3ac8f1c5af2237bf305f078707cbc47cd98a93eda62532"
+        },
+        {
+          "name": "cancel_appointment",
+          "title": "Termin absagen",
+          "description": "Sagt einen gebuchten Termin ab. Nur mit appointmentId und cancelToken aus der Antwort von book_appointment bzw. aus dem Verwalten-Link der Bestätigungsmail (Parameter token); ohne diese beiden Angaben ist keine Absage möglich. Möglich bis 24 Stunden vor Beginn. Nur im Auftrag der Person, die den Termin gebucht hat.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "appointmentId": {
+                "description": "appointment.id aus der Antwort von book_appointment",
+                "type": "string"
+              },
+              "token": {
+                "description": "appointment.cancelToken aus der Antwort von book_appointment (bzw. token aus dem Verwalten-Link der Bestätigungsmail)",
+                "type": "string"
+              }
+            },
+            "required": ["appointmentId", "token"],
+            "type": "object"
+          },
+          "annotations": {
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:a8fd67ee168b4fe4349e33c945375b827f93c2e9581a45a5455143fc1fc5cd52"
         },
         {
           "name": "check_availability",
           "title": "Freie Termine",
-          "description": "Freie Termine für eine Leistung (serviceId aus list_services). Zeitraum als ISO-Datum mit Uhrzeit und Zeitzone.",
+          "description": "Freie Termine für eine Leistung (serviceId aus list_services). Zeitraum als ISO-Datum mit Uhrzeit und Zeitzone. Jedes Zeitfenster hat start, end und staffId.",
           "inputSchema": {
             "additionalProperties": false,
             "properties": {
@@ -93,6 +216,10 @@
               },
               "serviceId": {
                 "description": "Kennung der Leistung aus list_services",
+                "type": "string"
+              },
+              "staffId": {
+                "description": "Kennung der Person bzw. Ressource aus check_availability (optional)",
                 "type": "string"
               },
               "to": {
@@ -113,7 +240,7 @@
             "openWorld": true,
             "readOnly": true
           },
-          "digest": "sha256:8ffcd0810f084e1c23630514909fca0da96355a70c0a14f23c55e456c04012f7"
+          "digest": "sha256:61bef0d7b83f169648270fa42cb1d66d7b1de6c3c12d12a9b44e05ead8a76b27"
         },
         {
           "name": "content_full",
@@ -196,6 +323,36 @@
           "digest": "sha256:8938038a6bc877c6312dc69e825ce11156edd91fc83866c08791f46af53c6584"
         },
         {
+          "name": "get_appointment",
+          "title": "Termin ansehen",
+          "description": "Status, Zeit, Leistung und Zahlung eines gebuchten Termins. Nur mit appointmentId und cancelToken aus der Antwort von book_appointment bzw. aus dem Verwalten-Link der Bestätigungsmail. Ohne Personendaten.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "appointmentId": {
+                "description": "appointment.id aus der Buchung",
+                "type": "string"
+              },
+              "token": {
+                "description": "appointment.cancelToken aus der Buchung (bzw. token aus dem Verwalten-Link)",
+                "type": "string"
+              }
+            },
+            "required": ["appointmentId", "token"],
+            "type": "object"
+          },
+          "annotations": {
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:f2e1d50a22a74f8041294a78285a7485860b663384bef3312fcebb3c6b60e054"
+        },
+        {
           "name": "get_business_info",
           "title": "Betrieb: Kontakt, Standorte, Öffnungszeiten",
           "description": "Name, Standorte mit Adresse und Telefon, Öffnungszeiten und Leistungen dieses Betriebs, wie auf der Website veröffentlicht.",
@@ -216,6 +373,60 @@
           "digest": "sha256:83e3702802ebd8fbe87603d6cff764570a7c956f148360904f559d900c713f01"
         },
         {
+          "name": "get_request_status",
+          "title": "Stand eines Vorgangs",
+          "description": "Stand eines Vorgangs, den ein Agent auf dieser Website mit clientRequestId angelegt hat (Termin, Bestellung, Terminanfrage oder Werkstatt-Anfrage): found, kind, status, Kennung und bei Terminen Beginn und Ende. Ohne Personendaten und ohne cancelToken; den gibt es nur in der ursprünglichen Antwort (dafür den ursprünglichen Aufruf mit derselben clientRequestId und denselben Angaben wiederholen).",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "clientRequestId": {
+                "description": "Die clientRequestId des ursprünglichen Aufrufs",
+                "pattern": "^[A-Za-z0-9_-]{8,64}$",
+                "type": "string"
+              }
+            },
+            "required": ["clientRequestId"],
+            "type": "object"
+          },
+          "annotations": {
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:5a10de4fb395abc3bfe481cca6ecc3ee7da12cb231dcb416a4a8036bf9355580"
+        },
+        {
+          "name": "get_workshop_status",
+          "title": "Stand des Werkstattauftrags",
+          "description": "Ist mein Auto fertig? Zeigt den Stand eines Werkstattauftrags (received = angenommen, in_progress, waiting_parts, waiting_approval, done = fertig zur Abholung, collected, cancelled, declined = Anfrage abgelehnt mit declineReason), seit wann, „fertig bis“, die Auftragsnummer, das Fahrzeug (Kennzeichen, Marke/Modell) und die für dieses Fahrzeug eingelagerten Reifensätze. Nur mit dem Status-Token aus dem Link der Auftragsbestätigung (…/workshop-status/<token>). Nur lesen, ohne Personendaten.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "token": {
+                "description": "Status-Token aus dem Link der Auftragsbestätigung (der letzte Teil von …/workshop-status/<token>)",
+                "pattern": "^[A-Za-z0-9_-]{32}$",
+                "type": "string"
+              }
+            },
+            "required": ["token"],
+            "type": "object"
+          },
+          "annotations": {
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:7ce004519554ed19fcabc105c3683c092936da759ec55d9dcf03fc421dd287f9"
+        },
+        {
           "name": "list_services",
           "title": "Leistungen und Angebote",
           "description": "Aktuelle Leistungen bzw. Angebote mit Preis und Dauer, so wie sie auf der Website stehen.",
@@ -234,9 +445,163 @@
             "readOnly": true
           },
           "digest": "sha256:d21d001bb38f40889b033eb81a1c1de932c7697aa8598c5b3dff271106f86f1f"
+        },
+        {
+          "name": "request_workshop_service",
+          "title": "Werkstatt-Anfrage senden",
+          "description": "Schickt der Werkstatt eine Anfrage (z. B. Service, Pickerl/§57a, Reparatur, Reifenwechsel): sie landet als angenommener Werkstattauftrag mit Fahrzeug und Wunsch bei der Werkstatt, die sich meldet und den Auftrag bei der Annahme bestätigt. Kein Termin und nichts zu bezahlen. Nur im Auftrag der Person, mit ihrer ausdrücklichen Einwilligung zur Weitergabe ihrer Angaben (consent: true). Die Antwort enthält statusToken für get_workshop_status. Für einen festen Termin stattdessen check_availability + book_appointment. Mit clientRequestId kann der Aufruf nach einer verlorenen Antwort gefahrlos wiederholt werden.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "clientRequestId": {
+                "description": "Eigene Vorgangs-ID des Agenten (optional, 8–64 Zeichen: Buchstaben, Ziffern, _ und -), am besten zufällig, z. B. eine UUID. Gleiche ID mit gleichen Angaben = dieselbe Antwort und kein zweiter Vorgang; mit anderen Angaben wird der Aufruf abgelehnt. get_request_status findet den Vorgang mit dieser ID.",
+                "pattern": "^[A-Za-z0-9_-]{8,64}$",
+                "type": "string"
+              },
+              "consent": {
+                "const": true,
+                "description": "Einwilligung der Person, dass die Werkstatt ihre Angaben für diese Anfrage verarbeitet – nur true, wenn die Person zugestimmt hat",
+                "type": "boolean"
+              },
+              "email": {
+                "description": "E-Mail-Adresse (E-Mail oder Telefon ist Pflicht)",
+                "format": "email",
+                "maxLength": 200,
+                "type": "string"
+              },
+              "firstRegistration": {
+                "description": "Erstzulassung (optional), z. B. 03/2018",
+                "maxLength": 20,
+                "type": "string"
+              },
+              "makeModel": {
+                "description": "Marke und Modell, z. B. VW Golf",
+                "maxLength": 80,
+                "minLength": 2,
+                "type": "string"
+              },
+              "mileageKm": {
+                "description": "Kilometerstand (optional, ganze km)",
+                "maximum": 2000000,
+                "minimum": 0,
+                "type": "integer"
+              },
+              "name": {
+                "description": "Vor- und Nachname (2–120 Zeichen)",
+                "maxLength": 120,
+                "minLength": 2,
+                "type": "string"
+              },
+              "phone": {
+                "description": "Telefonnummer (E-Mail oder Telefon ist Pflicht)",
+                "maxLength": 40,
+                "type": "string"
+              },
+              "plate": {
+                "description": "Kennzeichen, z. B. W-12345A",
+                "maxLength": 15,
+                "minLength": 2,
+                "type": "string"
+              },
+              "preferredDate": {
+                "description": "Wunschtag (optional, JJJJ-MM-TT); die Werkstatt meldet sich mit einem Termin",
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+                "type": "string"
+              },
+              "wish": {
+                "description": "Was soll gemacht werden, in den Worten der Person (3–1000 Zeichen)",
+                "maxLength": 1000,
+                "minLength": 3,
+                "type": "string"
+              }
+            },
+            "required": ["consent", "makeModel", "name", "plate", "wish"],
+            "type": "object"
+          },
+          "annotations": {
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:471dc5ee22324393958c15b486c30dd402457d87578f8568808df211037af23c"
+        },
+        {
+          "name": "reschedule_appointment",
+          "title": "Termin verschieben",
+          "description": "Verschiebt einen gebuchten Termin auf eine neue freie Zeit (start und end aus check_availability, gleiche Leistung). Nur mit appointmentId und cancelToken aus der Antwort von book_appointment bzw. aus dem Verwalten-Link der Bestätigungsmail. Möglich bis 24 Stunden vor dem bisherigen Beginn. Nur im Auftrag der Person, die den Termin gebucht hat.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "appointmentId": {
+                "description": "appointment.id aus der Antwort von book_appointment",
+                "type": "string"
+              },
+              "end": {
+                "description": "Ende, ISO 8601 mit Zeitzone",
+                "format": "date-time",
+                "type": "string"
+              },
+              "staffId": {
+                "description": "Kennung der Person bzw. Ressource aus check_availability (optional)",
+                "type": "string"
+              },
+              "start": {
+                "description": "Beginn, ISO 8601 mit Zeitzone",
+                "format": "date-time",
+                "type": "string"
+              },
+              "token": {
+                "description": "appointment.cancelToken aus der Antwort von book_appointment (bzw. token aus dem Verwalten-Link der Bestätigungsmail)",
+                "type": "string"
+              }
+            },
+            "required": ["appointmentId", "end", "start", "token"],
+            "type": "object"
+          },
+          "annotations": {
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:7da42262288e1924d236a6af1980d74b89e05d0a7b0f001d22cbbfb11c55829d"
+        },
+        {
+          "name": "view_quote",
+          "title": "Kostenvoranschlag ansehen",
+          "description": "Zeigt einen Kostenvoranschlag der Werkstatt mit Positionen, Summen und Status (open, approved, expired, superseded). Nur mit dem Token aus dem Link, den die Werkstatt der Kundin bzw. dem Kunden geschickt hat. Optionale Abschnitte und Positionen tragen eine Kennung für approve_quote.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "token": {
+                "description": "Token aus dem Link des Kostenvoranschlags (der letzte Teil von …/quote-approval/<token>)",
+                "pattern": "^[A-Za-z0-9_-]{20,64}$",
+                "type": "string"
+              }
+            },
+            "required": ["token"],
+            "type": "object"
+          },
+          "annotations": {
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": true,
+            "readOnly": true
+          },
+          "digest": "sha256:daecefaf86534748a31ea529deefd91a7d04c57e3e7debfe8106857dd7b3d6d6"
         }
       ],
-      "digest": "sha256:b5bd702631eebe3c1053a9ae24f0ac79b4f8aa1b49f30914e5827912931eb13e"
+      "digest": "sha256:1c6a265ba88d470da94e638cdc4157c5c4e177f91def417270b7f7863ea87649"
     }
   }
 }
