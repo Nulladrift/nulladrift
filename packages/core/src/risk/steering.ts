@@ -41,9 +41,9 @@ export interface SteeringSignal {
 export const INVISIBLE_CHARACTERS = "\\u00AD\\u200B-\\u200F\\u202A-\\u202E\\u2060-\\u2064\\u2066-\\u2069\\uFE00-\\uFE0D\\uFEFF\\u{E0000}-\\u{E007F}\\u{E0100}-\\u{E01EF}";
 // Variation selectors are combining characters, which this rule assumes are a mistake in a class.
 // Here they are the point: each is matched on its own, wherever it sits.
-// eslint-disable-next-line no-misleading-character-class
+// eslint-disable-next-line no-misleading-character-class -- the variation selectors are the point, see above
 const INVISIBLE_RUN = new RegExp(`[${INVISIBLE_CHARACTERS}]+`, "gu");
-// eslint-disable-next-line no-misleading-character-class
+// eslint-disable-next-line no-misleading-character-class -- the variation selectors are the point, see above
 const ONLY_INVISIBLE = new RegExp(`^[${INVISIBLE_CHARACTERS}]+$`, "u");
 
 /*
