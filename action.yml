@@ -1,0 +1,96 @@
+# nulladrift as a GitHub Action: one step in place of setting up Node and running npx.
+#
+# It runs the CLI from npm, at the version this action was released with, so `@v0.13.0` of the
+# action runs nulladrift 0.13.0. Nothing here decides anything the CLI does not: the exit code is
+# the CLI's (0 clean, 1 drift, 2 could not audit), and so is the step's result.
+#
+# Every input reaches the script through the environment, never pasted into it: `args` and the
+# rest are text a workflow author writes, and a workflow is sometimes written from a pull request.
+name: nulladrift
+description: Pin what your MCP servers declare, including their instructions, in mcp.lock. Fail CI when it changes.
+author: Nulladrift
+branding:
+  icon: lock
+  color: green
+
+inputs:
+  command:
+    description: >-
+      `check` compares every server with mcp.lock and needs no account. `push` sends the reading to
+      a control plane, which decides the verdict and keeps the record.
+    required: false
+    default: check
+  args:
+    description: >-
+      More arguments for the command, split on spaces, for example `--comment` or
+      `--sarif nulladrift.sarif`.
+    required: false
+    default: ""
+  working-directory:
+    description: The directory that holds mcp.lock and the MCP configs.
+    required: false
+    default: .
+  version:
+    description: The nulladrift version to run. Empty runs the version this action was released with.
+    required: false
+    default: ""
+  node-version:
+    description: >-
+      Node.js to run it on. Empty uses the runner's own when it is 22 or later and sets up 22
+      otherwise, so a job that already chose a newer Node keeps it.
+    required: false
+    default: ""
+  token:
+    description: For `push`, the collector token from the dashboard. Keep it in a secret.
+    required: false
+    default: ""
+  api-url:
+    description: For `push`, the control plane's address.
+    required: false
+    default: ""
+
+runs:
+  using: composite
+  steps:
+    - id: node
+      shell: bash
+      env:
+        WANT: ${{ inputs.node-version }}
+      run: |
+        major=$(node -p 'process.versions.node.split(".")[0]' 2>/dev/null || echo 0)
+        if [ -n "$WANT" ] || [ "$major" -lt 22 ]; then echo "setup=true" >> "$GITHUB_OUTPUT"; fi
+
+    - if: steps.node.outputs.setup == 'true'
+      uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+      with:
+        node-version: ${{ inputs.node-version || '22' }}
+        # Nothing to cache: npx fetches one package, and a cache other jobs write is not one to read.
+        package-manager-cache: false
+
+    - shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      env:
+        INPUT_COMMAND: ${{ inputs.command }}
+        INPUT_ARGS: ${{ inputs.args }}
+        INPUT_VERSION: ${{ inputs.version }}
+        INPUT_TOKEN: ${{ inputs.token }}
+        INPUT_API_URL: ${{ inputs.api-url }}
+        ACTION_PATH: ${{ github.action_path }}
+      run: |
+        set -euo pipefail
+        case "$INPUT_COMMAND" in
+          check | push) ;;
+          *) echo "::error title=nulladrift::command must be check or push, not \"$INPUT_COMMAND\""; exit 2 ;;
+        esac
+        version="$INPUT_VERSION"
+        if [ -z "$version" ]; then
+          version=$(node -p 'require(process.argv[1]).version' "$ACTION_PATH/packages/cli/package.json")
+        fi
+        case "$version" in
+          "" | *[!0-9A-Za-z.+-]*) echo "::error title=nulladrift::\"$version\" is not a version"; exit 2 ;;
+        esac
+        # Only when given, so a token or address the job already sets in its environment still counts.
+        if [ -n "$INPUT_TOKEN" ]; then export NULLADRIFT_TOKEN="$INPUT_TOKEN"; fi
+        if [ -n "$INPUT_API_URL" ]; then export NULLADRIFT_API_URL="$INPUT_API_URL"; fi
+        read -r -a extra <<< "$INPUT_ARGS"
+        exec npx --yes "nulladrift@$version" "$INPUT_COMMAND" ${extra[@]+"${extra[@]}"}

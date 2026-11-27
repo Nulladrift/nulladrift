@@ -88,6 +88,77 @@ configs (`~/.claude.json`, `~/.cursor/mcp.json`, `claude_desktop_config.json`, W
 is the project's and is committed. `init` says when it left them out. `nulladrift logout <server>` deletes what `login`
 stored.
 
+## In GitHub Actions
+
+Commit this as `.github/workflows/mcp.yml` next to your `mcp.lock`:
+
+```yaml
+name: mcp
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  nulladrift:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: Nulladrift/nulladrift@v0.13.0
+```
+
+That runs `check` against the committed lock, with the nulladrift release the action came with,
+and the step fails the way the CLI exits: 1 on drift, 2 when the audit could not be completed. It
+uses the runner's Node when that is 22 or later and sets up 22 when it is not, so a job that
+already chose a newer Node keeps it. The action is released with the CLI, from 0.13.0; pin a
+commit SHA in place of the tag if your policy asks for one. The rule above holds here too: run it
+on `pull_request`, never on `pull_request_target`.
+
+To post the findings on the pull request, give the job `pull-requests: write` and the step the
+token:
+
+```yaml
+      - uses: Nulladrift/nulladrift@v0.13.0
+        with:
+          args: --comment
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+```
+
+To send each reading to a control plane instead, which decides the verdict and keeps the record,
+add `id-token: write` to the permissions so the reading is signed by the build that sent it:
+
+```yaml
+      - uses: Nulladrift/nulladrift@v0.13.0
+        with:
+          command: push
+          api-url: ${{ vars.NULLADRIFT_API_URL }}
+          token: ${{ secrets.NULLADRIFT_TOKEN }}
+```
+
+| Input | Default | What it does |
+| --- | --- | --- |
+| `command` | `check` | `check` or `push`. |
+| `args` | none | More arguments for the command, split on spaces: `--comment`, `--sarif nulladrift.sarif`, `--allow-unreachable`. |
+| `working-directory` | `.` | Where `mcp.lock` and the MCP configs are. |
+| `version` | the action's release | The nulladrift version to run from npm. |
+| `node-version` | the runner's, or 22 | Node.js to run it on. Setting it always sets that version up. |
+| `token` | none | For `push`: the collector token. Same as `NULLADRIFT_TOKEN`, which the job can set instead. |
+| `api-url` | none | For `push`: the control plane's address. Same as `NULLADRIFT_API_URL`. |
+
+### Show that a repository is pinned
+
+[![MCP pinned by nulladrift][pinned]](https://nulladrift.com)
+
+```markdown
+[![MCP pinned by nulladrift](https://img.shields.io/badge/MCP-pinned%20by%20nulladrift-a3e635?labelColor=0d1117&logo=data:image/svg%2Bxml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0iI2EzZTYzNSI+PGcgZmlsbD0ibm9uZSIgc3Ryb2tlPSIjYTNlNjM1IiBzdHJva2Utd2lkdGg9IjIuNSIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIj48cGF0aCBkPSJNMy42IDE3LjRoNi4zIi8+PHBhdGggZD0iTTE0LjEgMTcuNGg2LjMiLz48L2c+PGNpcmNsZSBjeD0iMTIiIGN5PSI1LjgiIHI9IjMuMyIvPjxwYXRoIGQ9Ik0xMC43NSA4LjQgMTIgMjEuNiAxMy4yNSA4LjRaIi8+PC9zdmc+)](https://nulladrift.com)
+```
+
+It says the repository pins its MCP servers with nulladrift. It is not a status badge: it does not
+turn red when `check` fails, which is the job's own status to show.
+
+[pinned]: https://img.shields.io/badge/MCP-pinned%20by%20nulladrift-a3e635?labelColor=0d1117&logo=data:image/svg%2Bxml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyNCAyNCIgZmlsbD0iI2EzZTYzNSI+PGcgZmlsbD0ibm9uZSIgc3Ryb2tlPSIjYTNlNjM1IiBzdHJva2Utd2lkdGg9IjIuNSIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIj48cGF0aCBkPSJNMy42IDE3LjRoNi4zIi8+PHBhdGggZD0iTTE0LjEgMTcuNGg2LjMiLz48L2c+PGNpcmNsZSBjeD0iMTIiIGN5PSI1LjgiIHI9IjMuMyIvPjxwYXRoIGQ9Ik0xMC43NSA4LjQgMTIgMjEuNiAxMy4yNSA4LjRaIi8+PC9zdmc+
+
 ## What lands in the lock
 
 For every server: its identity (`serverInfo`), its declared capabilities, and the
