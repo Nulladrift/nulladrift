@@ -10,7 +10,16 @@ telemetry). Renaming a change kind breaks every consumer that matched on it.
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+- **A GitHub Action.** `uses: Nulladrift/nulladrift@v0.13.0` runs `check`, or `push` with a
+  token and the control plane's address, at the nulladrift release the action came with. It
+  uses the runner's Node when that is 22 or later and sets up 22 otherwise, so a job that already
+  chose a newer Node keeps it. Every input reaches the CLI through the environment rather than
+  being written into the script, and `command` and `version` are checked before anything runs.
+  The README has the workflow to copy.
+- **A badge**, "MCP pinned by nulladrift", for a repository's README. It says the repository pins
+  its servers; it is not a status badge.
 
 ## [0.12.0] - 2026-11-23
 
