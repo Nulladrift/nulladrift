@@ -18,7 +18,7 @@
       "serverInfo": {
         "name": "debyta-agent-check",
         "title": "DEBYTA Agent Check",
-        "version": "1.5.0",
+        "version": "1.6.0",
         "websiteUrl": "https://debyta.com"
       },
       "capabilities": {
@@ -26,7 +26,7 @@
           "listChanged": false
         }
       },
-      "instructions": "Simplest: call guard_payment before any payment or deposit with everything you know (address, URL, IBAN, x402 response, platform, amount). Or use the single checks: check_before_payment before any payment, purchase, money transfer or credential entry. Use check_crypto_platform before depositing on any crypto trading or investment platform. Use check_crypto_transfer before sending crypto (or verify_payment_request when you have a signed DEBYTA payment request) and check_x402_payment before paying an HTTP 402 (x402) request. Afterwards report_outcome (free) if it turned out to be fraud or a false alarm. Follow the decision: block = do not execute, warn = ask the human, allow = proceed. Authenticate with \"Authorization: Bearer <DEBYTA API key>\" (free key at https://debyta.com/account/schutzserver).",
+      "instructions": "For autonomous workflows, use create_intent_from_language or create_intent to register explicit limits, verify merchant domain control, create_guarded_payment, authorize_guarded_payment, and execute_guarded_payment. Use hold_guarded_payment to open an evidence dispute. The PSP adapter must enforce provider-side holds atomically. IntentGuard checks amount/merchant/payee/payment-method limits, server-side merchant mapping, event history and revocation. For other checks call guard_payment before payments, check_before_payment before purchases or logins, check_crypto_transfer before crypto transfers and check_x402_payment before x402 payments. Authenticate with a DEBYTA key or pay stateful IntentGuard calls with x402. A free anonymous quota is not a durable identity.",
       "tools": [
         {
           "name": "analyze_message",
@@ -55,6 +55,31 @@
             "readOnly": true
           },
           "digest": "sha256:c51e8f5ae312c445349a33ccd0329155453b4d3f03968fd027d03a303fd0fb42"
+        },
+        {
+          "name": "authorize_guarded_payment",
+          "title": "DEBYTA HARD STOP: authorize through IntentGuard and PSP",
+          "description": "Rechecks the signed intent and server-side merchant/payee verification before requesting PSP authorization. Fails closed when verification or PSP adapter is missing.",
+          "inputSchema": {
+            "properties": {
+              "paymentId": {
+                "type": "string"
+              }
+            },
+            "required": ["paymentId"],
+            "type": "object"
+          },
+          "annotations": {
+            "openWorldHint": true,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:cec0a3c78557e67ba4d4221d0dca0e9c405b6100dc86a8ef7bf50c1b1b61df84"
         },
         {
           "name": "check_before_payment",
@@ -224,6 +249,65 @@
           "digest": "sha256:a3a0fca933e6217f5a2219eddeb1b29d4a543e66a4494a13e353b4f8abf850ce"
         },
         {
+          "name": "check_intent_action",
+          "title": "DEBYTA IntentGuard: check an agent action",
+          "description": "Call BEFORE executing an action. Checks action, amount, currency, merchant, recipient and payment method against a signed intent. block = do not execute; warn = pause for human approval; allow = constraints match, not a safety guarantee. The caller must enforce the decision. Requires a unique idempotencyKey.",
+          "inputSchema": {
+            "properties": {
+              "action": {
+                "properties": {
+                  "action": {
+                    "enum": ["purchase", "pay", "transfer", "subscribe", "login", "other"],
+                    "type": "string"
+                  },
+                  "agentId": {
+                    "type": "string"
+                  },
+                  "amount": {
+                    "type": "number"
+                  },
+                  "currency": {
+                    "type": "string"
+                  },
+                  "merchant": {
+                    "type": "string"
+                  },
+                  "parentAgentId": {
+                    "type": "string"
+                  },
+                  "payee": {
+                    "type": "string"
+                  },
+                  "paymentMethod": {
+                    "type": "string"
+                  }
+                },
+                "required": ["action"],
+                "type": "object"
+              },
+              "idempotencyKey": {
+                "type": "string"
+              },
+              "intentId": {
+                "type": "string"
+              }
+            },
+            "required": ["action", "idempotencyKey", "intentId"],
+            "type": "object"
+          },
+          "annotations": {
+            "openWorldHint": true,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:e7334da8f626f5ce9172fcaccfee99f260833863c825afaa0df51ca58d7ffacd"
+        },
+        {
           "name": "check_x402_payment",
           "title": "DEBYTA: check an x402 payment request before paying",
           "description": "Call this when an HTTP request returns 402 Payment Required (x402) and BEFORE your wallet signs. Pass the 402 response body (or the PAYMENT-REQUIRED header) unchanged. DEBYTA verifies that payTo is published by the seller domain (payee verification), enforces your maxAmount (USD), and checks checksum, sanctions (OFAC) and fraud traces. Returns a signed allow / warn / block for the safest payment option.",
@@ -265,6 +349,217 @@
             "readOnly": true
           },
           "digest": "sha256:287f9d8ce132d4e6586177ea3afa7281632242df65f410425f35c87ed74088a4"
+        },
+        {
+          "name": "create_guarded_payment",
+          "title": "DEBYTA HARD STOP: create an intent-bound payment",
+          "description": "Create a payment record with a unique idempotency key. This does not move money. Requires a signed intent and a configured PSP adapter for authorization/execution.",
+          "inputSchema": {
+            "properties": {
+              "amount": {
+                "type": "number"
+              },
+              "currency": {
+                "type": "string"
+              },
+              "idempotencyKey": {
+                "type": "string"
+              },
+              "intentId": {
+                "type": "string"
+              },
+              "merchant": {
+                "type": "string"
+              },
+              "payee": {
+                "type": "string"
+              },
+              "paymentMethod": {
+                "type": "string"
+              },
+              "reference": {
+                "type": "string"
+              }
+            },
+            "required": ["amount", "currency", "idempotencyKey", "intentId", "merchant", "payee", "paymentMethod"],
+            "type": "object"
+          },
+          "annotations": {
+            "openWorldHint": true,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:45129f6709d4ea6fef16e9efbcdb9dbf86e3d3857db3803a4f5f14a0cd29817e"
+        },
+        {
+          "name": "create_intent",
+          "title": "DEBYTA IntentGuard: create a signed authorization",
+          "description": "Create a time-limited, signed authorization for an agent workflow. Provide explicit structured constraints; this tool does not infer permissions from natural-language instructions. Stateful use requires a DEBYTA key or an x402-paid call.",
+          "inputSchema": {
+            "properties": {
+              "action": {
+                "enum": ["purchase", "pay", "transfer", "subscribe", "login", "other"],
+                "type": "string"
+              },
+              "allowedMerchants": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "allowedPayees": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "allowedPaymentMethods": {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              "currency": {
+                "type": "string"
+              },
+              "description": {
+                "type": "string"
+              },
+              "maxAmount": {
+                "type": "number"
+              },
+              "requireMerchantVerification": {
+                "type": "boolean"
+              },
+              "ttlSeconds": {
+                "maximum": 2592000,
+                "minimum": 60,
+                "type": "integer"
+              }
+            },
+            "required": ["action", "description"],
+            "type": "object"
+          },
+          "annotations": {
+            "openWorldHint": true,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:2d3bd09d860893247cc6d39c667a80f31e9fcfce2019124de827ebebb2b8554d"
+        },
+        {
+          "name": "create_intent_from_language",
+          "title": "DEBYTA IntentGuard: translate a natural-language payment instruction",
+          "description": "Conservative German/English parser. Creates a signed intent only when amount, currency, merchant, payee, action and payment method are clear; otherwise returns clarification questions and creates nothing.",
+          "inputSchema": {
+            "properties": {
+              "text": {
+                "maxLength": 2000,
+                "type": "string"
+              }
+            },
+            "required": ["text"],
+            "type": "object"
+          },
+          "annotations": {
+            "openWorldHint": true,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:65eacdcc92bbb4d3e6eeb319f9578bd81225704c32e9a320b090ccbeeb9fc95e"
+        },
+        {
+          "name": "execute_guarded_payment",
+          "title": "DEBYTA HARD STOP: execute only after all gates pass",
+          "description": "Calls the configured PSP adapter only when the payment is authorized and no open hold or confirmed-fraud case exists. Returns blocked when a dispute is active.",
+          "inputSchema": {
+            "properties": {
+              "paymentId": {
+                "type": "string"
+              }
+            },
+            "required": ["paymentId"],
+            "type": "object"
+          },
+          "annotations": {
+            "openWorldHint": true,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:fc0febc796c120dc520bc34c774fba1468df2de499557facfb3980d3793906ac"
+        },
+        {
+          "name": "get_intent",
+          "title": "DEBYTA IntentGuard: retrieve an authorization",
+          "description": "Retrieve the signed intent and current status. Requires the same DEBYTA key or x402 payer scope that created it.",
+          "inputSchema": {
+            "properties": {
+              "intentId": {
+                "type": "string"
+              }
+            },
+            "required": ["intentId"],
+            "type": "object"
+          },
+          "annotations": {
+            "openWorldHint": false,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:19554282321e3612988a68ec9f2dddd075f90cc9764b6139a7e907aa4e4758c5"
+        },
+        {
+          "name": "get_payment_dispute",
+          "title": "DEBYTA DISPUTE CENTER: retrieve a payment dispute",
+          "description": "Retrieve a payment dispute, evidence metadata and event history owned by the same API account.",
+          "inputSchema": {
+            "properties": {
+              "caseId": {
+                "type": "string"
+              },
+              "paymentId": {
+                "type": "string"
+              }
+            },
+            "required": ["caseId", "paymentId"],
+            "type": "object"
+          },
+          "annotations": {
+            "openWorldHint": false,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:842affd07d980b880525dc6d382fc3301f0fb8c8368f804dde6c6e6013afe8d9"
         },
         {
           "name": "guard_payment",
@@ -343,6 +638,97 @@
           "digest": "sha256:f2fca5e902ecd3335b34bbbe13e68e5eb49b4cd645c754f6cda0a6e535252aaa"
         },
         {
+          "name": "hold_guarded_payment",
+          "title": "DEBYTA EVIDENCE GATE: stop and open a dispute",
+          "description": "Place a pending/authorized payment on DEBYTA hold and open a case requiring evidence. A provider hold is reported only when the PSP adapter confirms it.",
+          "inputSchema": {
+            "properties": {
+              "origin": {
+                "enum": ["buyer", "seller", "system"],
+                "type": "string"
+              },
+              "paymentId": {
+                "type": "string"
+              },
+              "reason": {
+                "minLength": 12,
+                "type": "string"
+              }
+            },
+            "required": ["origin", "paymentId", "reason"],
+            "type": "object"
+          },
+          "annotations": {
+            "openWorldHint": true,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:3914671fcfcd0d75e44adbacc4806245fad25c164be00479882c69e1602299d8"
+        },
+        {
+          "name": "intent_events",
+          "title": "DEBYTA IntentGuard: list action decisions",
+          "description": "List recorded action checks for an intent.",
+          "inputSchema": {
+            "properties": {
+              "intentId": {
+                "type": "string"
+              },
+              "limit": {
+                "maximum": 100,
+                "minimum": 1,
+                "type": "integer"
+              }
+            },
+            "required": ["intentId"],
+            "type": "object"
+          },
+          "annotations": {
+            "openWorldHint": false,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:e45edabf37dc4ddae8132c01873c5b9521565b3d208532dd027975ac395b9e3b"
+        },
+        {
+          "name": "register_merchant_payee",
+          "title": "DEBYTA Merchant Verification: create DNS proof",
+          "description": "Create a random DNS TXT challenge proving domain control for a declared merchant/payee association. Does not prove legal identity or bank-account ownership.",
+          "inputSchema": {
+            "properties": {
+              "merchant": {
+                "type": "string"
+              },
+              "payee": {
+                "type": "string"
+              }
+            },
+            "required": ["merchant", "payee"],
+            "type": "object"
+          },
+          "annotations": {
+            "openWorldHint": true,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:bc65dd4d00efdae70c2bd1a1db32396adefa6f25e266423216dd359b3b701320"
+        },
+        {
           "name": "report_outcome",
           "title": "DEBYTA: report what happened after a decision (free)",
           "description": "Tell DEBYTA whether a checked payment turned out to be fraud or legitimate. Pass the \"id\" from the DEBYTA decision. Free. Two independent reports change the data; a single report never blocks anything.",
@@ -370,6 +756,119 @@
             "readOnly": false
           },
           "digest": "sha256:fed7b000df56373ef42ba77ff63cdda719a32e005d2882909cafe62d921dbf94"
+        },
+        {
+          "name": "revoke_intent",
+          "title": "DEBYTA IntentGuard: revoke an authorization",
+          "description": "Immediately revoke an active intent so further new actions cannot be authorized.",
+          "inputSchema": {
+            "properties": {
+              "intentId": {
+                "type": "string"
+              }
+            },
+            "required": ["intentId"],
+            "type": "object"
+          },
+          "annotations": {
+            "openWorldHint": false,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": false,
+            "readOnly": false
+          },
+          "digest": "sha256:bd852a755b2f79d8d0b4e1d75da7a6e032f678518b9cbab272f76e1acdb88b61"
+        },
+        {
+          "name": "revoke_merchant_payee",
+          "title": "DEBYTA Merchant Verification: revoke a payee association",
+          "description": "Revoke a previously DNS-verified merchant/payee association owned by the current API account.",
+          "inputSchema": {
+            "properties": {
+              "verificationId": {
+                "type": "string"
+              }
+            },
+            "required": ["verificationId"],
+            "type": "object"
+          },
+          "annotations": {
+            "openWorldHint": true,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:b37bfb2aecdce32f1149b51349fc0a7469e6041535c7a0c5e66bef2a7f00130c"
+        },
+        {
+          "name": "submit_payment_evidence",
+          "title": "DEBYTA EVIDENCE GATE: submit dispute evidence",
+          "description": "Submit structured evidence metadata for an open payment dispute. Binary files should be uploaded through the authenticated REST evidence endpoint.",
+          "inputSchema": {
+            "properties": {
+              "caseId": {
+                "type": "string"
+              },
+              "description": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string"
+              },
+              "paymentId": {
+                "type": "string"
+              },
+              "role": {
+                "enum": ["buyer", "seller", "system"],
+                "type": "string"
+              }
+            },
+            "required": ["caseId", "description", "kind", "paymentId", "role"],
+            "type": "object"
+          },
+          "annotations": {
+            "openWorldHint": true,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:fc43bbaad259a299d73910bda562a9b9a6e727b45e53a57ac65dcf2d8c665b55"
+        },
+        {
+          "name": "verify_merchant_domain",
+          "title": "DEBYTA Merchant Verification: verify DNS proof",
+          "description": "Check the DNS TXT challenge for a merchant verification ID.",
+          "inputSchema": {
+            "properties": {
+              "verificationId": {
+                "type": "string"
+              }
+            },
+            "required": ["verificationId"],
+            "type": "object"
+          },
+          "annotations": {
+            "openWorldHint": true,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": true,
+            "idempotent": false,
+            "openWorld": true,
+            "readOnly": false
+          },
+          "digest": "sha256:dc62cdd6597c98831a165b3cba3a18a2309e357635a2aaee60f95928b4d4b24a"
         },
         {
           "name": "verify_payment_request",
@@ -407,7 +906,7 @@
           "digest": "sha256:e27db64fbd61947343d813265d83b67fb41cc9dcd405d46f2ec3037856d89eb4"
         }
       ],
-      "digest": "sha256:72475e2035123451f4eef85f75c038d22582df534e92c9ef78518d37ec457b32"
+      "digest": "sha256:91d1df22fa31780b5f8162fcc711c766f45cd6467fcc6c9a1e0b86e743a8e7c9"
     }
   }
 }

@@ -42,38 +42,152 @@
         },
         {
           "name": "matrix_job_status",
-          "description": "Retrieve payment and execution status for your own Matrix job.",
+          "title": "Retrieve job and payment status",
+          "description": "Retrieve the current payment, execution and result status of an existing quotation owned by the authenticated machine. Use after requesting a quote or submitting an x402 authorization, including recovery after connection loss or process restart. Requires the original quote_id and an authorized machine bearer credential. This tool does not submit payment, execute a new job, modify existing results or issue refunds. Returns payment_verified, execution state, job_id when available, and result when completed. A pending payment or execution is not a reason to create another charge. A quote_expired state alone is not finalized non-payment evidence. Inspect payment_resolution for finalized unpaid closure and refund for failed or cancelled paid jobs when those fields are present.",
           "inputSchema": {
             "additionalProperties": false,
             "properties": {
               "quote_id": {
+                "description": "The original server-issued quotation ID, returned by matrix_quote or the marketplace payment challenge. This is not the execution job_id, wallet address or transaction hash. The quotation must belong to the authenticated machine.",
+                "examples": ["0123456789abcdef0123456789abcdef"],
                 "type": "string"
               }
             },
             "required": ["quote_id"],
             "type": "object"
           },
-          "behavior": {
-            "destructive": true,
-            "idempotent": false,
-            "openWorld": true,
-            "readOnly": false
+          "outputSchema": {
+            "additionalProperties": true,
+            "properties": {
+              "amount_minor": {
+                "description": "Quoted amount in USD cents.",
+                "type": "integer"
+              },
+              "currency": {
+                "description": "Quotation currency.",
+                "type": "string"
+              },
+              "job_id": {
+                "description": "Execution job identifier after admission; null when not assigned.",
+                "type": ["string", "null"]
+              },
+              "payment_resolution": {
+                "description": "Optional finalized payment-closure evidence.",
+                "type": "object"
+              },
+              "payment_verified": {
+                "description": "Whether payment has been verified by the existing settlement authority.",
+                "type": "boolean"
+              },
+              "quote_id": {
+                "description": "Original quotation ID.",
+                "type": "string"
+              },
+              "refund": {
+                "description": "Optional refund status and finality evidence. Do not assume a refund is complete until the returned status confirms it.",
+                "type": "object"
+              },
+              "result": {
+                "description": "Product-specific execution result, or null when not available."
+              },
+              "state": {
+                "description": "Current payment or execution lifecycle state, such as awaiting_payment, payment_reconciliation_pending, queued, running, succeeded, failed, cancelled, quote_expired or payment_expired_unpaid.",
+                "type": "string"
+              }
+            },
+            "required": ["amount_minor", "currency", "job_id", "payment_verified", "quote_id", "result", "state"],
+            "type": "object"
           },
-          "digest": "sha256:1e9fbb238ab92c8e6187774f3cce6c03cd946eaf1c7c1ca028bd72be8a19829d"
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "digest": "sha256:28f5f413c7054ecafe507a575d1efd095fdec5a4e2f90f68ae76195f659e954e"
         },
         {
           "name": "matrix_quote",
-          "description": "Create a Base Mainnet per-job quote for an enrolled autonomous machine. Admission depends on current availability.",
+          "title": "Create a paid-job quotation",
+          "description": "Create an unpaid, tenant-bound Base Mainnet USDC quotation for one offline analysis job. Use matrix_catalogue first to check current product pricing and admission availability. Requires an enrolled machine bearer credential. Supply the released analysis route, its matching product payload and a unique idempotency key. The same key and identical request recover the existing quote; changed requests can conflict. This creates a quotation record but does not charge the wallet or start execution. The response contains quote_id, price in USD cents, expiry timestamp, payment_url and status_url. Approve the amount before authorizing payment through the returned x402 payment URL. Use matrix_job_status for subsequent recovery. Do not request another quote merely because a payment or execution response is delayed.",
           "inputSchema": {
             "additionalProperties": false,
             "properties": {
               "idempotency_key": {
+                "description": "Caller-generated unique identifier for the logical job. Use a fresh key for a genuinely new job and reuse the identical key and payload for retries. Do not generate another key to recover an uncertain payment.",
+                "examples": ["order-analysis-unique-job-001"],
                 "type": "string"
               },
               "payload": {
+                "description": "Product-specific analysis input. Checkout Monitor uses captured journeys and events; Commerce Guard uses supplied commerce HTML/feed; Tender Intelligence uses supplier/tender data; MCP Security Audit uses supplied server/tool metadata; Ad Tracking Guard uses supplied page analysis data. These are offline inputs, not permission to scan a live network target. See the examples and public integration documentation.",
+                "examples": [
+                  {
+                    "html": "<html><body>Example page</body></html>"
+                  },
+                  {
+                    "journeys": [
+                      {
+                        "events": [
+                          {
+                            "stage": "cart",
+                            "status": "ok",
+                            "time_ms": 0
+                          }
+                        ]
+                      }
+                    ]
+                  },
+                  {
+                    "feed": {
+                      "availability": "in_stock",
+                      "currency": "USD",
+                      "price": 25
+                    },
+                    "html": "<html><body>Example product</body></html>"
+                  },
+                  {
+                    "servers": [
+                      {
+                        "auth": "bearer",
+                        "tools": [
+                          {
+                            "name": "example_tool",
+                            "permissions": ["read"]
+                          }
+                        ],
+                        "url": "https://example.com/mcp"
+                      }
+                    ]
+                  },
+                  {
+                    "as_of": "2026-11-26",
+                    "supplier": {
+                      "capabilities": ["office supplies"],
+                      "certifications": ["ISO 9001"],
+                      "countries": ["GB"]
+                    },
+                    "tenders": [
+                      {
+                        "country": "GB",
+                        "deadline": "2030-01-31",
+                        "description": "Supply of office stationery",
+                        "estimated_value": 10000,
+                        "required_certifications": ["ISO 9001"],
+                        "title": "Example office supplies"
+                      }
+                    ]
+                  }
+                ],
                 "type": "object"
               },
               "route": {
+                "description": "Exact released offline analysis API route. Choose the route corresponding to the desired product. Availability is dynamic; consult matrix_catalogue before requesting.",
                 "enum": ["/v1/tools/ad_tracking_guard/analyze", "/v1/tools/checkout_monitor/analyze", "/v1/tools/commerce_guard/analyze", "/v1/tools/mcp_security_audit/analyze", "/v1/tools/tender_intelligence/analyze"],
                 "type": "string"
               }
@@ -81,16 +195,58 @@
             "required": ["idempotency_key", "payload", "route"],
             "type": "object"
           },
+          "outputSchema": {
+            "additionalProperties": true,
+            "properties": {
+              "amount_minor": {
+                "description": "Quoted price in USD cents. Multiply by 10000 for USDC atomic units.",
+                "minimum": 1,
+                "type": "integer"
+              },
+              "currency": {
+                "description": "Quotation currency.",
+                "type": "string"
+              },
+              "expires_ts": {
+                "description": "Quotation expiry as Unix epoch seconds.",
+                "type": "integer"
+              },
+              "payment_url": {
+                "description": "Server-returned HTTPS payment endpoint.",
+                "type": "string"
+              },
+              "product": {
+                "description": "Selected commercial product.",
+                "type": "string"
+              },
+              "quote_id": {
+                "description": "Server-issued quotation identifier. Retain for payment and status recovery.",
+                "type": "string"
+              },
+              "status_url": {
+                "description": "Authenticated HTTPS status endpoint.",
+                "type": "string"
+              }
+            },
+            "required": ["amount_minor", "currency", "expires_ts", "payment_url", "product", "quote_id", "status_url"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": true,
+            "readOnlyHint": false
+          },
           "behavior": {
-            "destructive": true,
-            "idempotent": false,
+            "destructive": false,
+            "idempotent": true,
             "openWorld": true,
             "readOnly": false
           },
-          "digest": "sha256:9e9de105a71ecfc73c30ffec1ee3f82813f0155a0548074ea5339272eaf28055"
+          "digest": "sha256:e38a80975b3ca1f111c41fdd38b8619bd0bddd1d1b45096337967ec74db114b7"
         }
       ],
-      "digest": "sha256:97012f2054d8f83f3642d3a5a27e0d4f0ebd8dc3c7fa9e44b533f4f101332a12"
+      "digest": "sha256:8b653c2159392e3dd4d67e5cb6baa340036c9f6b8280c6a7c91728b8681f7504"
     }
   }
 }

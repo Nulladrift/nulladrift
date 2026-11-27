@@ -36,7 +36,7 @@
           "listChanged": false
         }
       },
-      "instructions": "# Public IronShard object storage\n\nIronShard provides a public, S3-compatible object-storage sandbox for autonomous\nagents. This server does not use OAuth.\n\n## Bucket access\n\n- Call `create_bucket` to create a new, temporary sandbox bucket. It returns a\n  `bucket_name` and `bucket_token`.\n- Pass both returned values unchanged to every subsequent bucket or object tool call.\n- The bucket token is a bearer credential. Keep it secret, use it only with this MCP\n  server, and do not expose it in messages, logs, object contents, or URLs.\n- A bucket token grants read, write, and delete access only within its associated\n  sandbox bucket. It does not grant access to other buckets or accounts.\n- Sandbox access expires after 30 days. If a token is invalid or expired, create a new\n  bucket instead of repeatedly retrying the denied operation.\n- Public uploads and downloads may be temporarily unavailable even while metadata and\n  listing operations remain available.\n\n## Storage semantics\n\n- Buckets contain objects identified by complete object keys.\n- `/` in an object key is a path-like convention, not a real directory.\n- ETags are storage entity tags and are not always content checksums.\n- In versioned buckets, deletion may create a delete marker rather than permanently\n  erasing prior versions.\n\n## Requests and pagination\n\n- Upload and download tools return short-lived presigned URLs. Use PUT for uploads and\n  GET for downloads. The URL is itself a bearer capability and requires no OAuth or\n  additional authorization header.\n- Listing page tokens are opaque. Pass them unchanged and only with the same bucket,\n  prefix, and recursive setting.\n\n## Further documentation\n\n- `ironshard://docs/object-storage` describes object keys, listings, integrity,\n  presigned requests, versioning, and regions.\n",
+      "instructions": "# Public IronShard object storage\n\nIronShard provides a public, S3-compatible object-storage sandbox for autonomous\nagents. This server does not use OAuth.\n\n## Bucket access\n\n- Call `create_bucket` to create a new, temporary sandbox bucket. It returns a\n  `bucket_name` and `bucket_token`.\n- Pass both returned values unchanged to every subsequent bucket or object tool call.\n- The bucket token is a bearer credential. Keep it secret, use it only with this MCP\n  server, and do not expose it in messages, logs, object contents, or URLs.\n- A bucket token grants read, write, and delete access only within its associated\n  sandbox bucket. It does not grant access to other buckets or accounts.\n- Sandbox access expires after 30 days. If a token is invalid or expired, create a new\n  bucket instead of repeatedly retrying the denied operation.\n- Public uploads and downloads may be temporarily unavailable even while metadata and\n  listing operations remain available.\n\n## Storage semantics\n\n- Buckets contain objects identified by complete object keys.\n- `/` in an object key is a path-like convention, not a real directory.\n- ETags are storage entity tags and are not always content checksums.\n- In versioned buckets, deletion may create a delete marker rather than permanently\n  erasing prior versions. Do not assume a deleted object can be restored.\n- Use `delete_objects` to delete up to 1000 objects in one call. Deleting a key that\n  does not exist succeeds.\n\n## Requests and pagination\n\n- Upload and download tools return short-lived presigned URLs. Use PUT for uploads and\n  GET for downloads. The URL is itself a bearer capability and requires no OAuth or\n  additional authorization header.\n- Listing page tokens are opaque. Pass them unchanged and only with the same bucket,\n  prefix, and recursive setting.\n\n## Further documentation\n\n- `ironshard://docs/object-storage` describes object keys, listings, integrity,\n  presigned requests, versioning, and regions.\n",
       "tools": [
         {
           "name": "create_bucket",
@@ -166,9 +166,9 @@
           "digest": "sha256:d690ac1d86ac7702bf8bcfb2f759126302cfdbb7b65e0055b25633947017dccc"
         },
         {
-          "name": "download_object",
-          "title": "Download Object",
-          "description": "Return a secret, short-lived GET URL for an object's bytes.",
+          "name": "delete_objects",
+          "title": "Delete Objects",
+          "description": "Delete up to 1000 objects with one call. Keys that do not exist count as deleted.\n    Objects that could not be deleted are listed in `errors`; retrying them is safe.\n    Do not assume a deleted object can be restored: depending on the bucket's settings,\n    deletion may be permanent.",
           "inputSchema": {
             "additionalProperties": false,
             "properties": {
@@ -184,50 +184,110 @@
                 "minLength": 1,
                 "type": "string"
               },
-              "object_key": {
-                "description": "Complete object key, including path-like prefixes.",
-                "examples": ["data.parquet", "reports/summary.json"],
-                "minLength": 1,
-                "type": "string"
+              "object_keys": {
+                "description": "Complete keys of the objects to delete, 1 to 1000.",
+                "examples": [
+                  ["reports/2025.json", "reports/2026.json"]
+                ],
+                "items": {
+                  "type": "string"
+                },
+                "maxItems": 1000,
+                "minItems": 1,
+                "type": "array"
               }
             },
-            "required": ["bucket_name", "bucket_token", "object_key"],
+            "required": ["bucket_name", "bucket_token", "object_keys"],
             "type": "object"
           },
           "outputSchema": {
-            "description": "A short-lived URL and the HTTP method required to use it.",
+            "description": "Result of deleting multiple objects. Objects that did not exist count as deleted.",
             "properties": {
-              "http_method": {
-                "description": "HTTP method that must be used with the presigned URL.",
-                "enum": ["GET", "PUT"],
+              "bucket_name": {
+                "description": "Bucket to operate on.",
+                "examples": ["photos"],
+                "minLength": 1,
                 "type": "string"
               },
-              "url": {
-                "description": "Short-lived presigned HTTPS URL containing all authorization information.",
-                "type": "string"
+              "deleted": {
+                "items": {
+                  "description": "An object that was deleted, or did not exist.",
+                  "properties": {
+                    "delete_marker_version_id": {
+                      "anyOf": [
+                        {
+                          "type": "string"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ],
+                      "default": null,
+                      "description": "Version ID of the delete marker the delete created, if any."
+                    },
+                    "object_key": {
+                      "description": "Complete object key, including path-like prefixes.",
+                      "examples": ["data.parquet", "reports/summary.json"],
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": ["object_key"],
+                  "type": "object"
+                },
+                "type": "array"
+              },
+              "deleted_count": {
+                "description": "Number of objects in `deleted`.",
+                "minimum": 0,
+                "type": "integer"
+              },
+              "errors": {
+                "description": "Objects that could not be deleted; retrying them is safe.",
+                "items": {
+                  "description": "An object that could not be deleted.",
+                  "properties": {
+                    "code": {
+                      "description": "Error code, e.g. InternalError.",
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    },
+                    "object_key": {
+                      "description": "Complete object key, including path-like prefixes.",
+                      "examples": ["data.parquet", "reports/summary.json"],
+                      "minLength": 1,
+                      "type": "string"
+                    }
+                  },
+                  "required": ["code", "message", "object_key"],
+                  "type": "object"
+                },
+                "type": "array"
               }
             },
-            "required": ["http_method", "url"],
+            "required": ["bucket_name", "deleted_count"],
             "type": "object"
           },
           "annotations": {
-            "destructiveHint": false,
-            "idempotentHint": true,
+            "destructiveHint": true,
+            "idempotentHint": false,
             "openWorldHint": false,
-            "readOnlyHint": true
+            "readOnlyHint": false
           },
           "behavior": {
-            "destructive": false,
-            "idempotent": true,
+            "destructive": true,
+            "idempotent": false,
             "openWorld": false,
-            "readOnly": true
+            "readOnly": false
           },
           "meta": {
             "fastmcp": {
               "tags": []
             }
           },
-          "digest": "sha256:e87cd12b83b32c7273f6d83bdfd67115beeffebdf71edf839206dc5c4da349af"
+          "digest": "sha256:f24cbb598555bf14f5598569d53720e15a0b17dda8b94a4cdba7f4800d4b992a"
         },
         {
           "name": "get_bucket",
@@ -384,20 +444,6 @@
                           "type": "object"
                         },
                         {
-                          "description": "A named bucket to create while installing the policy.",
-                          "properties": {
-                            "bucketName": {
-                              "type": "string"
-                            },
-                            "type": {
-                              "const": "provisioned",
-                              "type": "string"
-                            }
-                          },
-                          "required": ["bucketName", "type"],
-                          "type": "object"
-                        },
-                        {
                           "description": "Buckets the credential holder may create while using the policy.",
                           "properties": {
                             "type": {
@@ -444,7 +490,71 @@
               "tags": []
             }
           },
-          "digest": "sha256:97567e64f4a97f3bfb16a5fa0455cfacdbb2ca651ac631af314b673f304c6dd1"
+          "digest": "sha256:4aba18a961d6240a6d9adc6d978c59b3290dabf512db68b2ecbf5571f55ce95b"
+        },
+        {
+          "name": "get_download_url",
+          "title": "Get Download Url",
+          "description": "Return a secret, short-lived GET URL for an object's bytes.\n\nThe returned URL starts with https://s3.ironshard.ai. If outgoing requests are restricted by a network whitelist, this domain must be added to it before the URL can be used.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "bucket_name": {
+                "description": "Bucket to operate on.",
+                "examples": ["photos"],
+                "minLength": 1,
+                "type": "string"
+              },
+              "bucket_token": {
+                "description": "Secret bearer token returned with the public bucket.",
+                "examples": ["<bucket-token>"],
+                "minLength": 1,
+                "type": "string"
+              },
+              "object_key": {
+                "description": "Complete object key, including path-like prefixes.",
+                "examples": ["data.parquet", "reports/summary.json"],
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": ["bucket_name", "bucket_token", "object_key"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "description": "A short-lived URL and the HTTP method required to use it.",
+            "properties": {
+              "http_method": {
+                "description": "HTTP method that must be used with the presigned URL.",
+                "enum": ["GET", "PUT"],
+                "type": "string"
+              },
+              "url": {
+                "description": "Short-lived presigned HTTPS URL containing all authorization information.",
+                "type": "string"
+              }
+            },
+            "required": ["http_method", "url"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": true,
+            "openWorldHint": false,
+            "readOnlyHint": true
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": true,
+            "openWorld": false,
+            "readOnly": true
+          },
+          "meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "digest": "sha256:d835233b009ca68fdadd08275b54e7694366462e1d2b3e063e2b350d3b75c286"
         },
         {
           "name": "get_object_metadata",
@@ -577,6 +687,70 @@
             }
           },
           "digest": "sha256:9bb73bc795cd7c93a04d76951d793eba1399f5ba95b6ee8bd7294dc863c04c95"
+        },
+        {
+          "name": "get_upload_url",
+          "title": "Get Upload Url",
+          "description": "Return a secret, short-lived PUT URL for an object up to 5 GB.\n\nThe returned URL starts with https://s3.ironshard.ai. If outgoing requests are restricted by a network whitelist, this domain must be added to it before the URL can be used.",
+          "inputSchema": {
+            "additionalProperties": false,
+            "properties": {
+              "bucket_name": {
+                "description": "Bucket to operate on.",
+                "examples": ["photos"],
+                "minLength": 1,
+                "type": "string"
+              },
+              "bucket_token": {
+                "description": "Secret bearer token returned with the public bucket.",
+                "examples": ["<bucket-token>"],
+                "minLength": 1,
+                "type": "string"
+              },
+              "object_key": {
+                "description": "Complete object key, including path-like prefixes.",
+                "examples": ["data.parquet", "reports/summary.json"],
+                "minLength": 1,
+                "type": "string"
+              }
+            },
+            "required": ["bucket_name", "bucket_token", "object_key"],
+            "type": "object"
+          },
+          "outputSchema": {
+            "description": "A short-lived URL and the HTTP method required to use it.",
+            "properties": {
+              "http_method": {
+                "description": "HTTP method that must be used with the presigned URL.",
+                "enum": ["GET", "PUT"],
+                "type": "string"
+              },
+              "url": {
+                "description": "Short-lived presigned HTTPS URL containing all authorization information.",
+                "type": "string"
+              }
+            },
+            "required": ["http_method", "url"],
+            "type": "object"
+          },
+          "annotations": {
+            "destructiveHint": false,
+            "idempotentHint": false,
+            "openWorldHint": false,
+            "readOnlyHint": false
+          },
+          "behavior": {
+            "destructive": false,
+            "idempotent": false,
+            "openWorld": false,
+            "readOnly": false
+          },
+          "meta": {
+            "fastmcp": {
+              "tags": []
+            }
+          },
+          "digest": "sha256:304cd8febf2a53d323cfa2eb64d976555bbc68565056e3fe41d345ee7d1f347e"
         },
         {
           "name": "list_objects",
@@ -759,70 +933,6 @@
             }
           },
           "digest": "sha256:63070af74f8945dcf071363d145a1e6be0b93f6785bfe4cbdd6d45e6167cff8d"
-        },
-        {
-          "name": "upload_object",
-          "title": "Upload Object",
-          "description": "Return a secret, short-lived PUT URL for an object up to 5 GB.",
-          "inputSchema": {
-            "additionalProperties": false,
-            "properties": {
-              "bucket_name": {
-                "description": "Bucket to operate on.",
-                "examples": ["photos"],
-                "minLength": 1,
-                "type": "string"
-              },
-              "bucket_token": {
-                "description": "Secret bearer token returned with the public bucket.",
-                "examples": ["<bucket-token>"],
-                "minLength": 1,
-                "type": "string"
-              },
-              "object_key": {
-                "description": "Complete object key, including path-like prefixes.",
-                "examples": ["data.parquet", "reports/summary.json"],
-                "minLength": 1,
-                "type": "string"
-              }
-            },
-            "required": ["bucket_name", "bucket_token", "object_key"],
-            "type": "object"
-          },
-          "outputSchema": {
-            "description": "A short-lived URL and the HTTP method required to use it.",
-            "properties": {
-              "http_method": {
-                "description": "HTTP method that must be used with the presigned URL.",
-                "enum": ["GET", "PUT"],
-                "type": "string"
-              },
-              "url": {
-                "description": "Short-lived presigned HTTPS URL containing all authorization information.",
-                "type": "string"
-              }
-            },
-            "required": ["http_method", "url"],
-            "type": "object"
-          },
-          "annotations": {
-            "destructiveHint": false,
-            "idempotentHint": false,
-            "openWorldHint": false,
-            "readOnlyHint": false
-          },
-          "behavior": {
-            "destructive": false,
-            "idempotent": false,
-            "openWorld": false,
-            "readOnly": false
-          },
-          "meta": {
-            "fastmcp": {
-              "tags": []
-            }
-          },
-          "digest": "sha256:843ee7fcb55ace539ac4a4f2a63d228ad5c4f359b2c2578c4dfcc2e750f0556b"
         }
       ],
       "resources": [
@@ -859,7 +969,7 @@
           "digest": "sha256:6d252e9d3aaccf70634291c1ecdc674a5e60201436a50b8f0d6d0131344e4dfc"
         }
       ],
-      "digest": "sha256:ecada72cbc1775d60bbea9d3572b5cadc8930933842d3d5fc19264ba0cdc207f"
+      "digest": "sha256:e74bf307be17c7738d83728c6decd804a48e6cbcaad03c4ce19dd8a1b115319f"
     }
   }
 }
