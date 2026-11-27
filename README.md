@@ -1,6 +1,7 @@
 # Nulladrift
 
-Pin what your MCP servers are allowed to do. Fail CI when it changes.
+Change control for MCP servers. Pin what they declare, fail CI when it changes, and review each
+change before it is accepted.
 
 `package-lock.json`, but for the capability surface your agents are exposed to.
 
