@@ -10,6 +10,10 @@ telemetry). Renaming a change kind breaks every consumer that matched on it.
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.13.0] - 2026-11-27
+
 ### Added
 
 - **A GitHub Action.** `uses: Nulladrift/nulladrift@v0.13.0` runs `check`, or `push` with a
@@ -20,7 +24,6 @@ telemetry). Renaming a change kind breaks every consumer that matched on it.
   The README has the workflow to copy.
 - **A badge**, "MCP pinned by nulladrift", for a repository's README. It says the repository pins
   its servers; it is not a status badge.
-
 ## [0.12.0] - 2026-11-23
 
 ### Changed
